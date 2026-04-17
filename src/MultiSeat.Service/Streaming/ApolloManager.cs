@@ -1,0 +1,448 @@
+using System.Collections.Concurrent;
+using System.Diagnostics;
+using System.Text.RegularExpressions;
+using Microsoft.Extensions.Options;
+using MultiSeat.Service.Configuration;
+using MultiSeat.Service.Sessions;
+using MultiSeat.Shared.Models;
+
+namespace MultiSeat.Service.Streaming;
+
+/// <summary>
+/// Manages per-seat Apollo (Sunshine fork) process lifecycle.
+///
+/// Each seat runs its own Apollo instance with isolated config,
+/// port range, display target, and audio device.
+///
+/// Architecture:
+///   - Config is generated per-seat by ApolloConfigBuilder
+///   - Apollo is launched inside the seat's Windows session via ProcessInjector
+///     (so it sees the session's virtual display + audio device)
+///   - Health is monitored by SessionHealthCheck; crashed instances are auto-restarted
+///   - On teardown, the entire process tree is killed (Apollo spawns child encoders)
+///
+/// Apollo (Sunshine) uses these port offsets within a seat's block:
+///   +0  HTTP  (web UI, pairing — the value written to the 'port' config key)
+///   +1  HTTPS (web UI — what the browser actually connects to)
+///   +2  Video (RTP/ENet)
+///   +3  Audio (RTP)
+///   +4  Control (ENet)
+///
+/// Requires Apollo (Sunshine fork) installed:
+///   https://github.com/ClassicOldSong/Apollo
+/// </summary>
+public sealed class ApolloManager
+{
+    private readonly ILogger<ApolloManager> _logger;
+    private readonly MultiSeatOptions _options;
+    private readonly ApolloConfigBuilder _configBuilder;
+    private readonly ProcessInjector _processInjector;
+
+    // Seat → Apollo instance tracking
+    private readonly ConcurrentDictionary<Guid, ApolloInstance> _instances = new();
+
+    public ApolloManager(
+        ILogger<ApolloManager> logger,
+        IOptions<MultiSeatOptions> options,
+        ApolloConfigBuilder configBuilder,
+        ProcessInjector processInjector)
+    {
+        _logger = logger;
+        _options = options.Value;
+        _configBuilder = configBuilder;
+        _processInjector = processInjector;
+    }
+
+    /// <summary>
+    /// True if the Apollo executable exists at the configured path.
+    /// </summary>
+    public bool IsApolloInstalled => File.Exists(_options.ApolloExePath);
+
+    /// <summary>
+    /// Get the number of running Apollo instances.
+    /// </summary>
+    public int RunningInstanceCount => _instances.Count(i => i.Value.IsAlive);
+
+    /// <summary>
+    /// Start an Apollo instance for the given seat.
+    /// Generates per-seat config and launches Apollo inside the seat's Windows session.
+    /// Returns the Apollo process ID.
+    /// </summary>
+    public async Task<int> StartAsync(SeatInfo seat, CancellationToken ct)
+    {
+        if (seat.SessionId < 0)
+            throw new InvalidOperationException(
+                $"Seat {seat.Id} has no active session (SessionId={seat.SessionId}). " +
+                "Launch a Windows session before starting Apollo.");
+
+        if (!IsApolloInstalled)
+        {
+            _logger.LogWarning(
+                "Apollo not found at {Path} — streaming will not work. " +
+                "Install Apollo from https://github.com/ClassicOldSong/Apollo",
+                _options.ApolloExePath);
+            return -1;
+        }
+
+        // Generate per-seat configuration file
+        var configPath = _configBuilder.BuildConfig(seat, _options.ApolloConfigDir);
+        _logger.LogInformation(
+            "Seat {Id}: Apollo config generated at {Config}", seat.Id, configPath);
+
+        // Launch Apollo inside the seat's own Windows session.
+        // Apollo (SudoMaker fork) connects to the SudoVDA IddCx driver via session-scoped
+        // IPC — the SudoVDA watchdog aborts if the connection fails. The IPC works when
+        // Apollo runs in the same session as the virtual display, not in the console session.
+        // The seat's session was created by SessionLauncher and already has the virtual display.
+        var pid = await _processInjector.LaunchApolloInSessionAsync(
+            seat.SessionId, seat.AccountName,
+            _options.ApolloExePath, configPath, ct);
+
+        if (pid <= 0)
+        {
+            _logger.LogError("Seat {Id}: Apollo failed to start (PID={Pid})", seat.Id, pid);
+            return pid;
+        }
+
+        var instance = new ApolloInstance(
+            SeatId: seat.Id,
+            ProcessId: pid,
+            ConfigPath: configPath,
+            SessionId: seat.SessionId,
+            AccountName: seat.AccountName,
+            StartedAt: DateTimeOffset.UtcNow,
+            RestartCount: 0);
+
+        _instances[seat.Id] = instance;
+
+        _logger.LogInformation(
+            "Seat {Id}: Apollo started (PID {Pid}) — Moonlight can connect on port {Port}",
+            seat.Id, pid, seat.PortBase + 1);
+
+        return pid;
+    }
+
+    /// <summary>
+    /// Kill the Apollo process if running, but preserve the instance record
+    /// (config path, seat ID) so <see cref="RestartAsync"/> can reuse it.
+    /// Resets RestartCount to 0 — a sleep/reconnect is not a crash.
+    /// </summary>
+    public void KillForReconnect(SeatInfo seat)
+    {
+        if (!_instances.TryGetValue(seat.Id, out var instance))
+            return;
+
+        if (instance.ProcessId > 0)
+        {
+            try
+            {
+                var proc = Process.GetProcessById(instance.ProcessId);
+                if (!proc.HasExited)
+                {
+                    proc.Kill(entireProcessTree: true);
+                    proc.WaitForExit(3000);
+                }
+                _logger.LogInformation(
+                    "Seat {Id}: Apollo killed before reconnect (PID {Pid})",
+                    seat.Id, instance.ProcessId);
+            }
+            catch (ArgumentException) { } // already exited
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex,
+                    "Seat {Id}: error killing Apollo before reconnect", seat.Id);
+            }
+        }
+
+        // Reset restart count — a sleep reconnect is not a crash
+        _instances[seat.Id] = instance with { ProcessId = 0, RestartCount = 0 };
+    }
+
+    /// <summary>
+    /// Stop the Apollo instance for a seat. Kills the entire process tree
+    /// (Apollo spawns encoder sub-processes).
+    /// </summary>
+    public void Stop(SeatInfo seat)
+    {
+        _instances.TryRemove(seat.Id, out _);
+
+        if (seat.ApolloProcessId <= 0) return;
+
+        try
+        {
+            var proc = Process.GetProcessById(seat.ApolloProcessId);
+            if (!proc.HasExited)
+            {
+                proc.Kill(entireProcessTree: true);
+                proc.WaitForExit(5000);
+            }
+            _logger.LogInformation("Seat {Id}: Apollo stopped (PID {Pid})",
+                seat.Id, seat.ApolloProcessId);
+        }
+        catch (ArgumentException)
+        {
+            // Process already exited
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Seat {Id}: error stopping Apollo", seat.Id);
+        }
+    }
+
+    /// <summary>
+    /// Restart a crashed Apollo instance for a seat.
+    /// Called by SessionHealthCheck when it detects Apollo is no longer running.
+    /// </summary>
+    public async Task<int> RestartAsync(SeatInfo seat, CancellationToken ct)
+    {
+        if (!_instances.TryGetValue(seat.Id, out var prev))
+        {
+            _logger.LogWarning(
+                "Seat {Id}: no previous Apollo instance to restart", seat.Id);
+            return await StartAsync(seat, ct);
+        }
+
+        if (prev.RestartCount >= MaxRestartAttempts)
+        {
+            _logger.LogError(
+                "Seat {Id}: Apollo has crashed {Count} times — giving up. " +
+                "Check {LogPath} for errors.",
+                seat.Id, prev.RestartCount,
+                Path.Combine(Path.GetDirectoryName(prev.ConfigPath)!, "apollo.log"));
+            return -1;
+        }
+
+        _logger.LogWarning(
+            "Seat {Id}: restarting Apollo (attempt {N}/{Max})",
+            seat.Id, prev.RestartCount + 1, MaxRestartAttempts);
+
+        // Re-use existing config — restart in the seat's own session (same as initial start)
+        var pid = await _processInjector.LaunchApolloInSessionAsync(
+            seat.SessionId, seat.AccountName,
+            _options.ApolloExePath, prev.ConfigPath, ct);
+
+        if (pid > 0)
+        {
+            _instances[seat.Id] = prev with
+            {
+                ProcessId = pid,
+                StartedAt = DateTimeOffset.UtcNow,
+                RestartCount = prev.RestartCount + 1,
+                SessionId = seat.SessionId,
+                AccountName = seat.AccountName
+            };
+
+            seat.ApolloProcessId = pid;
+            _logger.LogInformation(
+                "Seat {Id}: Apollo restarted (PID {Pid})", seat.Id, pid);
+        }
+
+        return pid;
+    }
+
+    /// <summary>
+    /// Check if Apollo is running for a seat.
+    /// </summary>
+    public bool IsAlive(Guid seatId)
+    {
+        if (!_instances.TryGetValue(seatId, out var instance))
+            return false;
+
+        return instance.IsAlive;
+    }
+
+    /// <summary>
+    /// Get the Apollo web UI URL for a seat (HTTPS).
+    /// Used by the dashboard for seat management links.
+    /// </summary>
+    public string? GetWebUiUrl(SeatInfo seat)
+    {
+        if (seat.ApolloProcessId <= 0 || seat.PortBase <= 0)
+            return null;
+
+        // Apollo's 'port' config key = HTTP; HTTPS web UI = port + 1
+        var httpsPort = seat.PortBase + 1;
+        return $"https://localhost:{httpsPort}";
+    }
+
+    /// <summary>
+    /// Get the config path for a seat's Apollo instance.
+    /// </summary>
+    public string? GetConfigPath(Guid seatId)
+    {
+        return _instances.TryGetValue(seatId, out var instance)
+            ? instance.ConfigPath
+            : null;
+    }
+
+    /// <summary>
+    /// Get the restart count for a seat's Apollo instance.
+    /// </summary>
+    public int GetRestartCount(Guid seatId)
+    {
+        return _instances.TryGetValue(seatId, out var instance)
+            ? instance.RestartCount
+            : 0;
+    }
+
+    /// <summary>
+    /// Stop all Apollo instances. Called on service shutdown.
+    /// </summary>
+    public void StopAll()
+    {
+        foreach (var (seatId, instance) in _instances)
+        {
+            try
+            {
+                var proc = Process.GetProcessById(instance.ProcessId);
+                if (!proc.HasExited)
+                {
+                    proc.Kill(entireProcessTree: true);
+                    proc.WaitForExit(3000);
+                }
+            }
+            catch { /* best effort */ }
+        }
+        _instances.Clear();
+    }
+
+    // ═══════════════════════════════════════════════════════════════════
+    //  CONSTANTS
+    // ═══════════════════════════════════════════════════════════════════
+
+    /// <summary>
+    /// Maximum number of automatic restart attempts before giving up.
+    /// After this many crashes, the seat enters Error state and requires
+    /// manual intervention (check Apollo logs).
+    /// </summary>
+    public const int MaxRestartAttempts = 3;
+
+    /// <summary>
+    /// Get the log file path for a seat's Apollo instance.
+    /// </summary>
+    public string GetLogPath(Guid seatId, string configDir)
+    {
+        var seatDir = Path.Combine(configDir, seatId.ToString("N"));
+        return Path.Combine(seatDir, "apollo.log");
+    }
+
+    /// <summary>
+    /// Parse Apollo's startup log to find the SudoVDA virtual display device UUID.
+    ///
+    /// Apollo enumerates all displays at startup and writes a JSON block to the log:
+    ///   "Currently available display devices:\n[{...}, {...}]"
+    ///
+    /// Each entry has a "device_id" (UUID like {f0cfefd7-...}) and
+    /// "friendly_name". SudoVDA shows up as "VDD by MTT".
+    ///
+    /// We return device_id (UUID) for output_name. The UUID works reliably at
+    /// both startup and stream LAUNCH time in the console session.
+    /// The GDI display_name (\\.\DISPLAY37) does NOT work — Apollo falls back
+    /// to the primary monitor when given a GDI path as output_name.
+    ///
+    /// Returns the UUID (e.g. "{f0cfefd7-be89-5733-a759-8fe046803517}") or null if not found.
+    /// </summary>
+    public string? ParseSudoVdaDisplayId(string logPath)
+    {
+        if (!File.Exists(logPath)) return null;
+
+        try
+        {
+            var text = File.ReadAllText(logPath);
+
+            var marker = "Currently available display devices:";
+            var start = text.IndexOf(marker, StringComparison.Ordinal);
+            if (start < 0) return null;
+
+            var jsonStart = text.IndexOf('[', start);
+            if (jsonStart < 0) return null;
+
+            // Apollo writes the closing "]" on its own line
+            var jsonEnd = text.IndexOf("\n]", jsonStart);
+            if (jsonEnd < 0) return null;
+
+            var json = text[jsonStart..(jsonEnd + 2)];
+
+            // Walk through each display entry and find the SudoVDA one.
+            // JSON field order: device_id → display_name → edid → friendly_name
+            // We capture device_id (UUID) and check friendly_name for SudoVDA.
+            string? currentDeviceId = null;
+
+            foreach (var line in json.Split('\n'))
+            {
+                var trimmed = line.Trim().TrimEnd(',');
+
+                // Capture device_id (UUID like {f0cfefd7-be89-5733-a759-8fe046803517})
+                var deviceIdMatch = Regex.Match(trimmed,
+                    @"""device_id""\s*:\s*""([^""]+)""");
+                if (deviceIdMatch.Success)
+                {
+                    currentDeviceId = deviceIdMatch.Groups[1].Value;
+                    continue;
+                }
+
+                // Check if this is the SudoVDA display by friendly name
+                var nameMatch = Regex.Match(trimmed,
+                    @"""friendly_name""\s*:\s*""([^""]+)""");
+                if (nameMatch.Success && currentDeviceId != null)
+                {
+                    var friendlyName = nameMatch.Groups[1].Value;
+                    if (IsSudoVdaFriendlyName(friendlyName))
+                    {
+                        _logger.LogInformation(
+                            "Found SudoVDA display in Apollo log: {DeviceId} ({Name})",
+                            currentDeviceId, friendlyName);
+                        return currentDeviceId;
+                    }
+
+                    // friendly_name closes the display object — reset for next entry
+                    currentDeviceId = null;
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "Error parsing Apollo log for SudoVDA display");
+        }
+
+        return null;
+    }
+
+    private static bool IsSudoVdaFriendlyName(string name) =>
+        name.Contains("VDD", StringComparison.OrdinalIgnoreCase) ||
+        name.Contains("SudoVDA", StringComparison.OrdinalIgnoreCase) ||
+        name.Contains("SudoMaker", StringComparison.OrdinalIgnoreCase);
+}
+
+/// <summary>
+/// Tracks a running Apollo instance for a seat.
+/// </summary>
+internal sealed record ApolloInstance(
+    Guid SeatId,
+    int ProcessId,
+    string ConfigPath,
+    int SessionId,
+    string AccountName,
+    DateTimeOffset StartedAt,
+    int RestartCount)
+{
+    /// <summary>
+    /// Check if the Apollo process is still running.
+    /// </summary>
+    public bool IsAlive
+    {
+        get
+        {
+            if (ProcessId <= 0) return false;
+            try
+            {
+                var proc = Process.GetProcessById(ProcessId);
+                return !proc.HasExited;
+            }
+            catch (ArgumentException)
+            {
+                return false;
+            }
+        }
+    }
+}

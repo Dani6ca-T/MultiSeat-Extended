@@ -1,0 +1,8 @@
+LIBRARY MultiSeatInputHook
+EXPORTS
+    MultiSeatHook_Install         @1
+    MultiSeatHook_Uninstall       @2
+    MultiSeatHook_IsInstalled     @3
+    MultiSeatHook_GetTargetSession @4
+    MultiSeatRawInput_Register    @5
+    MultiSeatRawInput_Unregister  @6

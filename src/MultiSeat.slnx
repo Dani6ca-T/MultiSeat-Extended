@@ -1,0 +1,5 @@
+<Solution>
+  <Project Path="MultiSeat.Service/MultiSeat.Service.csproj" />
+  <Project Path="MultiSeat.Shared/MultiSeat.Shared.csproj" />
+  <Project Path="MultiSeat.Tests/MultiSeat.Tests.csproj" />
+</Solution>

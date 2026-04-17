@@ -1,0 +1,45 @@
+# Build outputs
+bin/
+obj/
+publish/
+out/
+
+# IDE
+.vs/
+.vscode/
+*.user
+*.suo
+
+# Node
+node_modules/
+dist/
+
+# OS
+Thumbs.db
+Desktop.ini
+.DS_Store
+
+# Secrets
+appsettings.Development.json
+appsettings.*.json
+!appsettings.json
+*.pfx
+*.key
+
+# Logs
+*.log
+logs/
+
+# Prerequisites (large binaries - keep scripts and README)
+prerequisites/*.exe
+prerequisites/*.msi
+prerequisites/*.zip
+prerequisites/*.ini
+!prerequisites/*.ps1
+!prerequisites/*.txt
+
+# Claude Code local data (contains machine-specific paths and worktrees)
+.claude/
+
+# Continue.dev local data
+.continue/

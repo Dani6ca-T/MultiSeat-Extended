@@ -1,0 +1,153 @@
+import type {
+  SeatInfo,
+  SeatRequest,
+  LaunchAppRequest,
+  AccountInfo,
+  AccountCreateRequest,
+  SystemStatus,
+  ControllerInfo,
+  ControllerAssignments,
+  HookStatus,
+  SeatServices,
+} from "./types";
+
+const BASE = "/api";
+
+async function request<T>(
+  path: string,
+  init?: RequestInit
+): Promise<T> {
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+  };
+
+  // API key from localStorage (set in Settings)
+  const apiKey = localStorage.getItem("multiseat-api-key");
+  if (apiKey) {
+    headers["X-MultiSeat-Key"] = apiKey;
+  }
+
+  const res = await fetch(`${BASE}${path}`, {
+    ...init,
+    headers: { ...headers, ...init?.headers },
+  });
+
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new ApiError(res.status, body?.error ?? res.statusText);
+  }
+
+  if (res.status === 204) return undefined as T;
+  return res.json();
+}
+
+export class ApiError extends Error {
+  constructor(
+    public status: number,
+    message: string
+  ) {
+    super(message);
+    this.name = "ApiError";
+  }
+}
+
+// ── Seats ─────────────────────────────────────────────────────────
+
+export const seats = {
+  list: () => request<SeatInfo[]>("/seats"),
+
+  get: (id: string) => request<SeatInfo>(`/seats/${id}`),
+
+  create: (req: SeatRequest) =>
+    request<SeatInfo>("/seats", {
+      method: "POST",
+      body: JSON.stringify(req),
+    }),
+
+  launch: (id: string, req: LaunchAppRequest) =>
+    request<{ status: string }>(`/seats/${id}/launch`, {
+      method: "POST",
+      body: JSON.stringify(req),
+    }),
+
+  destroy: (id: string) =>
+    request<void>(`/seats/${id}`, { method: "DELETE" }),
+
+  services: (id: string) =>
+    request<SeatServices>(`/seats/${id}/services`),
+
+  apolloStop: (id: string) =>
+    request<{ status: string }>(`/seats/${id}/apollo/stop`, { method: "POST" }),
+
+  apolloStart: (id: string) =>
+    request<{ status: string }>(`/seats/${id}/apollo/start`, { method: "POST" }),
+
+  apolloRestart: (id: string) =>
+    request<{ status: string }>(`/seats/${id}/apollo/restart`, { method: "POST" }),
+
+  resetAudio: (id: string) =>
+    request<{ status: string }>(`/seats/${id}/audio/reset`, { method: "POST" }),
+
+  resetDisplay: (id: string) =>
+    request<{ status: string }>(`/seats/${id}/display/reset`, { method: "POST" }),
+
+  resetController: (id: string) =>
+    request<{ status: string }>(`/seats/${id}/controller/reset`, { method: "POST" }),
+
+  sessionReconnect: (id: string) =>
+    request<void>(`/seats/${id}/session-reconnect`, { method: "POST" }),
+};
+
+// ── Accounts ──────────────────────────────────────────────────────
+
+export const accounts = {
+  list: () => request<AccountInfo[]>("/accounts"),
+
+  create: (req: AccountCreateRequest) =>
+    request<AccountInfo>("/accounts", {
+      method: "POST",
+      body: JSON.stringify(req),
+    }),
+
+  link: (req: AccountCreateRequest) =>
+    request<AccountInfo>("/accounts/link", {
+      method: "POST",
+      body: JSON.stringify(req),
+    }),
+
+  destroy: (username: string) =>
+    request<void>(`/accounts/${username}`, { method: "DELETE" }),
+};
+
+// ── System ────────────────────────────────────────────────────────
+
+export const system = {
+  health: () => request<SystemStatus>("/system/health"),
+};
+
+// ── Input ─────────────────────────────────────────────────────────
+
+export const input = {
+  controllers: () => request<ControllerInfo[]>("/input/controllers"),
+
+  assignments: () => request<ControllerAssignments>("/input/assignments"),
+
+  assign: (xinputIndex: number, seatId: string) =>
+    request<{ status: string }>("/input/assign", {
+      method: "POST",
+      body: JSON.stringify({ xinputIndex, seatId }),
+    }),
+
+  unassign: (xinputIndex: number) =>
+    request<{ status: string }>(`/input/assign/${xinputIndex}`, {
+      method: "DELETE",
+    }),
+
+  autoAssign: () =>
+    request<{ status: string; assignments: ControllerAssignments }>(
+      "/input/auto-assign",
+      { method: "POST" }
+    ),
+
+  hookStatus: () => request<HookStatus>("/input/hooks/status"),
+};

@@ -1,0 +1,190 @@
+using System.Diagnostics;
+using MultiSeat.Service.Api;
+using MultiSeat.Service.Sessions;
+using MultiSeat.Service.Streaming;
+using MultiSeat.Shared.Models;
+
+namespace MultiSeat.Service.Monitoring;
+
+/// <summary>
+/// Periodic liveness probe for all active seats.
+///
+/// Checks that the Windows session, Apollo process, and virtual display
+/// are all still alive. Degraded seats trigger auto-recovery:
+///   - Apollo crash → auto-restart (up to ApolloManager.MaxRestartAttempts)
+///   - Session death → seat enters Error state (requires manual teardown)
+///
+/// Runs on the MultiSeatWorker's health check timer (default: every 5 seconds).
+/// State changes are broadcast to connected WebSocket clients.
+/// </summary>
+public sealed class SessionHealthCheck
+{
+    private readonly ILogger<SessionHealthCheck> _logger;
+    private readonly SessionLauncher _sessionLauncher;
+    private readonly ApolloManager _apolloManager;
+
+    public SessionHealthCheck(
+        ILogger<SessionHealthCheck> logger,
+        SessionLauncher sessionLauncher,
+        ApolloManager apolloManager)
+    {
+        _logger = logger;
+        _sessionLauncher = sessionLauncher;
+        _apolloManager = apolloManager;
+    }
+
+    /// <summary>
+    /// Run health checks on all active seats.
+    /// Returns a list of seats that changed state (for broadcasting).
+    /// </summary>
+    public async Task<IReadOnlyList<SeatInfo>> CheckAllSeatsAsync(
+        SeatManager seatManager, CancellationToken ct)
+    {
+        var changedSeats = new List<SeatInfo>();
+
+        foreach (var seat in seatManager.GetAllSeats())
+        {
+            if (seat.Status is SeatStatus.Idle or SeatStatus.Provisioning
+                or SeatStatus.TearingDown or SeatStatus.Error)
+                continue;
+
+            var changed = await CheckSeatAsync(seat, ct);
+            if (changed)
+                changedSeats.Add(seat);
+        }
+
+        // Broadcast state changes to WebSocket clients
+        foreach (var seat in changedSeats)
+        {
+            try
+            {
+                await WebSocketHub.BroadcastSeatUpdateAsync(seat);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogDebug(ex, "Failed to broadcast state change for seat {Id}", seat.Id);
+            }
+        }
+
+        return changedSeats;
+    }
+
+    /// <summary>
+    /// Check a single seat's health. Returns true if state changed.
+    /// </summary>
+    private async Task<bool> CheckSeatAsync(SeatInfo seat, CancellationToken ct)
+    {
+        // ── Check 1: Is the Windows session still alive? ──────────
+        var sessionAlive = _sessionLauncher.IsSessionAlive(seat.SessionId);
+
+        if (!sessionAlive)
+        {
+            _logger.LogWarning(
+                "Seat {Id}: Windows session {Sid} no longer active",
+                seat.Id, seat.SessionId);
+            seat.Status = SeatStatus.Error;
+            seat.ErrorMessage = "Windows session terminated unexpectedly";
+            return true;
+        }
+
+        // ── Check 1b: Is the session Active (not just Disconnected)? ──
+        // Sessions go Disconnected when the PC sleeps (mstsc drops). A Disconnected
+        // session breaks QueryDisplayConfig / DXGI, so Apollo cannot stream.
+        // Reconnect via mstsc to restore Active state, then restart Apollo.
+        if (!_sessionLauncher.IsSessionActive(seat.SessionId))
+        {
+            _logger.LogWarning(
+                "Seat {Id}: session {Sid} is Disconnected (PC may have slept) — reconnecting",
+                seat.Id, seat.SessionId);
+            try
+            {
+                // Kill the existing Apollo first — it survived sleep but with a broken
+                // display pipeline (DXGI/QueryDisplayConfig fail on Disconnected sessions).
+                // Without this, RestartAsync launches a second Apollo alongside the first,
+                // causing a port conflict. KillForReconnect also resets RestartCount so
+                // sleep cycles don't exhaust the crash-restart limit.
+                _apolloManager.KillForReconnect(seat);
+
+                await _sessionLauncher.LaunchSessionAsync(seat.AccountName, ct);
+
+                // Give the display pipeline a moment to reinitialize after the session
+                // transitions back to Active — SudoVDA and DXGI need a beat to be ready.
+                await Task.Delay(2000, ct);
+
+                _logger.LogInformation(
+                    "Seat {Id}: session reconnected — restarting Apollo",
+                    seat.Id);
+                var newPid = await _apolloManager.RestartAsync(seat, ct);
+                if (newPid > 0)
+                {
+                    seat.ApolloProcessId = newPid;
+                    _logger.LogInformation(
+                        "Seat {Id}: Apollo restarted after reconnect (PID {Pid})",
+                        seat.Id, newPid);
+                    return true;
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex,
+                    "Seat {Id}: failed to reconnect session after sleep", seat.Id);
+            }
+            return false;
+        }
+
+        // ── Check 2: Is Apollo still running? ─────────────────────
+        var apolloAlive = IsProcessAlive(seat.ApolloProcessId);
+
+        if (!apolloAlive && seat.ApolloProcessId > 0 &&
+            seat.Status is SeatStatus.Ready or SeatStatus.Streaming)
+        {
+            _logger.LogWarning(
+                "Seat {Id}: Apollo (PID {Pid}) crashed — attempting restart",
+                seat.Id, seat.ApolloProcessId);
+
+            // Try auto-restart
+            var newPid = await _apolloManager.RestartAsync(seat, ct);
+
+            if (newPid > 0)
+            {
+                seat.ApolloProcessId = newPid;
+                _logger.LogInformation(
+                    "Seat {Id}: Apollo restarted successfully (PID {Pid})",
+                    seat.Id, newPid);
+                return true; // state metadata changed (PID)
+            }
+            else
+            {
+                // Restart failed — give up
+                seat.Status = SeatStatus.Error;
+                seat.ErrorMessage = "Apollo streaming server crashed and could not be restarted";
+                return true;
+            }
+        }
+
+        // ── Check 3: Is a launched app still running? ─────────────
+        // If a game was launched and has exited, transition back to Ready
+        if (seat.Status == SeatStatus.Streaming && !string.IsNullOrEmpty(seat.LaunchApp))
+        {
+            // We don't track the game PID separately (it could spawn children),
+            // so we only flag if Apollo itself died (handled above).
+            // In the future, we could track the game PID for auto-restart.
+        }
+
+        return false; // no state change
+    }
+
+    private static bool IsProcessAlive(int pid)
+    {
+        if (pid <= 0) return false;
+        try
+        {
+            var proc = Process.GetProcessById(pid);
+            return !proc.HasExited;
+        }
+        catch (ArgumentException)
+        {
+            return false;
+        }
+    }
+}
