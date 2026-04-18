@@ -40,4 +40,7 @@ public sealed class SeatInfo
     public DateTimeOffset? ReadyAt { get; set; }
     public string? ErrorMessage { get; set; }
     public string? LaunchApp { get; set; }
+
+    // Preset
+    public bool AutoStart { get; set; } = false;
 }

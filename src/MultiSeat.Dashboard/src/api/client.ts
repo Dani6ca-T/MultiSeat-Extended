@@ -1,5 +1,6 @@
 import type {
   SeatInfo,
+  SeatPreset,
   SeatRequest,
   LaunchAppRequest,
   AccountInfo,
@@ -96,6 +97,14 @@ export const seats = {
 
   sessionReconnect: (id: string) =>
     request<void>(`/seats/${id}/session-reconnect`, { method: "POST" }),
+
+  presets: () => request<SeatPreset[]>("/seats/presets"),
+
+  setAutoStart: (id: string, enabled: boolean) =>
+    request<{ autoStart: boolean }>(`/seats/${id}/autostart`, {
+      method: "PUT",
+      body: JSON.stringify({ enabled }),
+    }),
 };
 
 // ── Accounts ──────────────────────────────────────────────────────
@@ -123,6 +132,7 @@ export const accounts = {
 
 export const system = {
   health: () => request<SystemStatus>("/system/health"),
+  rebuild: () => request<{ message: string }>("/system/rebuild", { method: "POST" }),
 };
 
 // ── Input ─────────────────────────────────────────────────────────

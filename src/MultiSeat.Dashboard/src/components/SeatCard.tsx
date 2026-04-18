@@ -16,6 +16,7 @@ export function SeatCard({ seat, onUpdate }: Props) {
   const [services, setServices] = useState<SeatServices | null>(null);
   const [showServices, setShowServices] = useState(false);
   const [actionLoading, setActionLoading] = useState<string | null>(null);
+  const [autoStartLoading, setAutoStartLoading] = useState(false);
 
   const isActive = seat.status === "Ready" || seat.status === "Streaming";
 
@@ -35,6 +36,18 @@ export function SeatCard({ seat, onUpdate }: Props) {
     const interval = setInterval(fetchServices, 3000);
     return () => clearInterval(interval);
   }, [fetchServices, showServices]);
+
+  const handleAutoStart = async () => {
+    setAutoStartLoading(true);
+    try {
+      await seatsApi.setAutoStart(seat.id, !seat.autoStart);
+      onUpdate();
+    } catch (e) {
+      alert(e instanceof Error ? e.message : "Failed to update auto-start");
+    } finally {
+      setAutoStartLoading(false);
+    }
+  };
 
   const handleDestroy = async () => {
     if (!confirm(`Tear down seat ${seat.accountName}?`)) return;
@@ -77,7 +90,9 @@ export function SeatCard({ seat, onUpdate }: Props) {
     }
   };
 
-  const httpsPort = seat.portBase > 0 ? seat.portBase : null;
+  // Apollo 'port' config = HTTP GameStream port — this is what Moonlight "Add Host" needs.
+  // portBase+1 is the HTTPS web UI port, which returns 404 for /serverinfo.
+  const moonlightPort = seat.portBase > 0 ? seat.portBase : null;
   const uptime = seat.readyAt ? formatDuration(new Date(seat.readyAt)) : null;
 
   return (
@@ -102,7 +117,7 @@ export function SeatCard({ seat, onUpdate }: Props) {
             label="Resolution"
             value={`${seat.width}x${seat.height}@${seat.fps}`}
           />
-          <StatItem label="Port" value={httpsPort ? String(httpsPort) : "--"} />
+          <StatItem label="Port" value={moonlightPort ? String(moonlightPort) : "--"} />
           <StatItem
             label="Apollo PID"
             value={seat.apolloProcessId > 0 ? String(seat.apolloProcessId) : "--"}
@@ -118,13 +133,28 @@ export function SeatCard({ seat, onUpdate }: Props) {
         </div>
 
         {/* Moonlight connection info */}
-        {httpsPort && isActive && (
-          <MoonlightAddress host={window.location.hostname} port={httpsPort} />
+        {moonlightPort && isActive && (
+          <MoonlightAddress host={window.location.hostname} port={moonlightPort} />
         )}
 
         {seat.launchApp && (
           <div className="text-muted" style={{ fontSize: 12, marginTop: 8 }}>
             App: {seat.launchApp}
+          </div>
+        )}
+
+        {/* Auto-start toggle */}
+        {seat.status !== "Idle" && seat.status !== "TearingDown" && (
+          <div className="autostart-row">
+            <span className="stat-label">Auto-start on boot</span>
+            <button
+              className={`toggle-btn${seat.autoStart ? " toggle-btn--on" : ""}`}
+              onClick={handleAutoStart}
+              disabled={autoStartLoading}
+              title={seat.autoStart ? "Disable auto-start" : "Enable auto-start"}
+            >
+              {autoStartLoading ? "..." : seat.autoStart ? "On" : "Off"}
+            </button>
           </div>
         )}
 
@@ -157,9 +187,9 @@ export function SeatCard({ seat, onUpdate }: Props) {
                   detail={services.apolloRestarts > 0 ? `${services.apolloRestarts} restarts` : undefined}
                   actions={
                     <>
-                      {httpsPort && (
+                      {seat.portBase > 0 && (
                         <a
-                          href={`https://${window.location.hostname}:${httpsPort + 1}`}
+                          href={`https://${window.location.hostname}:${seat.portBase + 1}`}
                           target="_blank"
                           rel="noopener noreferrer"
                           className="btn-sm btn-link"

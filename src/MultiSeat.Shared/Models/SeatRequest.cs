@@ -9,6 +9,11 @@ public sealed class SeatRequest
     public string? LaunchApp { get; init; }
 }
 
+public sealed class AutoStartRequest
+{
+    public bool Enabled { get; init; }
+}
+
 public sealed class LaunchAppRequest
 {
     public required string ExecutablePath { get; init; }

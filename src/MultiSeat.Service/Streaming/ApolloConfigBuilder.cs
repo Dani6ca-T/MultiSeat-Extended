@@ -1,4 +1,7 @@
+using System.Diagnostics;
 using System.Text;
+using Microsoft.Extensions.Options;
+using MultiSeat.Service.Configuration;
 using MultiSeat.Shared;
 using MultiSeat.Shared.Models;
 
@@ -25,10 +28,12 @@ namespace MultiSeat.Service.Streaming;
 public sealed class ApolloConfigBuilder
 {
     private readonly ILogger<ApolloConfigBuilder> _logger;
+    private readonly MultiSeatOptions _options;
 
-    public ApolloConfigBuilder(ILogger<ApolloConfigBuilder> logger)
+    public ApolloConfigBuilder(ILogger<ApolloConfigBuilder> logger, IOptions<MultiSeatOptions> options)
     {
         _logger = logger;
+        _options = options.Value;
     }
 
     /// <summary>
@@ -46,12 +51,15 @@ public sealed class ApolloConfigBuilder
         // The file is created by MultiSeat on first run (from Apollo's default config) and survives seat teardown.
         var credPath = Path.Combine(configDir, "shared_credentials.json").Replace('\\', '/');
         EnsureSharedCredentials(configDir);
-        // Pre-create per-seat state file so Apollo uses a unique server UUID per instance.
-        // If the file doesn't exist when Apollo starts, it falls back to the shared default at
-        // C:\Program Files\Apollo\config\sunshine_state.json — all seats would share one UUID
-        // and Moonlight would deduplicate them, showing only one server.
-        // Only create if absent so pairings survive re-provisioning.
+        // Apollo resolves sunshine_state.json and apps.json relative to its WORKING DIRECTORY:
+        //   {workingDir}/config/sunshine_state.json
+        //   {workingDir}/config/apps.json
+        // ProcessInjector sets workingDir = seatDir, so we seed these files here.
+        // sunshine_state.json gets a unique UUID per seat so Moonlight shows each seat separately.
+        // Only create if absent — pairings (stored in sunshine_state) survive re-provisioning.
+        EnsureSeatConfigDir(seatDir);
         EnsureSeatStateFile(seatDir);
+        EnsureSeatAppsJson(seatDir);
 
         var sb = new StringBuilder(2048);
 
@@ -144,12 +152,10 @@ public sealed class ApolloConfigBuilder
         sb.AppendLine();
 
         // ── Security ──────────────────────────────────────────────────
-        // Each seat gets its own state file so Apollo generates a unique uniqueid per seat.
-        // Without this, all instances load sunshine_state.json from the Apollo install dir
-        // and share the same uniqueid — Moonlight deduplicates by uniqueid and shows only one server.
-        var statePath = Path.Combine(seatDir, "sunshine_state.json").Replace('\\', '/');
+        // Each seat gets its own config/ subdir as the Apollo working directory.
+        // Apollo resolves sunshine_state.json from {workingDir}/config/sunshine_state.json,
+        // giving each seat a unique uniqueid so Moonlight lists them as separate servers.
         sb.AppendLine("# Security");
-        sb.AppendLine($"sunshine_state = {statePath}");
         sb.AppendLine($"credentials_file = {credPath}");
         // Each seat has independent pairing — Moonlight pairs per-seat
         sb.AppendLine("origin_web_ui_allowed = lan");
@@ -261,12 +267,94 @@ public sealed class ApolloConfigBuilder
     }
 
     /// <summary>
+    /// Ensure the per-seat config/ and config/credentials/ subdirectories exist,
+    /// and seed the TLS cert/key from Apollo's install dir.
+    ///
+    /// Apollo resolves config files from {workingDir}/config/:
+    ///   sunshine_state.json — unique UUID per seat (Moonlight server identity)
+    ///   apps.json           — game/app list
+    ///   credentials/        — TLS cert + key for HTTPS pairing
+    ///
+    /// ProcessInjector sets workingDir = seatDir. BUILTIN\Users only has Write
+    /// (create files), not Modify (create subdirectories), on ProgramData dirs.
+    /// Pre-creating these dirs as SYSTEM avoids Apollo exiting on credentials mkdir failure.
+    /// </summary>
+    private void EnsureSeatConfigDir(string seatDir)
+    {
+        var configDir = Path.Combine(seatDir, "config");
+        var credDir = Path.Combine(configDir, "credentials");
+        Directory.CreateDirectory(configDir);
+        Directory.CreateDirectory(credDir);
+
+        // Apollo uses relative paths for its assets and tools directories
+        // (e.g. ./assets/shaders/ for GPU shaders). Create junction points so
+        // Apollo can find these when running with workingDir = seatDir.
+        var apolloRoot = Path.GetDirectoryName(_options.ApolloExePath)
+                         ?? @"C:\Program Files\Apollo";
+        CreateJunctionIfMissing(Path.Combine(seatDir, "assets"),
+                                Path.Combine(apolloRoot, "assets"));
+        CreateJunctionIfMissing(Path.Combine(seatDir, "tools"),
+                                Path.Combine(apolloRoot, "tools"));
+
+        // Seed TLS cert + key so Apollo doesn't need to generate (or fail to write) them.
+        // All seats share the same server cert — Moonlight identifies seats by uniqueid, not cert.
+        // Only seed if absent so reprovisions don't disturb active paired sessions.
+        var apolloCreds = @"C:\Program Files\Apollo\config\credentials";
+        foreach (var file in new[] { "cacert.pem", "cakey.pem" })
+        {
+            var dest = Path.Combine(credDir, file);
+            var src  = Path.Combine(apolloCreds, file);
+            if (!File.Exists(dest) && File.Exists(src))
+            {
+                try
+                {
+                    File.Copy(src, dest);
+                    _logger.LogDebug("Seeded cert {File} to seat credentials dir", file);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "Could not seed cert {File} to {Dest}", file, dest);
+                }
+            }
+        }
+    }
+
+    /// <summary>
+    /// Copy apps.json from the Apollo install dir to the per-seat config/ dir.
+    /// Apollo looks for apps in {workingDir}/config/apps.json. Without it the
+    /// seat will have an empty app list. Always overwrites so the seat picks up
+    /// any games the user adds to the main Apollo installation.
+    /// </summary>
+    private void EnsureSeatAppsJson(string seatDir)
+    {
+        var dest = Path.Combine(seatDir, "config", "apps.json");
+        var source = @"C:\Program Files\Apollo\config\apps.json";
+
+        if (!File.Exists(source))
+        {
+            _logger.LogDebug("Apollo apps.json not found at {Path} — seat will use built-in defaults", source);
+            return;
+        }
+
+        try
+        {
+            File.Copy(source, dest, overwrite: true);
+            _logger.LogDebug("Copied apps.json to seat config dir: {Dest}", dest);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Could not copy apps.json to {Dest}", dest);
+        }
+    }
+
+    /// <summary>
     /// Ensure a per-seat sunshine_state.json exists with a unique server UUID.
+    /// Apollo loads this from {workingDir}/config/sunshine_state.json (workingDir = seatDir).
     /// Only creates the file if absent — preserves pairings on re-provision.
     /// </summary>
     private void EnsureSeatStateFile(string seatDir)
     {
-        var statePath = Path.Combine(seatDir, "sunshine_state.json");
+        var statePath = Path.Combine(seatDir, "config", "sunshine_state.json");
         if (File.Exists(statePath)) return;
 
         // UUID format matches what Apollo writes: uppercase 8-4-4-4-12
@@ -317,6 +405,44 @@ public sealed class ApolloConfigBuilder
             "Visit the Apollo web UI after provisioning a seat to create credentials, " +
             "then the file will persist for future seats.",
             sharedCred);
+    }
+
+    /// <summary>
+    /// Create a directory junction (mklink /J) at linkPath pointing to targetPath.
+    /// Skips silently if the link already exists. Junction points work without
+    /// SeCreateSymbolicLinkPrivilege so they work in SYSTEM context.
+    /// </summary>
+    private void CreateJunctionIfMissing(string linkPath, string targetPath)
+    {
+        if (Directory.Exists(linkPath)) return;
+
+        if (!Directory.Exists(targetPath))
+        {
+            _logger.LogWarning("Junction target missing — skipping: {Target}", targetPath);
+            return;
+        }
+
+        try
+        {
+            using var proc = Process.Start(new ProcessStartInfo("cmd.exe",
+                $"/C mklink /J \"{linkPath}\" \"{targetPath}\"")
+            {
+                CreateNoWindow = true,
+                UseShellExecute = false,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+            })!;
+            proc.WaitForExit(5000);
+            if (proc.ExitCode != 0)
+                _logger.LogWarning("mklink /J failed (exit {Code}) for {Link} -> {Target}",
+                    proc.ExitCode, linkPath, targetPath);
+            else
+                _logger.LogDebug("Junction created: {Link} -> {Target}", linkPath, targetPath);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Could not create junction {Link} -> {Target}", linkPath, targetPath);
+        }
     }
 
     /// <summary>

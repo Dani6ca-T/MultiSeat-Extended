@@ -27,6 +27,17 @@ export interface SeatInfo {
   readyAt: string | null;
   errorMessage: string | null;
   launchApp: string | null;
+  autoStart: boolean;
+}
+
+export interface SeatPreset {
+  id: string;
+  accountName: string;
+  width: number;
+  height: number;
+  fps: number;
+  autoStart: boolean;
+  createdAt: string;
 }
 
 export interface SeatRequest {
@@ -65,10 +76,51 @@ export interface GpuInfo {
   activeEncoderSessions: number;
 }
 
+export interface CpuInfo {
+  name: string;
+  utilizationPercent: number;
+  logicalCores: number;
+}
+
+export interface NetworkInfo {
+  primaryAdapter: string;
+  bytesReceivedPerSec: number;
+  bytesSentPerSec: number;
+}
+
+export interface TopProcess {
+  pid: number;
+  name: string;
+  cpuPercent: number;
+  memoryMb: number;
+  networkConnections: number;
+}
+
+export interface DiskInfo {
+  name: string;
+  label: string;
+  totalMb: number;
+  freeMb: number;
+  usedPercent: number;
+}
+
+export type HealthStatus = "Healthy" | "Warning" | "Critical";
+
+export interface HealthScore {
+  status: HealthStatus;
+  score: number;
+  issues: string[];
+}
+
 export interface SystemStatus {
   activeSeats: number;
   maxSeats: number;
   gpu: GpuInfo | null;
+  cpu: CpuInfo | null;
+  network: NetworkInfo | null;
+  topProcesses: TopProcess[];
+  disks: DiskInfo[];
+  health: HealthScore;
   systemMemoryMb: number;
   availableMemoryMb: number;
   windowsBuild: string;

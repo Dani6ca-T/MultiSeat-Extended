@@ -47,4 +47,9 @@ public sealed class MultiSeatOptions
     public int SessionConnectTimeoutMs { get; set; } = 15_000;
     public int ProcessLaunchTimeoutMs { get; set; } = 10_000;
     public int HealthCheckIntervalMs { get; set; } = 5_000;
+
+    // ── Rebuild ───────────────────────────────────────────────────────
+    // Absolute path to the repo root. Required for the dashboard Rebuild button.
+    // Example: C:\MultiSeat-Development
+    public string SourceDir { get; set; } = string.Empty;
 }

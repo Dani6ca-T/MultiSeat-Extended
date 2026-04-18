@@ -1,8 +1,9 @@
-using System.Runtime.InteropServices;
+using System.Diagnostics;
+using Microsoft.Extensions.Options;
+using MultiSeat.Service.Configuration;
 using MultiSeat.Service.Display;
 using MultiSeat.Service.Monitoring;
 using MultiSeat.Service.Sessions;
-using MultiSeat.Shared.Models;
 
 namespace MultiSeat.Service.Api;
 
@@ -12,20 +13,36 @@ public static class SystemEndpoints
     {
         var group = app.MapGroup("/api/system").WithTags("System");
 
-        group.MapGet("/health", (SeatManager seats, GpuMonitor gpu, RdpWrapper rdp) =>
-        {
-            GetPhysicalMemory(out var totalMb, out var availMb);
+        group.MapGet("/health", (SeatManager seats, MetricsCollector metrics) =>
+            Results.Ok(metrics.Collect(seats)));
 
-            var status = new SystemStatus
+        // Triggers a full rebuild and service restart.
+        // Spawns a detached PowerShell process that runs install-service.ps1 after a 3s delay,
+        // giving this HTTP response time to reach the client before the service stops.
+        // Requires SourceDir to be set in appsettings.json.
+        group.MapPost("/rebuild", (IOptions<MultiSeatOptions> opts, ILoggerFactory logFactory) =>
+        {
+            var log = logFactory.CreateLogger("MultiSeat.Rebuild");
+            var sourceDir = opts.Value.SourceDir;
+            if (string.IsNullOrWhiteSpace(sourceDir))
+                return Results.BadRequest(new { error = "SourceDir not configured in appsettings.json" });
+
+            var script = Path.Combine(sourceDir, "scripts", "install-service.ps1");
+            if (!File.Exists(script))
+                return Results.BadRequest(new { error = $"Script not found: {script}" });
+
+            // Detached PowerShell: wait 3s then run the install script (which stops + restarts the service).
+            var ps = $"Start-Sleep 3; & '{script}'";
+            Process.Start(new ProcessStartInfo(
+                "powershell.exe",
+                $"-NoProfile -NonInteractive -ExecutionPolicy Bypass -Command \"{ps}\"")
             {
-                ActiveSeats = seats.ActiveSeatCount,
-                Gpu = gpu.Query(),
-                WindowsBuild = Environment.OSVersion.VersionString,
-                RdpWrapperActive = rdp.EnsureMultiSession(),
-                SystemMemoryMb = totalMb,
-                AvailableMemoryMb = availMb
-            };
-            return Results.Ok(status);
+                CreateNoWindow = true,
+                UseShellExecute = false,
+            });
+
+            log.LogInformation("Rebuild triggered — service will restart in ~3s");
+            return Results.Accepted(value: new { message = "Rebuild started — service will restart shortly" });
         });
 
         // Diagnostic endpoint — dumps all connected display paths from QueryDisplayConfig.
@@ -43,41 +60,4 @@ public static class SystemEndpoints
         });
     }
 
-    /// <summary>
-    /// Query physical memory via GlobalMemoryStatusEx (accurate, unlike GC metrics).
-    /// </summary>
-    private static void GetPhysicalMemory(out long totalMb, out long availMb)
-    {
-        var memStatus = new MEMORYSTATUSEX { dwLength = (uint)Marshal.SizeOf<MEMORYSTATUSEX>() };
-        if (GlobalMemoryStatusEx(ref memStatus))
-        {
-            totalMb = (long)(memStatus.ullTotalPhys / (1024 * 1024));
-            availMb = (long)(memStatus.ullAvailPhys / (1024 * 1024));
-        }
-        else
-        {
-            // Fallback to GC info (less accurate but always available)
-            var gcInfo = GC.GetGCMemoryInfo();
-            totalMb = gcInfo.TotalAvailableMemoryBytes / (1024 * 1024);
-            availMb = totalMb; // can't determine available without native call
-        }
-    }
-
-    [DllImport("kernel32.dll", SetLastError = true)]
-    [return: MarshalAs(UnmanagedType.Bool)]
-    private static extern bool GlobalMemoryStatusEx(ref MEMORYSTATUSEX lpBuffer);
-
-    [StructLayout(LayoutKind.Sequential)]
-    private struct MEMORYSTATUSEX
-    {
-        public uint dwLength;
-        public uint dwMemoryLoad;
-        public ulong ullTotalPhys;
-        public ulong ullAvailPhys;
-        public ulong ullTotalPageFile;
-        public ulong ullAvailPageFile;
-        public ulong ullTotalVirtual;
-        public ulong ullAvailVirtual;
-        public ulong ullAvailExtendedVirtual;
-    }
 }

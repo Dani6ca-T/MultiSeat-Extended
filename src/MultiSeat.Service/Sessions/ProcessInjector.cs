@@ -165,10 +165,14 @@ public sealed class ProcessInjector
     {
         var arguments = $"\"{configPath}\"";
 
+        // Working dir = per-seat config dir (not the Apollo install dir).
+        // Apollo resolves sunshine_state.json from {workingDir}/config/sunshine_state.json.
+        // Each seat must have its own working dir so they get distinct UUIDs and
+        // Moonlight can list them as separate servers.
         return LaunchInSessionAsync(
             sessionId, accountName,
             apolloExePath, arguments,
-            Path.GetDirectoryName(apolloExePath),
+            Path.GetDirectoryName(configPath),
             ct);
     }
 
@@ -397,7 +401,7 @@ public sealed class ProcessInjector
         {
             var arguments = $"\"{configPath}\"";
             var cmdLine = FormatCommandLine(apolloExePath, arguments);
-            var workingDir = Path.GetDirectoryName(apolloExePath);
+            var workingDir = Path.GetDirectoryName(configPath);
 
             var si = new Kernel32.StartupInfo
             {

@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.ServiceProcess;
 using Microsoft.Extensions.Options;
 using Microsoft.Win32;
 using MultiSeat.Service.Api;
@@ -7,6 +8,7 @@ using MultiSeat.Service.Input;
 using MultiSeat.Service.Monitoring;
 using MultiSeat.Service.Sessions;
 using MultiSeat.Service.Streaming;
+using MultiSeat.Shared.Models;
 
 namespace MultiSeat.Service;
 
@@ -26,6 +28,7 @@ public sealed class MultiSeatWorker : BackgroundService
     private readonly HidHideConfigurator _hidHide;
     private readonly DeviceWatcher _deviceWatcher;
     private readonly FirewallManager _firewall;
+    private readonly SeatPresetStore _presets;
     private readonly IServiceProvider _services;
 
     private WebApplication? _apiApp;
@@ -41,6 +44,7 @@ public sealed class MultiSeatWorker : BackgroundService
         HidHideConfigurator hidHide,
         DeviceWatcher deviceWatcher,
         FirewallManager firewall,
+        SeatPresetStore presets,
         IServiceProvider services)
     {
         _logger = logger;
@@ -53,6 +57,7 @@ public sealed class MultiSeatWorker : BackgroundService
         _hidHide = hidHide;
         _deviceWatcher = deviceWatcher;
         _firewall = firewall;
+        _presets = presets;
         _services = services;
     }
 
@@ -102,7 +107,10 @@ public sealed class MultiSeatWorker : BackgroundService
         _ = _apiApp.RunAsync(stoppingToken);
         _logger.LogInformation("API server listening on port {Port}", _options.ApiPort);
 
-        // ── Step 5: Health-check loop ────────────────────────────────
+        // ── Step 5: Auto-provision seats ─────────────────────────────
+        await AutoProvisionSeatsAsync(stoppingToken);
+
+        // ── Step 6: Health-check loop ────────────────────────────────
         using var timer = new PeriodicTimer(
             TimeSpan.FromMilliseconds(_options.HealthCheckIntervalMs));
 
@@ -121,8 +129,74 @@ public sealed class MultiSeatWorker : BackgroundService
         }
     }
 
+    private async Task AutoProvisionSeatsAsync(CancellationToken ct)
+    {
+        var autoStart = _presets.GetAutoStart();
+        if (autoStart.Count == 0) return;
+
+        _logger.LogInformation("Auto-provisioning {Count} seat(s) from presets", autoStart.Count);
+
+        foreach (var preset in autoStart)
+        {
+            try
+            {
+                var seat = await _seatManager.ProvisionSeatAsync(
+                    new SeatRequest
+                    {
+                        AccountName = preset.AccountName,
+                        Width = preset.Width,
+                        Height = preset.Height,
+                        Fps = preset.Fps,
+                    }, ct);
+
+                seat.AutoStart = true;
+                _logger.LogInformation(
+                    "Auto-provisioned seat '{Account}' (ID {Id})", preset.AccountName, seat.Id);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex,
+                    "Failed to auto-provision seat '{Account}'", preset.AccountName);
+            }
+        }
+    }
+
+    private void StopApolloWindowsService()
+    {
+        const string apolloServiceName = "ApolloService";
+        try
+        {
+            using var svc = new ServiceController(apolloServiceName);
+            var status = svc.Status;
+            if (status is ServiceControllerStatus.Running or ServiceControllerStatus.StartPending)
+            {
+                _logger.LogInformation(
+                    "Stopping default ApolloService — it uses port 47984 and conflicts " +
+                    "with MultiSeat seat allocation. Use install-service.ps1 to disable it permanently.");
+                svc.Stop();
+                svc.WaitForStatus(ServiceControllerStatus.Stopped, TimeSpan.FromSeconds(10));
+                _logger.LogInformation("ApolloService stopped");
+            }
+        }
+        catch (InvalidOperationException)
+        {
+            // Service does not exist — nothing to do
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex,
+                "Could not stop ApolloService — port 47984 conflicts may occur. " +
+                "Run install-service.ps1 to disable it.");
+        }
+    }
+
     private void KillOrphanedApolloProcesses()
     {
+        // Stop the ApolloService Windows service before killing processes.
+        // Apollo ships as an auto-start service; killing the process alone lets the
+        // service restart it immediately, causing port 47984 conflicts with MultiSeat seats.
+        StopApolloWindowsService();
+
         var exeName = Path.GetFileNameWithoutExtension(_options.ApolloExePath); // "sunshine"
         try
         {

@@ -1,4 +1,5 @@
 using Microsoft.AspNetCore.Mvc;
+using MultiSeat.Service.Configuration;
 using MultiSeat.Service.Sessions;
 using MultiSeat.Shared.Models;
 
@@ -161,6 +162,38 @@ public static class SeatEndpoints
                 return Results.BadRequest(new { error = ex.Message });
             }
         });
+
+        // ── Presets ────────────────────────────────────────────────────
+
+        group.MapGet("/presets", (SeatPresetStore presets) =>
+            Results.Ok(presets.GetAll()));
+
+        group.MapPut("/{id:guid}/autostart",
+            (Guid id, AutoStartRequest req, SeatManager mgr, SeatPresetStore presets) =>
+            {
+                var seat = mgr.GetSeat(id);
+                if (seat is null) return Results.NotFound();
+
+                seat.AutoStart = req.Enabled;
+
+                if (req.Enabled)
+                {
+                    presets.Upsert(new SeatPreset
+                    {
+                        AccountName = seat.AccountName,
+                        Width = seat.Width,
+                        Height = seat.Height,
+                        Fps = seat.Fps,
+                        AutoStart = true,
+                    });
+                }
+                else
+                {
+                    presets.DeleteByAccount(seat.AccountName);
+                }
+
+                return Results.Ok(new { autoStart = seat.AutoStart });
+            });
 
         group.MapPost("/{id:guid}/session-reconnect",
             async (Guid id, SeatManager mgr, SessionLauncher sessionLauncher, CancellationToken ct) =>

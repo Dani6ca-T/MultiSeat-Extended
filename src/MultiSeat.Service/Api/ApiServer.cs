@@ -18,15 +18,25 @@ public static class ApiServer
 
     public static WebApplication Build(IServiceProvider hostServices, MultiSeatOptions options)
     {
-        var builder = WebApplication.CreateBuilder();
+        // Set ContentRootPath explicitly — WebApplication.CreateBuilder() defaults to
+        // Directory.GetCurrentDirectory() which is C:\Windows\system32 for a Windows Service,
+        // causing UseStaticFiles / MapFallbackToFile to fail to find the wwwroot folder.
+        var builder = WebApplication.CreateBuilder(new WebApplicationOptions
+        {
+            ContentRootPath = AppContext.BaseDirectory,
+            WebRootPath = Path.Combine(AppContext.BaseDirectory, "wwwroot"),
+        });
 
         // Re-use the host's singleton registrations
         builder.Services.AddSingleton(hostServices.GetRequiredService<Sessions.SeatManager>());
         builder.Services.AddSingleton(hostServices.GetRequiredService<Sessions.RdpWrapper>());
+        builder.Services.AddSingleton(hostServices.GetRequiredService<Sessions.SessionLauncher>());
         builder.Services.AddSingleton(hostServices.GetRequiredService<Accounts.AccountManager>());
         builder.Services.AddSingleton(hostServices.GetRequiredService<Monitoring.GpuMonitor>());
+        builder.Services.AddSingleton(hostServices.GetRequiredService<Monitoring.MetricsCollector>());
         builder.Services.AddSingleton(hostServices.GetRequiredService<Monitoring.SessionHealthCheck>());
         builder.Services.AddSingleton(hostServices.GetRequiredService<Display.VirtualDisplayManager>());
+        builder.Services.AddSingleton(hostServices.GetRequiredService<Configuration.SeatPresetStore>());
 
         builder.WebHost.ConfigureKestrel(kestrel =>
         {

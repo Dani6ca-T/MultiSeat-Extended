@@ -181,6 +181,23 @@ if ($vmExe) {
         "Run prerequisites\install-prerequisites.ps1." -ForegroundColor Yellow
 }
 
+# -- Disable default ApolloService (prevents port 47984 conflicts) ------------
+# Apollo ships as an auto-start Windows service that runs sunshine.exe on port 47984.
+# MultiSeat manages its own per-seat Apollo instances; the default service must be
+# stopped and set to Manual start so it does not compete after reboot.
+$apolloSvc = Get-Service -Name "ApolloService" -ErrorAction SilentlyContinue
+if ($apolloSvc) {
+    if ($apolloSvc.Status -eq 'Running') {
+        Write-Step "Stopping default ApolloService (port 47984 conflict with MultiSeat)..."
+        Stop-Service "ApolloService" -Force
+        Write-Host "  OK: ApolloService stopped" -ForegroundColor Green
+    }
+    Set-Service "ApolloService" -StartupType Manual
+    Write-Host "  OK: ApolloService set to Manual start (MultiSeat manages all Apollo instances)" -ForegroundColor Green
+} else {
+    Write-Host "  OK: ApolloService not found" -ForegroundColor DarkGray
+}
+
 # -- Stop service before publish so its DLLs are not locked ----------
 $svcBeforePublish = Get-Service $ServiceName -ErrorAction SilentlyContinue
 if ($svcBeforePublish -and $svcBeforePublish.Status -eq 'Running') {
@@ -239,7 +256,7 @@ if (Test-Path (Join-Path $DashboardDir "package.json")) {
             if ($result.ExitCode -ne 0) { throw "npm install failed (exit $($result.ExitCode))" }
         }
 
-        & cmd /c build.bat
+        & cmd /c "$DashboardDir\build.bat"
         if ($LASTEXITCODE -ne 0) { throw "Dashboard build failed" }
         $distDir = Join-Path $DashboardDir "dist"
         if (Test-Path $distDir) {

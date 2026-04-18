@@ -37,6 +37,9 @@ prerequisites/*.zip
 prerequisites/*.ini
 !prerequisites/*.ps1
 !prerequisites/*.txt
+# VirtualDisplayDriver folder contains pre-built third-party driver binaries;
+# the install script downloads the latest release from GitHub automatically.
+prerequisites/VirtualDisplayDriver/
 
 # Claude Code local data (contains machine-specific paths and worktrees)
 .claude/

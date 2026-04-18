@@ -95,7 +95,9 @@ builder.Services.AddSingleton<InputHookManager>();
 builder.Services.AddSingleton<DeviceWatcher>();
 builder.Services.AddSingleton<HidHideConfigurator>();
 builder.Services.AddSingleton<FirewallManager>();
+builder.Services.AddSingleton<SeatPresetStore>();
 builder.Services.AddSingleton<GpuMonitor>();
+builder.Services.AddSingleton<MetricsCollector>();
 builder.Services.AddSingleton<SessionHealthCheck>();
 builder.Services.AddSingleton<SeatManager>();
 
