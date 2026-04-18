@@ -56,16 +56,31 @@ Download: https://github.com/ClassicOldSong/Apollo/releases
 
 ### Virtual Display Driver — SudoVDA
 
-Each seat needs its own virtual display for the streaming encoder to capture.
+Each seat needs its own virtual display for the streaming encoder to capture. SudoVDA is bundled with Apollo and managed automatically — Apollo creates and destroys one virtual display per instance.
 
 | Requirement | Details |
 |-------------|---------|
-| **SudoVDA** (Virtual Display Driver) | Latest release |
-| **Minimum displays** | One virtual display per seat |
-| **Alternative** | parsec-vdd (Virtual Display Driver by Parsec) |
+| **SudoVDA** (bundled with Apollo) | Installed automatically with Apollo |
+| **Minimum displays** | One virtual display per seat (Apollo manages these) |
 | **Notes** | The display must be connected to an Active RDP session — do not disconnect mstsc |
 
-Download: https://github.com/itsmikethetech/Virtual-Display-Driver
+---
+
+### Headless Operation — Persistent Virtual Display
+
+If the host machine has **no physical monitor** connected, Windows may not expose a GPU output for the GPU driver or remote access tools (AnyDesk, RDP) to use before any seat is provisioned.
+
+Install a persistent virtual display that appears at boot, independent of any streaming client:
+
+```powershell
+.\prerequisites\install-virtual-display.ps1
+```
+
+This script downloads and installs the [Virtual Display Driver by itsmikethetech](https://github.com/itsmikethetech/Virtual-Display-Driver), a persistent IddCx virtual monitor that works on Windows 10/11 x64. A reboot may be required after installation.
+
+Alternatively, download it manually: https://github.com/itsmikethetech/Virtual-Display-Driver/releases
+
+> **Note:** This is separate from SudoVDA. SudoVDA (Apollo's driver) creates per-seat virtual displays only while Apollo is running. The persistent virtual display fills the gap when no seat is active, so the machine always has at least one display for remote access.
 
 ---
 

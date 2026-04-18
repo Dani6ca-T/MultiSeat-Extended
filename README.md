@@ -61,6 +61,15 @@ cd MultiSeat
 
 This script automatically downloads and installs everything:
 
+> **Running headless (no physical monitor)?**
+> If the host machine has no physical display attached, Windows may not expose a GPU output for Apollo to capture.
+> Install a persistent virtual display so the machine always has an active monitor, even before any seat is provisioned:
+> ```powershell
+> .\prerequisites\install-virtual-display.ps1
+> ```
+> This downloads and installs the [Virtual Display Driver by itsmikethetech](https://github.com/itsmikethetech/Virtual-Display-Driver) — a persistent IddCx virtual monitor that appears at boot without any streaming client connected.
+> A reboot may be required after installation.
+
 | Software | Purpose |
 |----------|---------|
 | ViGEmBus | Virtual Xbox controller driver |
