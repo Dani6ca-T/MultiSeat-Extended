@@ -46,6 +46,12 @@ public sealed class ApolloConfigBuilder
         // The file is created by MultiSeat on first run (from Apollo's default config) and survives seat teardown.
         var credPath = Path.Combine(configDir, "shared_credentials.json").Replace('\\', '/');
         EnsureSharedCredentials(configDir);
+        // Pre-create per-seat state file so Apollo uses a unique server UUID per instance.
+        // If the file doesn't exist when Apollo starts, it falls back to the shared default at
+        // C:\Program Files\Apollo\config\sunshine_state.json — all seats would share one UUID
+        // and Moonlight would deduplicate them, showing only one server.
+        // Only create if absent so pairings survive re-provisioning.
+        EnsureSeatStateFile(seatDir);
 
         var sb = new StringBuilder(2048);
 
@@ -57,9 +63,12 @@ public sealed class ApolloConfigBuilder
         sb.AppendLine();
 
         // ── Server identity ───────────────────────────────────────────
-        // Each seat has a unique name visible in Moonlight's server list
+        // Each seat has a unique name visible in Moonlight's server list.
+        // Include a seat number derived from the port block so multiple seats
+        // with the same account are distinguishable (e.g. MultiSeat-RogAlly-1).
+        var seatNumber = (seat.PortBase - Constants.PortBase) / Constants.PortsPerSeat + 1;
         sb.AppendLine("# Server identity");
-        sb.AppendLine($"sunshine_name = MultiSeat-{seat.AccountName}");
+        sb.AppendLine($"sunshine_name = MultiSeat-{seat.AccountName}-{seatNumber}");
         sb.AppendLine();
 
         // ── Network ports ─────────────────────────────────────────────
@@ -95,14 +104,32 @@ public sealed class ApolloConfigBuilder
         sb.AppendLine("encoder = nvenc");
         sb.AppendLine();
 
-        // ── Audio ─────────────────────────────────────────────────────
+        // ── Audio output (game audio → Moonlight) ─────────────────────
         // Leave audio_sink empty — Apollo uses the session's default render endpoint.
         // In an RDP session with default audiomode (redirect to client), that endpoint is
         // "Remote Audio Output", which IS enumerable via WASAPI and supports loopback capture.
-        // Virtual devices (VB-Audio CABLE, Steam Streaming Speakers) are NOT visible inside
-        // RDP sessions via WASAPI, so specifying them causes Apollo to fail silently.
-        sb.AppendLine("# Audio — Apollo uses session default device (Remote Audio Output in RDP session)");
+        // VAC/VoiceMeeter devices are NOT visible in RDP sessions via WASAPI loopback capture,
+        // so specifying them causes Apollo to fail silently (no audio in Moonlight).
+        sb.AppendLine("# Audio output — Apollo captures session default (Remote Audio Output in RDP session)");
         sb.AppendLine("# audio_sink = (intentionally empty — use session default)");
+        sb.AppendLine();
+
+        // ── Audio input (mic from Moonlight → game) ────────────────────
+        // virtual_sink: Apollo receives mic audio from the Moonlight client and renders it
+        // to this device. Games then use the corresponding capture endpoint as their microphone.
+        // VB-Audio CABLE: Apollo renders TO "CABLE Input", games record FROM "CABLE Output".
+        // Note: this uses WASAPI render (not loopback capture), so VB-Cable IS accessible
+        // in RDP sessions — different API path from the audio_sink loopback limitation.
+        // Enable mic capture in Moonlight client settings for this to take effect.
+        if (!string.IsNullOrEmpty(seat.AudioDeviceId))
+        {
+            sb.AppendLine("# Audio input — Apollo plays Moonlight mic audio to VB-Cable; games mic = CABLE Output");
+            sb.AppendLine($"virtual_sink = {seat.AudioDeviceId}");
+        }
+        else
+        {
+            sb.AppendLine("# virtual_sink = (no VAC device assigned — mic forwarding unavailable)");
+        }
         sb.AppendLine();
 
         // ── Input ─────────────────────────────────────────────────────
@@ -117,7 +144,12 @@ public sealed class ApolloConfigBuilder
         sb.AppendLine();
 
         // ── Security ──────────────────────────────────────────────────
+        // Each seat gets its own state file so Apollo generates a unique uniqueid per seat.
+        // Without this, all instances load sunshine_state.json from the Apollo install dir
+        // and share the same uniqueid — Moonlight deduplicates by uniqueid and shows only one server.
+        var statePath = Path.Combine(seatDir, "sunshine_state.json").Replace('\\', '/');
         sb.AppendLine("# Security");
+        sb.AppendLine($"sunshine_state = {statePath}");
         sb.AppendLine($"credentials_file = {credPath}");
         // Each seat has independent pairing — Moonlight pairs per-seat
         sb.AppendLine("origin_web_ui_allowed = lan");
@@ -129,6 +161,17 @@ public sealed class ApolloConfigBuilder
         sb.AppendLine("hevc_mode = 2");  // allow HEVC if client supports it
         sb.AppendLine("av1_mode = 2");   // allow AV1 if client supports it — with encoder=software, AV1 probe just warns and continues (harmless)
         sb.AppendLine("fec_percentage = 20");
+        sb.AppendLine();
+
+        // ── Color settings ────────────────────────────────────────────
+        // color_space = 1 → Rec. 709 (correct for HD content; default 0 = Rec. 601 SD)
+        // color_range = 1 → full range (0–255); default 0 = limited range (16–235), which
+        //   crushes blacks/whites and makes text look washed out / blurry on PC monitors.
+        // For sharpest text, also enable "4:4:4 color mode" in Moonlight's Advanced settings
+        // on the client — that negotiates YUV 4:4:4 instead of 4:2:0 chroma subsampling.
+        sb.AppendLine("# Color — Rec. 709 full-range for sharp text on PC monitors");
+        sb.AppendLine("color_space = 1");
+        sb.AppendLine("color_range = 1");
         sb.AppendLine();
 
         // ── Logging ───────────────────────────────────────────────────
@@ -215,6 +258,30 @@ public sealed class ApolloConfigBuilder
             File.WriteAllLines(configPath, lines, Encoding.UTF8);
             _logger.LogDebug("Updated output_name in {Path}", configPath);
         }
+    }
+
+    /// <summary>
+    /// Ensure a per-seat sunshine_state.json exists with a unique server UUID.
+    /// Only creates the file if absent — preserves pairings on re-provision.
+    /// </summary>
+    private void EnsureSeatStateFile(string seatDir)
+    {
+        var statePath = Path.Combine(seatDir, "sunshine_state.json");
+        if (File.Exists(statePath)) return;
+
+        // UUID format matches what Apollo writes: uppercase 8-4-4-4-12
+        var uuid = Guid.NewGuid().ToString("D").ToUpperInvariant();
+        var json = $$"""
+            {
+                "root": {
+                    "named_devices": [],
+                    "uniqueid": "{{uuid}}"
+                }
+            }
+            """;
+
+        File.WriteAllText(statePath, json, Encoding.UTF8);
+        _logger.LogInformation("Created per-seat state file with UUID {Uuid}: {Path}", uuid, statePath);
     }
 
     /// <summary>

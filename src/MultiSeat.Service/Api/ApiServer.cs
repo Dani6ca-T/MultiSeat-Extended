@@ -1,3 +1,5 @@
+using System.Text.Json;
+using System.Text.Json.Serialization;
 using MultiSeat.Service.Configuration;
 using MultiSeat.Shared;
 
@@ -29,6 +31,12 @@ public static class ApiServer
         builder.WebHost.ConfigureKestrel(kestrel =>
         {
             kestrel.ListenAnyIP(options.ApiPort);
+        });
+
+        builder.Services.ConfigureHttpJsonOptions(opts =>
+        {
+            opts.SerializerOptions.Converters.Add(new JsonStringEnumConverter());
+            opts.SerializerOptions.PropertyNamingPolicy = JsonNamingPolicy.CamelCase;
         });
 
         // Register CORS services (required before UseCors)

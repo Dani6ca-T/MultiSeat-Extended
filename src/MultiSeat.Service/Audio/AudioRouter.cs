@@ -14,7 +14,7 @@ namespace MultiSeat.Service.Audio;
 ///   2. Launches an audio helper process inside the seat's session
 ///      that calls IPolicyConfig.SetDefaultEndpoint() — this makes the
 ///      VAC cable the default audio output within that session ONLY
-///   3. Returns the VAC device ID for Apollo config (audio_sink)
+///   3. Returns the VAC cable index; stores device ID on seat for Apollo's virtual_sink (mic routing)
 ///   4. On teardown, releases the cable and restores defaults
 ///
 /// This approach works because Windows maintains separate audio policy
@@ -101,16 +101,20 @@ public sealed class AudioRouter
         var assignment = new AudioAssignment(endpoint, seat.SessionId);
         _assignments.TryAdd(seat.Id, assignment);
 
-        // Store the device ID on the seat for Apollo config
+        // Store device ID for Apollo's virtual_sink (mic input routing)
         seat.AudioDeviceId = endpoint.DeviceId;
 
         _logger.LogInformation(
             "Assigned VAC '{Name}' (cable {Cable}) to seat {Id} — device: {DeviceId}",
             endpoint.FriendlyName, endpoint.VacCableIndex, seat.Id, endpoint.DeviceId);
 
-        // Set the VAC as the default audio device within the seat's session.
-        // This must happen INSIDE the target session for per-session isolation.
-        SetDefaultAudioInSession(seat, endpoint);
+        // NOTE: We intentionally do NOT call SetDefaultAudioInSession here.
+        // Apollo runs inside an RDP session where the default render device is
+        // "Remote Audio Output" — the only WASAPI-visible device in that context.
+        // VAC/VoiceMeeter devices are NOT enumerable via WASAPI inside RDP sessions,
+        // so changing the session default to a VAC device causes Apollo to lose its
+        // audio capture source entirely. audio_sink is left empty in sunshine.conf
+        // so Apollo captures "Remote Audio Output" directly.
 
         return endpoint.VacCableIndex;
     }

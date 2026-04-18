@@ -27,4 +27,13 @@ internal static partial class UserEnv
         IntPtr hToken,
         [Out] char[] lpProfileDir,
         ref int lpcchSize);
+
+    // Creates the user profile directory for a given SID without requiring an interactive logon.
+    // Returns S_OK (0) on success or HRESULT_FROM_WIN32(ERROR_ALREADY_EXISTS) if already created.
+    [DllImport(Lib, CharSet = CharSet.Unicode)]
+    public static extern int CreateProfile(
+        string pszUserSid,
+        string pszUserName,
+        System.Text.StringBuilder pszProfilePath,
+        uint cchProfilePath);
 }

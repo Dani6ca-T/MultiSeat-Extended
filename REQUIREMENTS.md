@@ -15,6 +15,20 @@
 
 ## Required Software
 
+### PowerShell 7+
+
+The prerequisites and install scripts require **PowerShell 7** (pwsh). Windows PowerShell 5 is not supported.
+
+Install via winget:
+```powershell
+winget install Microsoft.PowerShell
+```
+Or download from: https://github.com/PowerShell/PowerShell/releases
+
+After installing, open **PowerShell 7** (search "pwsh" in Start) and run all MultiSeat scripts from there.
+
+---
+
 ### .NET Runtime
 
 | Component | Version | Notes |

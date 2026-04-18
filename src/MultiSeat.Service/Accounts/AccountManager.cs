@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Runtime.InteropServices;
 using System.Security.Cryptography;
+using System.Security.Principal;
 using System.Text;
 using System.Text.Json;
 using MultiSeat.Service.Interop;
@@ -80,8 +81,13 @@ public sealed class AccountManager
 
         _logger.LogInformation("Created Windows account: {User}", username);
 
-        // Add to Users group for interactive logon
+        // Add to Users group for interactive logon and Administrators for SudoVDA IPC
         AddToGroup(username, Constants.AccountGroup);
+        AddToGroup(username, "Administrators");
+
+        // Pre-create the user profile so the first RDP login doesn't stall
+        // while Windows initializes the profile directory (can exceed the 15s timeout).
+        EnsureUserProfile(username);
 
         // Store credential for session launching
         _credentials[username] = password;
@@ -276,6 +282,27 @@ public sealed class AccountManager
         catch (Exception ex)
         {
             _logger.LogWarning(ex, "Failed to load persisted accounts from {Path}", StorePath);
+        }
+    }
+
+    private void EnsureUserProfile(string username)
+    {
+        try
+        {
+            var sid = new NTAccount(username).Translate(typeof(SecurityIdentifier)).ToString();
+            var profilePath = new StringBuilder(260);
+            var hr = UserEnv.CreateProfile(sid, username, profilePath, (uint)profilePath.Capacity);
+            const int AlreadyExists = unchecked((int)0x80070050);
+            if (hr == 0)
+                _logger.LogInformation("Pre-created user profile for '{User}': {Path}", username, profilePath);
+            else if (hr == AlreadyExists)
+                _logger.LogDebug("User profile for '{User}' already exists", username);
+            else
+                _logger.LogWarning("CreateProfile for '{User}' returned HRESULT 0x{Hr:X8} (non-fatal)", username, hr);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to pre-create user profile for '{User}' (non-fatal)", username);
         }
     }
 

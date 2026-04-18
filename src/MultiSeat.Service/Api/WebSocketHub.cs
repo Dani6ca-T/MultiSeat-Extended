@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using System.Net.WebSockets;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using MultiSeat.Shared.Models;
 
 namespace MultiSeat.Service.Api;
@@ -54,7 +55,11 @@ public static class WebSocketHub
     public static async Task BroadcastSeatUpdateAsync(SeatInfo seat)
     {
         var json = JsonSerializer.Serialize(seat,
-            new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase });
+            new JsonSerializerOptions
+            {
+                PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+                Converters = { new JsonStringEnumConverter() }
+            });
         var bytes = Encoding.UTF8.GetBytes(json);
 
         foreach (var (id, ws) in _clients)

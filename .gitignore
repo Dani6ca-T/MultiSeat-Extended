@@ -43,3 +43,7 @@ prerequisites/*.ini
 
 # Continue.dev local data
 .continue/
+
+# Accidentally created scratch files
+null
+queryex

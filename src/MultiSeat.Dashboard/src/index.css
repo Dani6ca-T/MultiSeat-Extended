@@ -442,6 +442,22 @@ select:focus {
   word-break: break-all;
 }
 
+.copy-btn {
+  flex-shrink: 0;
+  padding: 2px 8px;
+  font-size: 11px;
+  background: rgba(59, 130, 246, 0.15);
+  border: 1px solid rgba(59, 130, 246, 0.3);
+  border-radius: 4px;
+  color: var(--accent);
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.copy-btn:hover {
+  background: rgba(59, 130, 246, 0.25);
+}
+
 /* ── Service Management Panel ────────────────────────────────── */
 .service-panel {
   margin-top: 8px;

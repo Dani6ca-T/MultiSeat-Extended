@@ -37,12 +37,14 @@ See [REQUIREMENTS.md](REQUIREMENTS.md) for the full hardware and software requir
 - HidHide (controller isolation)
 - ViGEmBus (virtual controller driver)
 - RDPWrap (multi-session RDP on Windows Home/Pro)
+- PowerShell 7+ (`winget install Microsoft.PowerShell`)
 
 ---
 
 ## Installation
 
-> **All commands must be run as Administrator in PowerShell.**
+> **All commands must be run as Administrator in PowerShell 7+.** Windows PowerShell 5 is not supported.
+> Install PowerShell 7 if needed: `winget install Microsoft.PowerShell`
 
 ### Step 1 — Clone the repository
 

@@ -119,10 +119,7 @@ export function SeatCard({ seat, onUpdate }: Props) {
 
         {/* Moonlight connection info */}
         {httpsPort && isActive && (
-          <div className="moonlight-info">
-            <span className="stat-label">Moonlight</span>
-            <code>{window.location.hostname}:{httpsPort}</code>
-          </div>
+          <MoonlightAddress host={window.location.hostname} port={httpsPort} />
         )}
 
         {seat.launchApp && (
@@ -331,6 +328,27 @@ function ServiceRow({
         {detail && <span className="text-muted" style={{ fontSize: 11 }}>({detail})</span>}
       </div>
       {actions && <div className="service-actions">{actions}</div>}
+    </div>
+  );
+}
+
+function MoonlightAddress({ host, port }: { host: string; port: number }) {
+  const [copied, setCopied] = useState(false);
+  const address = `${host}:${port}`;
+
+  const handleCopy = async () => {
+    await navigator.clipboard.writeText(address);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
+
+  return (
+    <div className="moonlight-info">
+      <span className="stat-label">Moonlight</span>
+      <code style={{ flex: 1 }}>{address}</code>
+      <button className="copy-btn" onClick={handleCopy} title="Copy address">
+        {copied ? "Copied!" : "Copy"}
+      </button>
     </div>
   );
 }

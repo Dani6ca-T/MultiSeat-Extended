@@ -211,14 +211,6 @@ public sealed class SeatManager
                 }
             }
 
-            // Update Apollo config with audio device if it was assigned after config generation
-            if (!string.IsNullOrEmpty(seat.AudioDeviceId))
-            {
-                var configPath = _apolloManager.GetConfigPath(seat.Id);
-                if (configPath is not null)
-                    _configBuilder.UpdateAudioSink(configPath, seat.AudioDeviceId);
-            }
-
             // ── 7. Controller + Input Routing ────────────────────────────
             // Only create a MultiSeat-managed ViGEm controller when explicitly enabled.
             // Apollo already handles controller forwarding from Moonlight clients natively
@@ -385,12 +377,10 @@ public sealed class SeatManager
 
         seat.ApolloProcessId = await _apolloManager.StartAsync(seat, ct);
 
-        // Re-apply audio + display config
+        // Re-apply display config
         var configPath = _apolloManager.GetConfigPath(seat.Id);
         if (configPath is not null)
         {
-            if (!string.IsNullOrEmpty(seat.AudioDeviceId))
-                _configBuilder.UpdateAudioSink(configPath, seat.AudioDeviceId);
             if (!string.IsNullOrEmpty(seat.DisplayDevicePath))
                 _configBuilder.UpdateDisplayOutput(configPath, seat.DisplayDevicePath);
         }
@@ -413,8 +403,6 @@ public sealed class SeatManager
         var configPath = _apolloManager.GetConfigPath(seat.Id);
         if (configPath is not null)
         {
-            if (!string.IsNullOrEmpty(seat.AudioDeviceId))
-                _configBuilder.UpdateAudioSink(configPath, seat.AudioDeviceId);
             if (!string.IsNullOrEmpty(seat.DisplayDevicePath))
                 _configBuilder.UpdateDisplayOutput(configPath, seat.DisplayDevicePath);
         }
@@ -431,11 +419,6 @@ public sealed class SeatManager
 
         _audioRouter.ReleaseCable(seat);
         seat.VacCableIndex = _audioRouter.AssignCable(seat);
-
-        // Update Apollo config if running
-        var configPath = _apolloManager.GetConfigPath(seat.Id);
-        if (configPath is not null && !string.IsNullOrEmpty(seat.AudioDeviceId))
-            _configBuilder.UpdateAudioSink(configPath, seat.AudioDeviceId);
 
         _ = BroadcastState(seat);
         _logger.LogInformation("Seat {Id}: audio reset, cable #{C}", seatId, seat.VacCableIndex);
