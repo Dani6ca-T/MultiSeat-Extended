@@ -104,6 +104,27 @@ if ((Get-ItemProperty $rdpClientKey -Name "AllowUnsignedFiles" -ErrorAction Sile
     Write-Host "  OK: unsigned .rdp file warning suppressed" -ForegroundColor DarkGray
 }
 
+# Allow audio capture redirection (audiocapturemode:i:1) without showing a consent dialog.
+# Without this, mstsc shows a device redirection trust prompt that blocks headless provisioning.
+if ((Get-ItemProperty $rdpClientKey -Name "fDisableAudioCapture" -ErrorAction SilentlyContinue).fDisableAudioCapture -ne 0) {
+    Set-ItemProperty $rdpClientKey -Name "fDisableAudioCapture" -Value 0 -Type DWord
+    Write-Host "  Applied: audio capture redirection allowed (no consent dialog)" -ForegroundColor Green
+} else {
+    Write-Host "  OK: audio capture redirection allowed" -ForegroundColor DarkGray
+}
+
+# Pre-authorize all mstsc device redirections for the current user.
+# LocalDevices bitmask 0x7FFFFFFF covers all device types (audio, drives, printers, etc.)
+# so mstsc never prompts the user at connection time — required for headless operation.
+$mstscClientKey = "HKCU:\Software\Microsoft\Terminal Server Client"
+if (-not (Test-Path $mstscClientKey)) { New-Item $mstscClientKey -Force | Out-Null }
+if ((Get-ItemProperty $mstscClientKey -Name "LocalDevices" -ErrorAction SilentlyContinue).LocalDevices -ne 0x7FFFFFFF) {
+    Set-ItemProperty $mstscClientKey -Name "LocalDevices" -Value 0x7FFFFFFF -Type DWord
+    Write-Host "  Applied: mstsc device redirection pre-authorized (no consent prompts)" -ForegroundColor Green
+} else {
+    Write-Host "  OK: mstsc device redirection pre-authorized" -ForegroundColor DarkGray
+}
+
 # -- SudoVDA check ---------------------------------------------------
 # SudoVDA is required for per-seat virtual display isolation.
 # Without it, Apollo captures the primary physical display and all seats
