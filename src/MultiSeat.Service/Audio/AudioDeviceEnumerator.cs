@@ -130,6 +130,74 @@ public sealed class AudioDeviceEnumerator : IDisposable
     }
 
     /// <summary>
+    /// Enumerate all active audio capture (input/microphone) endpoints on the system.
+    /// </summary>
+    public List<AudioEndpointInfo> EnumerateCaptureEndpoints(
+        ComInterfaces.DeviceState stateMask = ComInterfaces.DeviceState.Active)
+    {
+        var results = new List<AudioEndpointInfo>();
+
+        if (_enumerator is null)
+        {
+            _logger.LogWarning("IMMDeviceEnumerator not available — cannot enumerate capture devices");
+            return results;
+        }
+
+        var hr = _enumerator.EnumAudioEndpoints(
+            ComInterfaces.EDataFlow.eCapture,
+            stateMask,
+            out var collection);
+
+        if (hr != 0)
+        {
+            _logger.LogError("EnumAudioEndpoints(eCapture) failed: HRESULT 0x{Hr:X8}", hr);
+            return results;
+        }
+
+        try
+        {
+            collection.GetCount(out var count);
+            for (int i = 0; i < count; i++)
+            {
+                try
+                {
+                    var endpoint = ReadEndpoint(collection, i);
+                    if (endpoint is not null)
+                        results.Add(endpoint);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "Failed to read capture endpoint at index {Index}", i);
+                }
+            }
+        }
+        finally
+        {
+            Marshal.ReleaseComObject(collection);
+        }
+
+        return results;
+    }
+
+    /// <summary>
+    /// Find the capture (microphone output) counterpart for a VAC render device.
+    /// VB-Cable and VoiceMeeter always come in Input/Output pairs — the render
+    /// device is "X Input" and the capture device is "X Output".
+    /// Returns null if no matching capture device is found.
+    /// </summary>
+    public AudioEndpointInfo? FindCaptureCounterpart(string renderFriendlyName)
+    {
+        // Derive the expected capture device name by replacing "Input" with "Output"
+        var captureName = renderFriendlyName.Replace("Input", "Output", StringComparison.OrdinalIgnoreCase);
+
+        var captureDevices = EnumerateCaptureEndpoints();
+        return captureDevices.FirstOrDefault(d =>
+            d.FriendlyName.Contains(
+                captureName.Split('(')[0].Trim(), // match on the part before the "(VB-Audio ...)" suffix
+                StringComparison.OrdinalIgnoreCase));
+    }
+
+    /// <summary>
     /// Find all Virtual Audio Cable endpoints.
     /// Convenience wrapper that filters EnumerateRenderEndpoints() to VAC devices only.
     /// </summary>

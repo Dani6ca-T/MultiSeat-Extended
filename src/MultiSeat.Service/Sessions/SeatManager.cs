@@ -157,6 +157,31 @@ public sealed class SeatManager
             seat.VacCableIndex = _audioRouter.AssignCable(seat);
             _logger.LogDebug("Seat {Id}: VAC cable {C}", seat.Id, seat.VacCableIndex);
 
+            // ── 5.5. Set default capture device in session ─────────────
+            // Set "CABLE Output" (or VoiceMeeter equivalent) as the default
+            // microphone in the seat's RDP session. Runs as a helper inside
+            // the session so IPolicyConfig affects only that session's audio policy.
+            // Moonlight-forwarded mic audio will then reach games automatically.
+            if (!string.IsNullOrEmpty(seat.AudioCaptureDeviceId))
+            {
+                try
+                {
+                    var helperExe = Path.Combine(AppContext.BaseDirectory, "MultiSeat.Service.exe");
+                    _sessionLauncher.RunHelperInSeatSession(
+                        seat.SessionId, seat.AccountName,
+                        $"\"{helperExe}\" --set-default-capture \"{seat.AudioCaptureDeviceId}\"");
+                    _logger.LogInformation(
+                        "Seat {Id}: default capture device set ({DeviceId})",
+                        seat.Id, seat.AudioCaptureDeviceId);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex,
+                        "Seat {Id}: could not set default capture device (non-critical — " +
+                        "user may need to select mic manually in games)", seat.Id);
+                }
+            }
+
             // ── 6. Apollo streaming ───────────────────────────────────────
             // Apollo is launched AFTER display + audio so it can capture both.
             // The session is still ACTIVE (mstsc connected) so Apollo's SudoVDA IPC

@@ -101,8 +101,25 @@ public sealed class AudioRouter
         var assignment = new AudioAssignment(endpoint, seat.SessionId);
         _assignments.TryAdd(seat.Id, assignment);
 
-        // Store device ID for Apollo's virtual_sink (mic input routing)
+        // Store render device ID for Apollo's virtual_sink (Moonlight mic → VAC Input)
         seat.AudioDeviceId = endpoint.DeviceId;
+
+        // Find the corresponding capture device (VAC Output) so we can set it as
+        // the default microphone inside the seat's session automatically.
+        var captureDevice = _deviceEnumerator.FindCaptureCounterpart(endpoint.FriendlyName);
+        if (captureDevice is not null)
+        {
+            seat.AudioCaptureDeviceId = captureDevice.DeviceId;
+            _logger.LogDebug(
+                "Found capture counterpart '{Name}' for seat {Id}",
+                captureDevice.FriendlyName, seat.Id);
+        }
+        else
+        {
+            _logger.LogWarning(
+                "No capture counterpart found for '{Name}' — mic forwarding will require manual device selection",
+                endpoint.FriendlyName);
+        }
 
         _logger.LogInformation(
             "Assigned VAC '{Name}' (cable {Cable}) to seat {Id} — device: {DeviceId}",

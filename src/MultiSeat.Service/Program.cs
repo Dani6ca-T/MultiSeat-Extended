@@ -47,6 +47,16 @@ if (args.Length == 2 && args[0] == "--enum-displays")
     return MultiSeat.Service.Display.DisplayEnumeratorHelper.RunAndWriteToFile(args[1]);
 }
 
+// ── Set-default-capture helper mode ──────────────────────────────────
+// Invoked by the service inside each seat's RDP session after provisioning.
+// Sets the Windows default audio capture (microphone) device for that session
+// so Moonlight-forwarded mic audio arrives at games without manual config.
+// Usage: MultiSeat.Service.exe --set-default-capture <deviceId>
+if (args.Length == 2 && args[0] == "--set-default-capture")
+{
+    return MultiSeat.Service.Audio.AudioCaptureHelper.SetDefaultCaptureDevice(args[1]) ? 0 : 1;
+}
+
 // ── Set-display-hz helper mode ────────────────────────────────────────
 // 2-arg form: invoked inside a seat's RDP session — targets the session-primary display
 // (Microsoft Remote Display Adapter) via ChangeDisplaySettingsEx(null, ...).
