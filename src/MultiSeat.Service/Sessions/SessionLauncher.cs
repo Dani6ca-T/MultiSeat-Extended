@@ -490,6 +490,11 @@ public sealed class SessionLauncher
                 primaryConsoleToken, consoleSessionId);
             _logger.LogInformation("mstsc launched — PID {Pid}", mstscProcess.Id);
 
+            // Fire-and-forget: auto-click "Connect" on the security trust dialog if
+            // it appears. Runs concurrently with WaitForNewSessionAsync so it can
+            // dismiss the dialog that would otherwise block the session from appearing.
+            DismissMstscSecurityDialog(consoleSessionId, mstscProcess.Id);
+
             // Step 4: Wait for the new session to appear, monitoring mstsc liveness
             var sessionId = await WaitForNewSessionAsync(accountName, ct, mstscProcess);
 
@@ -578,6 +583,7 @@ public sealed class SessionLauncher
 
             EnsureDefaultRdp(primaryToken, consoleSessionId);
             mstscProcess = LaunchMstscInConsoleSession(primaryToken, consoleSessionId);
+            DismissMstscSecurityDialog(consoleSessionId, mstscProcess.Id);
 
             // Wait for session to become Active
             var sw = System.Diagnostics.Stopwatch.StartNew();
@@ -1182,6 +1188,12 @@ public sealed class SessionLauncher
         {
             _logger.LogWarning(ex, "Failed to write Default.rdp (non-critical)");
         }
+
+        // Permanently trust 127.0.0.2 in the console user's HKCU so the
+        // "Do you trust this remote connection?" dialog is suppressed on all
+        // future connections. The dialog dismisser below covers this connection
+        // in case the registry entry hasn't taken effect yet.
+        TrustRdpLoopbackServer(consoleToken, consoleSessionId);
     }
 
     /// <summary>
@@ -1194,26 +1206,23 @@ public sealed class SessionLauncher
     /// of the window title (which varies by Windows version).
     /// Polls for up to 12 s.
     /// </summary>
-    private void DismissMstscSecurityDialog(SafeTokenHandle ownedToken, uint consoleSessionId, int mstscPid)
+    private void DismissMstscSecurityDialog(uint consoleSessionId, int mstscPid)
     {
         _ = Task.Run(() =>
         {
-            using var token = ownedToken;
             try
             {
+                using var token = GetConsoleSessionToken(consoleSessionId);
                 var exePath = Path.Combine(AppContext.BaseDirectory, "MultiSeat.Service.exe");
-
-                // Primary: find by PID — works regardless of dialog title/Windows version.
                 var result = RunInConsoleSession(token, consoleSessionId,
                     $"\"{exePath}\" --click-dialog-pid {mstscPid} \"Connect\" 12000",
                     waitForExit: true);
-
                 if (result == 0)
                     _logger.LogInformation(
                         "Security dialog dismisser clicked Connect on mstsc PID {Pid}", mstscPid);
                 else
                     _logger.LogDebug(
-                        "Security dialog dismisser: no Connect button found on mstsc PID {Pid} (code {Code})",
+                        "Security dialog dismisser: no dialog on mstsc PID {Pid} (code {Code})",
                         mstscPid, result);
             }
             catch (Exception ex)
@@ -1221,6 +1230,31 @@ public sealed class SessionLauncher
                 _logger.LogDebug(ex, "Security dialog dismisser failed (non-critical)");
             }
         });
+    }
+
+    /// <summary>
+    /// Write a permanent trust entry for 127.0.0.2 into the console user's HKCU so
+    /// mstsc never shows the "Do you trust this remote connection?" dialog again.
+    /// With SecurityLayer=1 (RDP security, no TLS), the cert hash is 20 zero bytes.
+    /// </summary>
+    private void TrustRdpLoopbackServer(SafeTokenHandle consoleToken, uint consoleSessionId)
+    {
+        const string ps =
+            "$k='HKCU:\\Software\\Microsoft\\Terminal Server Client\\Servers\\127.0.0.2';" +
+            "if(-not(Test-Path $k)){New-Item $k -Force|Out-Null};" +
+            "Set-ItemProperty $k CertHash ([byte[]](1..20|ForEach-Object{0})) -Type Binary;" +
+            "Set-ItemProperty $k UsernameHint '' -Type String";
+        try
+        {
+            RunInConsoleSession(consoleToken, consoleSessionId,
+                $"powershell.exe -NoProfile -NonInteractive -Command \"{ps}\"",
+                waitForExit: true);
+            _logger.LogDebug("Trusted RDP loopback 127.0.0.2 in console user HKCU");
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "Could not write RDP trust registry entry (non-critical)");
+        }
     }
 
     /// <summary>
