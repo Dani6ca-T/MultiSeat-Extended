@@ -1197,14 +1197,13 @@ public sealed class SessionLauncher
     }
 
     /// <summary>
-    /// Fire-and-forget: auto-dismiss the "Caution: Unknown remote connection" security
-    /// warning that mstsc shows when opening an unsigned .rdp file.
+    /// Fire-and-forget: auto-dismiss the mstsc security/trust dialog.
     ///
-    /// Takes ownership of <paramref name="ownedToken"/> and disposes it when done.
-    /// Uses the PID-based helper (--click-dialog-pid) which finds any visible window
-    /// belonging to the mstsc process that contains a "Connect" button, independent
-    /// of the window title (which varies by Windows version).
-    /// Polls for up to 12 s.
+    /// Uses WScript.Shell.AppActivate + SendKeys("{ENTER}") from inside the console
+    /// session. This works on all Windows versions including Windows 11 where the
+    /// dialog is rendered in WinUI/XAML and EnumChildWindows cannot find buttons.
+    /// AppActivate targets the dialog by its fixed title "Remote Desktop Connection".
+    /// Polls for up to 12 s (60 × 200 ms) waiting for the dialog to appear.
     /// </summary>
     private void DismissMstscSecurityDialog(uint consoleSessionId, int mstscPid)
     {
@@ -1213,17 +1212,26 @@ public sealed class SessionLauncher
             try
             {
                 using var token = GetConsoleSessionToken(consoleSessionId);
-                var exePath = Path.Combine(AppContext.BaseDirectory, "MultiSeat.Service.exe");
+                // WScript.Shell approach: AppActivate finds the dialog by title and
+                // SendKeys injects Enter regardless of Win32 vs WinUI rendering.
+                // Single quotes used throughout to avoid nested-quote issues in
+                // the powershell.exe -Command "..." wrapper.
+                const string ps =
+                    "$w=New-Object -ComObject WScript.Shell;" +
+                    "for($i=0;$i-lt60;$i++){" +
+                    "if($w.AppActivate('Remote Desktop Connection')){" +
+                    "Start-Sleep -Milliseconds 300;" +
+                    "$w.SendKeys('{ENTER}');exit 0};" +
+                    "Start-Sleep -Milliseconds 200};exit 1";
                 var result = RunInConsoleSession(token, consoleSessionId,
-                    $"\"{exePath}\" --click-dialog-pid {mstscPid} \"Connect\" 12000",
+                    $"powershell.exe -NoProfile -NonInteractive -Command \"{ps}\"",
                     waitForExit: true);
                 if (result == 0)
                     _logger.LogInformation(
-                        "Security dialog dismisser clicked Connect on mstsc PID {Pid}", mstscPid);
+                        "Security dialog dismisser sent Enter to mstsc PID {Pid}", mstscPid);
                 else
                     _logger.LogDebug(
-                        "Security dialog dismisser: no dialog on mstsc PID {Pid} (code {Code})",
-                        mstscPid, result);
+                        "Security dialog dismisser: dialog not found for mstsc PID {Pid}", mstscPid);
             }
             catch (Exception ex)
             {
