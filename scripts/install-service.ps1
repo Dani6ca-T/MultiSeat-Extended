@@ -72,15 +72,27 @@ if ((Get-ItemProperty $tsKey -Name "fDenyTSConnections" -ErrorAction SilentlyCon
     Write-Host "  OK: Remote Desktop enabled" -ForegroundColor DarkGray
 }
 
-# Disable NLA on the RDP listener (UserAuthentication = 0).
-# Required so mstsc can connect to 127.0.0.2 without a pre-auth certificate exchange.
+# Disable NLA (UserAuthentication=0) and enable TLS (SecurityLayer=2) on the RDP listener.
+# SecurityLayer=2 makes TermService generate a self-signed TLS cert (SSLCertificateSHA1Hash),
+# which TrustRdpLoopbackServer reads and writes to the console user's HKCU trust store so
+# mstsc never shows "Do you trust this remote connection?" for 127.0.0.2.
 $rdpTcpKey = "HKLM:\SYSTEM\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp"
-if ((Get-ItemProperty $rdpTcpKey -Name "UserAuthentication" -ErrorAction SilentlyContinue).UserAuthentication -ne 0) {
+$rdpTcpProps = Get-ItemProperty $rdpTcpKey -ErrorAction SilentlyContinue
+$rdpChanged = $false
+if ($rdpTcpProps.UserAuthentication -ne 0) {
     Set-ItemProperty $rdpTcpKey -Name "UserAuthentication" -Value 0
-    Set-ItemProperty $rdpTcpKey -Name "SecurityLayer"      -Value 1
-    Write-Host "  Applied: NLA disabled on RDP listener" -ForegroundColor Green
+    $rdpChanged = $true
+}
+if ($rdpTcpProps.SecurityLayer -ne 2) {
+    Set-ItemProperty $rdpTcpKey -Name "SecurityLayer" -Value 2
+    $rdpChanged = $true
+}
+if ($rdpChanged) {
+    Restart-Service -Name "TermService" -Force -ErrorAction SilentlyContinue
+    Start-Sleep -Seconds 2
+    Write-Host "  Applied: NLA disabled, SecurityLayer=2 (TLS cert trust enabled)" -ForegroundColor Green
 } else {
-    Write-Host "  OK: NLA disabled on RDP listener" -ForegroundColor DarkGray
+    Write-Host "  OK: NLA disabled, SecurityLayer=2" -ForegroundColor DarkGray
 }
 
 # Suppress the RDP client certificate trust dialog (AuthenticationLevel = 0 machine policy).
