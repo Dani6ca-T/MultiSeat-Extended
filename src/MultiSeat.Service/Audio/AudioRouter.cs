@@ -101,8 +101,9 @@ public sealed class AudioRouter
         var assignment = new AudioAssignment(endpoint, seat.SessionId);
         _assignments.TryAdd(seat.Id, assignment);
 
-        // Store render device ID for Apollo's virtual_sink (Moonlight mic → VAC Input)
+        // Store render device ID (for IPolicyConfig) and friendly name (for Apollo's virtual_sink)
         seat.AudioDeviceId = endpoint.DeviceId;
+        seat.AudioFriendlyName = endpoint.FriendlyName;
 
         // Find the corresponding capture device (VAC Output) so we can set it as
         // the default microphone inside the seat's session automatically.

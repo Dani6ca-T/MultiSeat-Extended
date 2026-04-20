@@ -187,8 +187,10 @@ public sealed class AudioDeviceEnumerator : IDisposable
     /// </summary>
     public AudioEndpointInfo? FindCaptureCounterpart(string renderFriendlyName)
     {
-        // Derive the expected capture device name by replacing "Input" with "Output"
-        var captureName = renderFriendlyName.Replace("Input", "Output", StringComparison.OrdinalIgnoreCase);
+        // Derive the expected capture device name by replacing "Input"→"Output" or "In "→"Out "
+        var captureName = renderFriendlyName
+            .Replace("Input", "Output", StringComparison.OrdinalIgnoreCase)
+            .Replace(" In ", " Out ", StringComparison.OrdinalIgnoreCase);
 
         var captureDevices = EnumerateCaptureEndpoints();
         return captureDevices.FirstOrDefault(d =>

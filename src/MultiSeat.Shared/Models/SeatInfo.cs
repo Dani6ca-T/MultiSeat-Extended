@@ -29,7 +29,8 @@ public sealed class SeatInfo
     public int ApolloProcessId { get; set; }
 
     // Audio
-    public string? AudioDeviceId { get; set; }        // render device (VAC Input) → Apollo virtual_sink
+    public string? AudioDeviceId { get; set; }        // render device (VAC Input) Windows device ID → IPolicyConfig
+    public string? AudioFriendlyName { get; set; }    // render device friendly name → Apollo virtual_sink
     public string? AudioCaptureDeviceId { get; set; } // capture device (VAC Output) → set as default mic in session
     public int VacCableIndex { get; set; } = -1;
 

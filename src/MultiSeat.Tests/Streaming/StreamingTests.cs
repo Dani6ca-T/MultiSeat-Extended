@@ -1,4 +1,6 @@
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
+using MultiSeat.Service.Configuration;
 using MultiSeat.Service.Display;
 using MultiSeat.Service.Streaming;
 using MultiSeat.Shared;
@@ -111,7 +113,7 @@ public class StreamingTests
         try
         {
             var logger = new TestLogger<ApolloConfigBuilder>();
-            var builder = new ApolloConfigBuilder(logger);
+            var builder = new ApolloConfigBuilder(logger, Options.Create(new MultiSeatOptions()));
 
             var seat = new SeatInfo
             {
@@ -121,6 +123,7 @@ public class StreamingTests
                 Height = 1080,
                 Fps = 60,
                 AudioDeviceId = "{0.0.0.00000000}.{test-device-id}",
+                AudioFriendlyName = "CABLE Input (VB-Audio Virtual Cable)",
             };
 
             var configPath = builder.BuildConfig(seat, tempDir);
@@ -136,7 +139,7 @@ public class StreamingTests
             Assert.Contains("fps = [60]", content);
             Assert.Contains("encoder = nvenc", content);
             Assert.Contains("controller = enabled", content);
-            Assert.Contains("audio_sink = {0.0.0.00000000}.{test-device-id}", content);
+            Assert.Contains("virtual_sink = CABLE Input (VB-Audio Virtual Cable)", content);
             Assert.Contains("min_log_level = info", content);
         }
         finally
@@ -154,7 +157,7 @@ public class StreamingTests
         try
         {
             var logger = new TestLogger<ApolloConfigBuilder>();
-            var builder = new ApolloConfigBuilder(logger);
+            var builder = new ApolloConfigBuilder(logger, Options.Create(new MultiSeatOptions()));
 
             var seat = new SeatInfo
             {
@@ -164,9 +167,9 @@ public class StreamingTests
 
             var configPath = builder.BuildConfig(seat, tempDir);
 
-            // Audio should be placeholder initially
+            // Audio sink is intentionally commented out (session default is used)
             var before = File.ReadAllText(configPath);
-            Assert.Contains("# audio_sink = (set after VAC assignment)", before);
+            Assert.Contains("# audio_sink = ", before);
 
             // Update with real device ID
             builder.UpdateAudioSink(configPath, "{0.0.0.00000000}.{vac-cable-1}");
@@ -190,7 +193,7 @@ public class StreamingTests
         try
         {
             var logger = new TestLogger<ApolloConfigBuilder>();
-            var builder = new ApolloConfigBuilder(logger);
+            var builder = new ApolloConfigBuilder(logger, Options.Create(new MultiSeatOptions()));
 
             var seat = new SeatInfo
             {
@@ -220,7 +223,7 @@ public class StreamingTests
         try
         {
             var logger = new TestLogger<ApolloConfigBuilder>();
-            var builder = new ApolloConfigBuilder(logger);
+            var builder = new ApolloConfigBuilder(logger, Options.Create(new MultiSeatOptions()));
 
             var seat = new SeatInfo
             {
@@ -249,7 +252,7 @@ public class StreamingTests
         try
         {
             var logger = new TestLogger<ApolloConfigBuilder>();
-            var builder = new ApolloConfigBuilder(logger);
+            var builder = new ApolloConfigBuilder(logger, Options.Create(new MultiSeatOptions()));
 
             var seat = new SeatInfo
             {

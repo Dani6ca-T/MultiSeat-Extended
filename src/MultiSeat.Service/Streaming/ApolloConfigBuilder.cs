@@ -129,10 +129,10 @@ public sealed class ApolloConfigBuilder
         // Note: this uses WASAPI render (not loopback capture), so VB-Cable IS accessible
         // in RDP sessions — different API path from the audio_sink loopback limitation.
         // Enable mic capture in Moonlight client settings for this to take effect.
-        if (!string.IsNullOrEmpty(seat.AudioDeviceId))
+        if (!string.IsNullOrEmpty(seat.AudioFriendlyName))
         {
             sb.AppendLine("# Audio input — Apollo plays Moonlight mic audio to VB-Cable; games mic = CABLE Output");
-            sb.AppendLine($"virtual_sink = {seat.AudioDeviceId}");
+            sb.AppendLine($"virtual_sink = {seat.AudioFriendlyName}");
         }
         else
         {
