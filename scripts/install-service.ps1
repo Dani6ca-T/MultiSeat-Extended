@@ -95,6 +95,20 @@ if ($rdpChanged) {
     Write-Host "  OK: NLA disabled, SecurityLayer=2" -ForegroundColor DarkGray
 }
 
+# Pre-trust 127.0.0.2 in the current user's HKCU so mstsc never shows "Do you trust
+# this remote connection?" for loopback provisioning connections.
+# TermService stores its self-signed TLS cert in Cert:\LocalMachine\Remote Desktop.
+$rdpCert = Get-ChildItem 'Cert:\LocalMachine\Remote Desktop' -ErrorAction SilentlyContinue | Select-Object -First 1
+if ($rdpCert) {
+    $trustKey = "HKCU:\Software\Microsoft\Terminal Server Client\Servers\127.0.0.2"
+    if (-not (Test-Path $trustKey)) { New-Item $trustKey -Force | Out-Null }
+    Set-ItemProperty $trustKey -Name "CertHash" -Value $rdpCert.GetCertHash() -Type Binary
+    Set-ItemProperty $trustKey -Name "UsernameHint" -Value "" -Type String
+    Write-Host "  Applied: 127.0.0.2 trusted in HKCU (thumbprint: $($rdpCert.Thumbprint))" -ForegroundColor Green
+} else {
+    Write-Host "  WARNING: No RDP TLS cert found in Cert:\LocalMachine\Remote Desktop -- mstsc trust dialog may appear" -ForegroundColor Yellow
+}
+
 # Suppress the RDP client certificate trust dialog (AuthenticationLevel = 0 machine policy).
 # MultiSeat launches mstsc via CreateProcessAsUser with no interactive user to click dialogs.
 # This is safe because MultiSeat only ever connects to 127.0.0.2 (local loopback).

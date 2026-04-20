@@ -1240,13 +1240,13 @@ public sealed class SessionLauncher
     private void TrustRdpLoopbackServer(SafeTokenHandle consoleToken, uint consoleSessionId)
     {
         // Read the TLS cert hash that TermService generated for SecurityLayer=2.
-        // SSLCertificateSHA1Hash is written by TermService under HKLM RDP-Tcp once TLS is active.
-        // Fall back to searching Cert:\LocalMachine\My for "Remote Desktop" if the key is absent.
+        // TermService stores its self-signed cert in Cert:\LocalMachine\Remote Desktop.
+        // SSLCertificateSHA1Hash under HKLM RDP-Tcp is only written after the first client
+        // connection, so we always fall back to the cert store directly.
         const string ps =
             "$h=(Get-ItemProperty 'HKLM:\\SYSTEM\\CurrentControlSet\\Control\\Terminal Server\\WinStations\\RDP-Tcp'" +
             " -Name SSLCertificateSHA1Hash -EA SilentlyContinue).SSLCertificateSHA1Hash;" +
-            "if(-not $h){$c=Get-ChildItem 'Cert:\\LocalMachine\\My'|" +
-            "Where-Object{$_.FriendlyName -eq 'Remote Desktop'}|Select-Object -First 1;" +
+            "if(-not $h){$c=Get-ChildItem 'Cert:\\LocalMachine\\Remote Desktop' -EA SilentlyContinue|Select-Object -First 1;" +
             "if($c){$h=$c.GetCertHash()}};" +
             "if($h){$k='HKCU:\\Software\\Microsoft\\Terminal Server Client\\Servers\\127.0.0.2';" +
             "if(-not(Test-Path $k)){New-Item $k -Force|Out-Null};" +
