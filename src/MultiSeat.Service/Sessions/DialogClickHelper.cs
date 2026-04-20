@@ -19,36 +19,61 @@ namespace MultiSeat.Service.Sessions;
 /// </summary>
 internal static class DialogClickHelper
 {
-    private const uint BM_CLICK = 0x00F5;
+    private const uint BM_CLICK       = 0x00F5;
+    private const uint INPUT_KEYBOARD = 1;
+    private const uint KEYEVENTF_KEYUP = 0x0002;
+    private const ushort VK_RETURN    = 0x0D;
+
+    // x64 INPUT: type(4) + padding(4) + union(32) = 40 bytes
+    [StructLayout(LayoutKind.Explicit, Size = 40)]
+    private struct INPUT
+    {
+        [FieldOffset(0)] public uint type;
+        [FieldOffset(8)] public KEYBDINPUT ki;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct KEYBDINPUT
+    {
+        public ushort wVk;
+        public ushort wScan;
+        public uint dwFlags;
+        public uint time;
+        public IntPtr dwExtraInfo;
+    }
 
     private delegate bool EnumWindowsProc(IntPtr hWnd, IntPtr lParam);
     private delegate bool EnumChildProc(IntPtr hWnd, IntPtr lParam);
 
     [DllImport("user32.dll", CharSet = CharSet.Unicode)]
     private static extern IntPtr FindWindowW(string? lpClassName, string? lpWindowName);
-
     [DllImport("user32.dll")]
     private static extern bool EnumWindows(EnumWindowsProc lpEnumFunc, IntPtr lParam);
-
     [DllImport("user32.dll")]
     private static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint lpdwProcessId);
-
     [DllImport("user32.dll")]
     private static extern bool IsWindowVisible(IntPtr hWnd);
-
     [DllImport("user32.dll")]
     private static extern bool EnumChildWindows(IntPtr hWndParent, EnumChildProc lpEnumFunc, IntPtr lParam);
-
     [DllImport("user32.dll", CharSet = CharSet.Unicode)]
     private static extern int GetWindowTextW(IntPtr hWnd, StringBuilder lpString, int nMaxCount);
-
     [DllImport("user32.dll")]
     private static extern IntPtr SendMessage(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam);
+    [DllImport("user32.dll")]
+    private static extern bool SetForegroundWindow(IntPtr hWnd);
+    [DllImport("user32.dll")]
+    private static extern uint SendInput(uint nInputs, INPUT[] pInputs, int cbSize);
 
     /// <summary>
-    /// Find a button in any top-level window owned by <paramref name="pid"/> and click it.
-    /// More robust than <see cref="Run"/> because it doesn't depend on the window title.
-    /// Polls for up to <paramref name="timeoutMs"/> ms.
+    /// Find a dialog window owned by <paramref name="pid"/> and dismiss it.
+    ///
+    /// Two-pass strategy to handle both classic Win32 and Windows 11 WinUI dialogs:
+    ///   1. EnumChildWindows + BM_CLICK on the named button (works on Win10 / classic mstsc).
+    ///   2. SetForegroundWindow + SendInput(VK_RETURN) (works on Win11 WinUI where
+    ///      EnumChildWindows cannot enumerate XAML-rendered buttons).
+    ///
+    /// Skips the main mstsc window (title contains the server address) so we only act
+    /// on the security/trust dialog that appears before the connection is established.
     /// </summary>
     public static int RunByPid(int pid, string buttonText, int timeoutMs = 8000)
     {
@@ -58,15 +83,20 @@ internal static class DialogClickHelper
         while (sw.ElapsedMilliseconds < timeoutMs)
         {
             IntPtr foundButton = IntPtr.Zero;
+            IntPtr dialogWindow = IntPtr.Zero;
 
             EnumWindowsProc cb = (hWnd, _) =>
             {
                 GetWindowThreadProcessId(hWnd, out var windowPid);
-                if (windowPid != targetPid)
-                    return true; // not our process — continue
+                if (windowPid != targetPid) return true;
+                if (!IsWindowVisible(hWnd)) return true;
 
-                if (!IsWindowVisible(hWnd))
-                    return true; // skip hidden windows (not the dialog we're looking for)
+                // Skip the main mstsc connection window — its title includes the server IP
+                // once the connection screen is shown. The trust dialog has a generic title
+                // ("Remote Desktop Connection") without the address.
+                var titleBuf = new StringBuilder(256);
+                GetWindowTextW(hWnd, titleBuf, 256);
+                if (titleBuf.ToString().Contains("127.0.0.2")) return true;
 
                 var button = FindButton(hWnd, buttonText);
                 if (button != IntPtr.Zero)
@@ -74,6 +104,9 @@ internal static class DialogClickHelper
                     foundButton = button;
                     return false; // stop enumeration
                 }
+
+                // Window found but no enumerable child button (WinUI case) — save for keyboard fallback
+                dialogWindow = hWnd;
                 return true;
             };
 
@@ -82,7 +115,24 @@ internal static class DialogClickHelper
 
             if (foundButton != IntPtr.Zero)
             {
+                // Classic Win32 button: click it directly
                 SendMessage(foundButton, BM_CLICK, IntPtr.Zero, IntPtr.Zero);
+                return 0;
+            }
+
+            if (dialogWindow != IntPtr.Zero)
+            {
+                // Win11 WinUI dialog: EnumChildWindows cannot see XAML buttons.
+                // Bring the dialog to foreground and inject VK_RETURN — the XAML
+                // framework routes Enter to the focused default button ("Connect").
+                SetForegroundWindow(dialogWindow);
+                Thread.Sleep(50); // let the window gain focus
+                var inputs = new INPUT[]
+                {
+                    new() { type = INPUT_KEYBOARD, ki = new KEYBDINPUT { wVk = VK_RETURN } },
+                    new() { type = INPUT_KEYBOARD, ki = new KEYBDINPUT { wVk = VK_RETURN, dwFlags = KEYEVENTF_KEYUP } }
+                };
+                SendInput((uint)inputs.Length, inputs, Marshal.SizeOf<INPUT>());
                 return 0;
             }
 
@@ -94,7 +144,6 @@ internal static class DialogClickHelper
 
     /// <summary>
     /// Fallback: find a top-level window by exact title, then click a named child button.
-    /// Polls for up to <paramref name="timeoutMs"/> ms.
     /// </summary>
     public static int Run(string windowTitle, string buttonText, int timeoutMs = 8000)
     {
@@ -116,7 +165,7 @@ internal static class DialogClickHelper
             Thread.Sleep(200);
         }
 
-        return 1; // timeout — dialog never appeared
+        return 1;
     }
 
     private static IntPtr FindButton(IntPtr parent, string text)
@@ -130,13 +179,13 @@ internal static class DialogClickHelper
             if (string.Equals(sb.ToString(), text, StringComparison.OrdinalIgnoreCase))
             {
                 found = hWnd;
-                return false; // stop
+                return false;
             }
             return true;
         };
 
         EnumChildWindows(parent, cb, IntPtr.Zero);
-        GC.KeepAlive(cb); // prevent delegate GC during enumeration
+        GC.KeepAlive(cb);
         return found;
     }
 }
