@@ -8,7 +8,7 @@ namespace MultiSeat.Service.Audio;
 ///
 /// Must be invoked as a helper process running INSIDE the target seat's RDP session
 /// so that IPolicyConfig.SetDefaultEndpoint affects that session's audio policy only.
-/// The service launches this via ProcessInjector / SessionLauncher.RunHelperInSeatSession
+/// The service launches this via SessionLauncher.RunHelperInSeatSession
 /// with the --set-default-capture flag.
 ///
 /// This makes "CABLE Output" (or the VoiceMeeter equivalent) the default mic in the

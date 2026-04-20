@@ -157,11 +157,16 @@ public sealed class SeatManager
             seat.VacCableIndex = _audioRouter.AssignCable(seat);
             _logger.LogDebug("Seat {Id}: VAC cable {C}", seat.Id, seat.VacCableIndex);
 
-            // ── 5.5. Set default capture device in session ─────────────
-            // Set "CABLE Output" (or VoiceMeeter equivalent) as the default
-            // microphone in the seat's RDP session. Runs as a helper inside
-            // the session so IPolicyConfig affects only that session's audio policy.
-            // Moonlight-forwarded mic audio will then reach games automatically.
+            // ── 5.5. Set seat session default capture for mic routing ────
+            // Apollo renders Moonlight mic audio into CABLE Input (virtual_sink) from
+            // inside the seat session. CABLE Output (the capture counterpart) receives
+            // that audio at the kernel WDM level — visible in the seat session as a
+            // capture endpoint. Setting CABLE Output as the DEFAULT capture for THIS
+            // seat session means games automatically use Moonlight mic without any
+            // manual device selection.
+            //   Moonlight mic → Apollo → CABLE Input → CABLE Output → games (session default)
+            // Running inside the seat session scopes the IPolicyConfig call to that
+            // session's HKCU, so multiple seats don't conflict with each other.
             if (!string.IsNullOrEmpty(seat.AudioCaptureDeviceId))
             {
                 try
@@ -171,14 +176,13 @@ public sealed class SeatManager
                         seat.SessionId, seat.AccountName,
                         $"\"{helperExe}\" --set-default-capture \"{seat.AudioCaptureDeviceId}\"");
                     _logger.LogInformation(
-                        "Seat {Id}: default capture device set ({DeviceId})",
+                        "Seat {Id}: session capture default set to {DeviceId} for mic routing",
                         seat.Id, seat.AudioCaptureDeviceId);
                 }
                 catch (Exception ex)
                 {
                     _logger.LogWarning(ex,
-                        "Seat {Id}: could not set default capture device (non-critical — " +
-                        "user may need to select mic manually in games)", seat.Id);
+                        "Seat {Id}: could not set session capture device (non-critical)", seat.Id);
                 }
             }
 

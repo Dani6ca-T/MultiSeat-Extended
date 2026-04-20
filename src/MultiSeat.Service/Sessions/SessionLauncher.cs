@@ -1136,7 +1136,14 @@ public sealed class SessionLauncher
     {
         const string content =
             "authentication level:i:0\r\n" +
-            "prompt for credentials:i:0\r\n";
+            "prompt for credentials:i:0\r\n" +
+            // Enable audio input (microphone) redirection into the RDP session.
+            // This makes mstsc expose a "Remote Audio Input" capture device in the seat
+            // session, giving games an additional mic source backed by the console's
+            // default capture device. The primary mic path is CABLE Output (set as the
+            // seat session's default capture by SeatManager after provisioning), but
+            // audiocapturemode:i:1 ensures at least one capture device is always present.
+            "audiocapturemode:i:1\r\n";
 
         // Stage the file content in ProgramData where SYSTEM always has write access.
         const string stagingPath = @"C:\ProgramData\MultiSeat\default_rdp_staging.rdp";
