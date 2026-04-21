@@ -98,33 +98,31 @@ public sealed class AudioRouter
         if (pair is null)
         {
             _logger.LogError(
-                "No available audio seat pairs for seat {Id}. " +
-                "Discovered {Count} pair(s), {Assigned} already assigned. " +
-                "Install more VB-CABLE devices (one pair per seat).",
+                "No available audio devices for seat {Id}. " +
+                "Discovered {Count} VAC device(s), {Assigned} already assigned. " +
+                "Install more VB-CABLE or VoiceMeeter devices (one per seat).",
                 seat.Id, _vacPairs.Count, _assignments.Count);
             throw new InvalidOperationException(
-                "No audio seat pairs available. Install more VB-CABLE devices.");
+                "No audio devices available. Install more VB-CABLE or VoiceMeeter devices.");
         }
 
         _assignments.TryAdd(seat.Id, new AudioAssignment(pair, seat.SessionId));
 
         // Game audio: Apollo audio_sink loopback-captures from the session's default render device.
-        seat.AudioGameRenderDeviceId    = pair.GameRender.DeviceId;
+        seat.AudioGameRenderDeviceId     = pair.GameRender.DeviceId;
         seat.AudioGameRenderFriendlyName = pair.GameRender.FriendlyName;
 
-        // Mic routing: Apollo virtual_sink → MicRender; games capture from MicCapture.
-        seat.AudioDeviceId       = pair.MicRender.DeviceId;
-        seat.AudioFriendlyName   = pair.MicRender.FriendlyName;
-        seat.AudioCaptureDeviceId = pair.MicCapture.DeviceId;
+        // Mic routing: Apollo stream_mic → Steam Streaming Microphone render → games capture from
+        // the paired "Microphone (Steam Streaming Microphone)" capture endpoint (session default).
+        seat.AudioCaptureDeviceId = pair.MicCapture?.DeviceId ?? string.Empty;
 
         seat.VacCableIndex = pair.GameRender.VacCableIndex;
 
         _logger.LogInformation(
-            "Assigned audio pair to seat {Id}: game={Game}, mic={Mic} → {Cap}",
+            "Assigned audio to seat {Id}: game={Game}, mic capture={Cap}",
             seat.Id,
             pair.GameRender.FriendlyName,
-            pair.MicRender.FriendlyName,
-            pair.MicCapture.FriendlyName);
+            pair.MicCapture?.FriendlyName ?? "(none — Steam not installed)");
 
         return seat.VacCableIndex;
     }
@@ -137,9 +135,8 @@ public sealed class AudioRouter
         if (_assignments.TryRemove(seat.Id, out var assignment))
         {
             _logger.LogInformation(
-                "Released audio pair (game={Game}, mic={Mic}) from seat {Id}",
+                "Released audio (game={Game}) from seat {Id}",
                 assignment.Pair.GameRender.FriendlyName,
-                assignment.Pair.MicRender.FriendlyName,
                 seat.Id);
         }
     }
@@ -190,9 +187,9 @@ public sealed class AudioRouter
             else if (_vacPairs.Count < _options.MaxSeats)
             {
                 _logger.LogWarning(
-                    "Only {Count} audio pair(s) found but MaxSeats is {Max}. " +
-                    "Each seat requires 2 virtual audio devices (1 game + 1 mic). " +
-                    "Install more VB-CABLE devices for additional seats.",
+                    "Only {Count} VAC device(s) found but MaxSeats is {Max}. " +
+                    "Each seat requires 1 virtual audio device for game audio. " +
+                    "Install more VB-CABLE or VoiceMeeter devices for additional seats.",
                     _vacPairs.Count, _options.MaxSeats);
             }
         }
@@ -213,40 +210,42 @@ public sealed class AudioRouter
             .GetProcessesByName("voicemeeterpro")
             .Length > 0;
 
-        if (running)
+        if (!running)
+        {
+            if (!File.Exists(VoiceMeeterExe))
+            {
+                _logger.LogDebug(
+                    "VoiceMeeter not installed at {Path} — skipping startup", VoiceMeeterExe);
+                return;
+            }
+
+            try
+            {
+                _ = _processInjector.LaunchInConsoleSessionAsync(
+                    VoiceMeeterExe, null, CancellationToken.None);
+
+                _logger.LogInformation(
+                    "Started VoiceMeeter Potato in console session for audio routing");
+
+                // Wait for VoiceMeeter to register its audio devices before scanning
+                System.Threading.Thread.Sleep(3000);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex,
+                    "Could not start VoiceMeeter Potato in console session. " +
+                    "Audio routing for seats using VoiceMeeter virtual devices may not work.");
+                return;
+            }
+        }
+        else
         {
             _logger.LogDebug("VoiceMeeter Potato is running");
-            return;
         }
 
-        if (!File.Exists(VoiceMeeterExe))
-        {
-            _logger.LogDebug(
-                "VoiceMeeter not installed at {Path} — skipping startup", VoiceMeeterExe);
-            return;
-        }
-
-        try
-        {
-            // Launch VoiceMeeter in the console session so it can register its
-            // audio devices in the user's session context. Fire-and-forget — we
-            // don't need to wait for the process handle, just give it a moment to
-            // initialize before we scan for audio devices.
-            _ = _processInjector.LaunchInConsoleSessionAsync(
-                VoiceMeeterExe, null, CancellationToken.None);
-
-            _logger.LogInformation(
-                "Started VoiceMeeter Potato in console session for audio routing");
-
-            // Brief pause to let VoiceMeeter register its audio devices
-            System.Threading.Thread.Sleep(3000);
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(ex,
-                "Could not start VoiceMeeter Potato in console session. " +
-                "Audio routing for seats using VoiceMeeter virtual devices may not work.");
-        }
+        // Ensure B1 is enabled on all virtual input strips so mic audio routed
+        // through virtual_sink → VoiceMeeter strip reaches the Output capture device.
+        VoiceMeeterConfigurator.EnsureMicRouting(_logger);
     }
 
 }

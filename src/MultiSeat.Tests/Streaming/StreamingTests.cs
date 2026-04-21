@@ -122,8 +122,6 @@ public class StreamingTests
                 Width = 1920,
                 Height = 1080,
                 Fps = 60,
-                AudioDeviceId = "{0.0.0.00000000}.{test-device-id}",
-                AudioFriendlyName = "CABLE Input (VB-Audio Virtual Cable)",
             };
 
             var configPath = builder.BuildConfig(seat, tempDir);
@@ -139,44 +137,8 @@ public class StreamingTests
             Assert.Contains("fps = [60]", content);
             Assert.Contains("encoder = nvenc", content);
             Assert.Contains("controller = enabled", content);
-            Assert.Contains("virtual_sink = CABLE Input (VB-Audio Virtual Cable)", content);
+            Assert.Contains("stream_mic = enabled", content);
             Assert.Contains("min_log_level = info", content);
-        }
-        finally
-        {
-            if (Directory.Exists(tempDir))
-                Directory.Delete(tempDir, recursive: true);
-        }
-    }
-
-    [Fact]
-    public void ApolloConfigBuilder_UpdateAudioSink_ModifiesConfig()
-    {
-        var tempDir = Path.Combine(Path.GetTempPath(), $"multiseat-test-{Guid.NewGuid():N}");
-
-        try
-        {
-            var logger = new TestLogger<ApolloConfigBuilder>();
-            var builder = new ApolloConfigBuilder(logger, Options.Create(new MultiSeatOptions()));
-
-            var seat = new SeatInfo
-            {
-                AccountName = "MultiSeatSeat01",
-                PortBase = 47984,
-            };
-
-            var configPath = builder.BuildConfig(seat, tempDir);
-
-            // Audio sink is intentionally commented out (session default is used)
-            var before = File.ReadAllText(configPath);
-            Assert.Contains("# audio_sink = ", before);
-
-            // Update with real device ID
-            builder.UpdateAudioSink(configPath, "{0.0.0.00000000}.{vac-cable-1}");
-
-            var after = File.ReadAllText(configPath);
-            Assert.Contains("audio_sink = {0.0.0.00000000}.{vac-cable-1}", after);
-            Assert.DoesNotContain("# audio_sink = (set after VAC assignment)", after);
         }
         finally
         {

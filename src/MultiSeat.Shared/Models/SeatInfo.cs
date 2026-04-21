@@ -32,10 +32,8 @@ public sealed class SeatInfo
     public string? AudioGameRenderDeviceId { get; set; }     // session default render → Apollo loopback-captures for audio_sink
     public string? AudioGameRenderFriendlyName { get; set; } // friendly name → Apollo audio_sink
 
-    // Audio — mic routing (Moonlight mic → games)
-    public string? AudioDeviceId { get; set; }        // mic render device ID (legacy/IPolicyConfig)
-    public string? AudioFriendlyName { get; set; }    // mic render friendly name → Apollo virtual_sink
-    public string? AudioCaptureDeviceId { get; set; } // mic capture device ID → set as session default capture
+    // Audio — mic routing (Moonlight mic → Steam Streaming Microphone → games)
+    public string? AudioCaptureDeviceId { get; set; } // "Microphone (Steam Streaming Microphone)" device ID → session default capture
     public int VacCableIndex { get; set; } = -1;
 
     // Input

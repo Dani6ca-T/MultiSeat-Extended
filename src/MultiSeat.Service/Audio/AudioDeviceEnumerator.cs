@@ -4,18 +4,19 @@ using MultiSeat.Service.Interop;
 namespace MultiSeat.Service.Audio;
 
 /// <summary>
-/// One seat's complete audio assignment: a game-audio render device and a mic render/capture pair.
+/// One seat's complete audio assignment: a game-audio render device and the shared mic capture device.
 /// </summary>
 public sealed class AudioSeatPair
 {
     /// <summary>Set as the session's default render device; Apollo loopback-captures it for audio_sink.</summary>
     public required AudioEndpointInfo GameRender { get; init; }
 
-    /// <summary>Apollo renders Moonlight mic audio here (virtual_sink).</summary>
-    public required AudioEndpointInfo MicRender { get; init; }
-
-    /// <summary>Set as the session's default capture device so games use it as their microphone.</summary>
-    public required AudioEndpointInfo MicCapture { get; init; }
+    /// <summary>
+    /// "Microphone (Steam Streaming Microphone)" capture endpoint — set as the session's default
+    /// capture so games automatically use the Moonlight client's mic via Apollo's stream_mic pipeline.
+    /// Null if Steam is not installed.
+    /// </summary>
+    public AudioEndpointInfo? MicCapture { get; init; }
 }
 
 /// <summary>
@@ -195,23 +196,14 @@ public sealed class AudioDeviceEnumerator : IDisposable
     }
 
     /// <summary>
-    /// Find the capture (microphone output) counterpart for a VAC render device.
-    /// VB-Cable and VoiceMeeter always come in Input/Output pairs — the render
-    /// device is "X Input" and the capture device is "X Output".
-    /// Returns null if no matching capture device is found.
+    /// Find the "Microphone (Steam Streaming Microphone)" capture endpoint.
+    /// Requires Steam to be installed. Returns null if the device is not present.
     /// </summary>
-    public AudioEndpointInfo? FindCaptureCounterpart(string renderFriendlyName)
+    public AudioEndpointInfo? FindSteamStreamingMicCapture()
     {
-        // Derive the expected capture device name by replacing "Input"→"Output" or "In "→"Out "
-        var captureName = renderFriendlyName
-            .Replace("Input", "Output", StringComparison.OrdinalIgnoreCase)
-            .Replace(" In ", " Out ", StringComparison.OrdinalIgnoreCase);
-
         var captureDevices = EnumerateCaptureEndpoints();
         return captureDevices.FirstOrDefault(d =>
-            d.FriendlyName.Contains(
-                captureName.Split('(')[0].Trim(), // match on the part before the "(VB-Audio ...)" suffix
-                StringComparison.OrdinalIgnoreCase));
+            d.FriendlyName.Contains("Steam Streaming Microphone", StringComparison.OrdinalIgnoreCase));
     }
 
     /// <summary>
@@ -219,49 +211,62 @@ public sealed class AudioDeviceEnumerator : IDisposable
     ///
     /// Requires audiomode:i:1 in the RDP session so host audio devices are visible inside it.
     ///
-    /// Pairing strategy — sort all VAC render endpoints by VacCableIndex, then take in
-    /// consecutive pairs of 2: (i) = game-audio render, (i+1) = mic render.
-    /// With current hardware (VacCableIndex order: CABLE=1, VM=2, VMAux=3, VAIO3=4):
-    ///   Seat 0: game = CABLE Input (pure loopback, no speaker bleed)
-    ///           mic  = VoiceMeeter Input / VoiceMeeter Output
-    ///   Seat 1: game = VoiceMeeter Aux Input (may route through VoiceMeeter to speakers)
-    ///           mic  = VoiceMeeter VAIO3 Input / VoiceMeeter VAIO3 Output
-    /// Install more VB-CABLE devices to support additional seats cleanly.
+    /// Each VAC render device = one seat's game audio (1 device per seat).
+    /// Mic capture is the shared Steam Streaming Microphone device (null if Steam not installed).
+    /// With current hardware (VB-CABLE + 3 VoiceMeeter = 4 VAC devices): supports 4 seats.
     /// </summary>
     public List<AudioSeatPair> FindSeatAudioPairs()
     {
         var allVac = FindVacEndpoints();
+
+        // Deduplicate per cable index — VoiceMeeter and VB-CABLE each register
+        // multiple WASAPI endpoints (multi-channel variants like "In 1", "In 2",
+        // and lowercase/uppercase duplicates). Keep only the primary endpoint:
+        //   1. Prefer name that ends in " Input" (exact endpoint, not "In 1" etc.)
+        //   2. Then case-sensitive ordinal sort — "VoiceMeeter" (M=77) < "Voicemeeter" (m=109)
+        //      so the standard capital-M name wins over lowercase-m duplicates.
+        var primaryVac = allVac
+            .GroupBy(e => e.VacCableIndex)
+            .Select(g => g
+                .OrderByDescending(e =>
+                    e.FriendlyName.EndsWith("Input", StringComparison.OrdinalIgnoreCase) ? 1 : 0)
+                .ThenBy(e => e.FriendlyName, StringComparer.Ordinal)
+                .First())
+            .OrderBy(e => e.VacCableIndex)
+            .ToList();
+
+        if (primaryVac.Count < allVac.Count)
+            _logger.LogInformation(
+                "Deduplicated VAC endpoints: {Before} → {After} unique cable(s)",
+                allVac.Count, primaryVac.Count);
+
+        var steamMicCapture = FindSteamStreamingMicCapture();
+        if (steamMicCapture is null)
+            _logger.LogWarning(
+                "Steam Streaming Microphone capture device not found — " +
+                "mic passthrough will be unavailable. Install Steam to enable it.");
+        else
+            _logger.LogInformation(
+                "Steam Streaming Microphone capture: {Name}", steamMicCapture.FriendlyName);
+
         var pairs = new List<AudioSeatPair>();
 
-        for (int i = 0; i + 1 < allVac.Count; i += 2)
+        foreach (var gameRender in primaryVac)
         {
-            var gameRender = allVac[i];
-            var micRender  = allVac[i + 1];
-
-            var micCapture = FindCaptureCounterpart(micRender.FriendlyName);
-            if (micCapture is null)
-            {
-                _logger.LogWarning(
-                    "No capture counterpart for mic device '{Name}' — skipping seat pair",
-                    micRender.FriendlyName);
-                continue;
-            }
-
-            _logger.LogDebug(
-                "Audio seat pair: game={Game}, mic={Mic} → capture={Cap}",
-                gameRender.FriendlyName, micRender.FriendlyName, micCapture.FriendlyName);
+            _logger.LogDebug("Audio seat: game={Game}, mic capture={Cap}",
+                gameRender.FriendlyName,
+                steamMicCapture?.FriendlyName ?? "(none)");
 
             pairs.Add(new AudioSeatPair
             {
                 GameRender = gameRender,
-                MicRender  = micRender,
-                MicCapture = micCapture,
+                MicCapture = steamMicCapture,
             });
         }
 
         _logger.LogInformation(
-            "Discovered {Pairs} audio seat pair(s) from {Total} VAC endpoints",
-            pairs.Count, allVac.Count);
+            "Discovered {Pairs} audio seat(s) from {Total} VAC endpoints ({Raw} before dedup)",
+            pairs.Count, primaryVac.Count, allVac.Count);
 
         return pairs;
     }

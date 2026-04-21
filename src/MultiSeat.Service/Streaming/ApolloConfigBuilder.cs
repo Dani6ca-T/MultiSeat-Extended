@@ -130,19 +130,13 @@ public sealed class ApolloConfigBuilder
         sb.AppendLine();
 
         // ── Audio input (mic from Moonlight → game) ────────────────────
-        // virtual_sink: Apollo renders Moonlight mic audio to this device. Games capture
-        // from the corresponding capture endpoint (set as session default capture by SeatManager).
-        // With audiomode:i:1, VoiceMeeter/VB-CABLE render devices ARE accessible via WASAPI
-        // inside the RDP session. Enable mic capture in Moonlight client settings.
-        if (!string.IsNullOrEmpty(seat.AudioFriendlyName))
-        {
-            sb.AppendLine("# Audio input — Apollo plays Moonlight mic audio here; games capture counterpart as mic");
-            sb.AppendLine($"virtual_sink = {seat.AudioFriendlyName}");
-        }
-        else
-        {
-            sb.AppendLine("# virtual_sink = (no mic device assigned — mic forwarding unavailable)");
-        }
+        // stream_mic: Apollo receives Moonlight mic audio, decodes Opus frames, and renders
+        // them into "Speakers (Steam Streaming Microphone)". SeatManager sets
+        // "Microphone (Steam Streaming Microphone)" as the session default capture so games
+        // automatically use it. Requires Steam installed for its audio driver.
+        // Client must be logabell/moonlight-qt-mic (standard Moonlight does not send mic packets).
+        sb.AppendLine("# Audio input — Apollo streams Moonlight mic into Steam Streaming Microphone");
+        sb.AppendLine("stream_mic = enabled");
         sb.AppendLine();
 
         // ── Input ─────────────────────────────────────────────────────
@@ -203,39 +197,6 @@ public sealed class ApolloConfigBuilder
             configPath, sb.Length);
 
         return configPath;
-    }
-
-    /// <summary>
-    /// Update an existing config file with new audio device ID.
-    /// Called after VAC cable assignment, which happens after initial config generation.
-    /// </summary>
-    public void UpdateAudioSink(string configPath, string audioDeviceId)
-    {
-        if (!File.Exists(configPath))
-        {
-            _logger.LogWarning("Config file not found for audio update: {Path}", configPath);
-            return;
-        }
-
-        var lines = File.ReadAllLines(configPath);
-        var updated = false;
-
-        for (int i = 0; i < lines.Length; i++)
-        {
-            if (lines[i].StartsWith("audio_sink = ") ||
-                lines[i].StartsWith("# audio_sink = "))
-            {
-                lines[i] = $"audio_sink = {audioDeviceId}";
-                updated = true;
-                break;
-            }
-        }
-
-        if (updated)
-        {
-            File.WriteAllLines(configPath, lines, Encoding.UTF8);
-            _logger.LogDebug("Updated audio_sink in {Path}", configPath);
-        }
     }
 
     /// <summary>
