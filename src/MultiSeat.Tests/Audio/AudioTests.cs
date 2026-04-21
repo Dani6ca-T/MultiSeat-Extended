@@ -149,15 +149,13 @@ public class AudioTests
     [Fact]
     public void AudioAssignment_RecordEquality()
     {
-        var ep = new AudioEndpointInfo
-        {
-            DeviceId = "test",
-            FriendlyName = "Test",
-            IsVac = true
-        };
+        var gameEp = new AudioEndpointInfo { DeviceId = "game", FriendlyName = "Game Device", IsVac = true };
+        var micEp  = new AudioEndpointInfo { DeviceId = "mic",  FriendlyName = "Mic Device",  IsVac = true };
+        var capEp  = new AudioEndpointInfo { DeviceId = "cap",  FriendlyName = "Cap Device",  IsVac = true };
+        var pair = new AudioSeatPair { GameRender = gameEp, MicRender = micEp, MicCapture = capEp };
 
-        var a1 = new AudioAssignment(ep, 5);
-        var a2 = new AudioAssignment(ep, 5);
+        var a1 = new AudioAssignment(pair, 5);
+        var a2 = new AudioAssignment(pair, 5);
 
         Assert.Equal(a1, a2);
     }

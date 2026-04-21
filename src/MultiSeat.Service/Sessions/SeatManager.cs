@@ -176,13 +176,35 @@ public sealed class SeatManager
                         seat.SessionId, seat.AccountName,
                         $"\"{helperExe}\" --set-default-capture \"{seat.AudioCaptureDeviceId}\"");
                     _logger.LogInformation(
-                        "Seat {Id}: session capture default set to {DeviceId} for mic routing",
+                        "Seat {Id}: session capture default set to {DeviceId} (mic)",
                         seat.Id, seat.AudioCaptureDeviceId);
                 }
                 catch (Exception ex)
                 {
                     _logger.LogWarning(ex,
                         "Seat {Id}: could not set session capture device (non-critical)", seat.Id);
+                }
+            }
+
+            // Set game audio render device as the session's default output so games
+            // automatically route audio there. Apollo loopback-captures this device
+            // for audio_sink. Requires audiomode:i:1 in Default.rdp (set by SessionLauncher).
+            if (!string.IsNullOrEmpty(seat.AudioGameRenderDeviceId))
+            {
+                try
+                {
+                    var helperExe = Path.Combine(AppContext.BaseDirectory, "MultiSeat.Service.exe");
+                    _sessionLauncher.RunHelperInSeatSession(
+                        seat.SessionId, seat.AccountName,
+                        $"\"{helperExe}\" --set-default-render \"{seat.AudioGameRenderDeviceId}\"");
+                    _logger.LogInformation(
+                        "Seat {Id}: session render default set to {DeviceId} (game audio)",
+                        seat.Id, seat.AudioGameRenderDeviceId);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex,
+                        "Seat {Id}: could not set session render device (non-critical)", seat.Id);
                 }
             }
 

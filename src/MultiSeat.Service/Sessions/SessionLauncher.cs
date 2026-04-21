@@ -1143,12 +1143,16 @@ public sealed class SessionLauncher
         const string content =
             "authentication level:i:0\r\n" +
             "prompt for credentials:i:0\r\n" +
-            // Enable audio input (microphone) redirection into the RDP session.
-            // This makes mstsc expose a "Remote Audio Input" capture device in the seat
-            // session, giving games an additional mic source backed by the console's
-            // default capture device. The primary mic path is CABLE Output (set as the
-            // seat session's default capture by SeatManager after provisioning), but
-            // audiocapturemode:i:1 ensures at least one capture device is always present.
+            // audiomode:i:1 — play audio on the remote computer (host). This makes all host
+            // audio devices (VB-CABLE, VoiceMeeter) visible inside the RDP session via WASAPI,
+            // which is required for Apollo to loopback-capture game audio (audio_sink) and to
+            // render Moonlight mic audio (virtual_sink). With the default audiomode:i:0 (redirect
+            // to client), only "Remote Audio Output" is visible — VAC devices are invisible and
+            // both audio_sink and virtual_sink silently fail.
+            "audiomode:i:1\r\n" +
+            // audiocapturemode:i:1 — expose the console session's physical mic as "Remote Audio
+            // Input" inside the seat session. Provides a fallback capture device in case the
+            // VAC-based mic routing (virtual_sink → MicCapture) is not yet set up.
             "audiocapturemode:i:1\r\n";
 
         // Stage the file content in ProgramData where SYSTEM always has write access.

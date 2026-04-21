@@ -36,12 +36,12 @@ public sealed class AudioRouter
 
     private const string VoiceMeeterExe = @"C:\Program Files\VB\Voicemeeter\voicemeeterpro.exe";
 
-    // Available VAC endpoints (populated at startup or on-demand)
-    private readonly List<AudioEndpointInfo> _vacEndpoints = [];
+    // Available audio seat pairs (populated at startup or on-demand)
+    private readonly List<AudioSeatPair> _vacPairs = [];
     private readonly object _vacLock = new();
     private bool _vacScanned;
 
-    // Seat → assigned VAC endpoint mapping
+    // Seat → assigned audio pair mapping
     private readonly ConcurrentDictionary<Guid, AudioAssignment> _assignments = new();
 
     public AudioRouter(
@@ -57,97 +57,89 @@ public sealed class AudioRouter
     }
 
     /// <summary>
-    /// Get all discovered VAC endpoints. Triggers a scan if not done yet.
+    /// Get all audio seat pairs not yet assigned. Triggers a scan if not done yet.
     /// </summary>
-    public IReadOnlyList<AudioEndpointInfo> GetAvailableVacEndpoints()
+    public IReadOnlyList<AudioSeatPair> GetAvailableSeatPairs()
     {
         EnsureVacScanned();
         lock (_vacLock)
         {
-            return _vacEndpoints
-                .Where(e => !_assignments.Values.Any(a => a.Endpoint.DeviceId == e.DeviceId))
+            return _vacPairs
+                .Where(p => !_assignments.Values.Any(a => a.Pair.GameRender.DeviceId == p.GameRender.DeviceId))
                 .ToList()
                 .AsReadOnly();
         }
     }
 
     /// <summary>
-    /// Assign a VAC cable to the seat and configure it as the session's
-    /// default audio output. Returns the cable index.
+    /// Assign an audio seat pair and populate all audio fields on the seat.
+    /// Returns the game-render device's VacCableIndex.
+    ///
+    /// Requires audiomode:i:1 in the RDP session (set by SessionLauncher in Default.rdp)
+    /// so host audio devices are visible inside the session via WASAPI.
+    ///
+    /// Flow:
+    ///   Game audio: session default render → game outputs here → Apollo loopback-captures
+    ///   Mic:        Apollo renders Moonlight mic → MicRender → MicCapture ← game captures
+    /// SeatManager calls --set-default-render and --set-default-capture helpers inside
+    /// the seat session after this returns to scope the IPolicyConfig calls to that session.
     /// </summary>
     public int AssignCable(SeatInfo seat)
     {
         EnsureVacScanned();
 
-        AudioEndpointInfo? endpoint;
+        AudioSeatPair? pair;
         lock (_vacLock)
         {
-            // Find the first unassigned VAC endpoint
-            endpoint = _vacEndpoints.FirstOrDefault(e =>
-                !_assignments.Values.Any(a => a.Endpoint.DeviceId == e.DeviceId));
+            pair = _vacPairs.FirstOrDefault(p =>
+                !_assignments.Values.Any(a => a.Pair.GameRender.DeviceId == p.GameRender.DeviceId));
         }
 
-        if (endpoint is null)
+        if (pair is null)
         {
             _logger.LogError(
-                "No available VAC endpoints for seat {Id}. " +
-                "Discovered {Count} VAC cables, {Assigned} already assigned. " +
-                "Install more VAC cables or reduce seat count.",
-                seat.Id, _vacEndpoints.Count, _assignments.Count);
+                "No available audio seat pairs for seat {Id}. " +
+                "Discovered {Count} pair(s), {Assigned} already assigned. " +
+                "Install more VB-CABLE devices (one pair per seat).",
+                seat.Id, _vacPairs.Count, _assignments.Count);
             throw new InvalidOperationException(
-                "No VAC cables available. Install more Virtual Audio Cable devices.");
+                "No audio seat pairs available. Install more VB-CABLE devices.");
         }
 
-        var assignment = new AudioAssignment(endpoint, seat.SessionId);
-        _assignments.TryAdd(seat.Id, assignment);
+        _assignments.TryAdd(seat.Id, new AudioAssignment(pair, seat.SessionId));
 
-        // Store render device ID (for IPolicyConfig) and friendly name (for Apollo's virtual_sink)
-        seat.AudioDeviceId = endpoint.DeviceId;
-        seat.AudioFriendlyName = endpoint.FriendlyName;
+        // Game audio: Apollo audio_sink loopback-captures from the session's default render device.
+        seat.AudioGameRenderDeviceId    = pair.GameRender.DeviceId;
+        seat.AudioGameRenderFriendlyName = pair.GameRender.FriendlyName;
 
-        // Find the corresponding capture device (VAC Output) so we can set it as
-        // the default microphone inside the seat's session automatically.
-        var captureDevice = _deviceEnumerator.FindCaptureCounterpart(endpoint.FriendlyName);
-        if (captureDevice is not null)
-        {
-            seat.AudioCaptureDeviceId = captureDevice.DeviceId;
-            _logger.LogDebug(
-                "Found capture counterpart '{Name}' for seat {Id}",
-                captureDevice.FriendlyName, seat.Id);
-        }
-        else
-        {
-            _logger.LogWarning(
-                "No capture counterpart found for '{Name}' — mic forwarding will require manual device selection",
-                endpoint.FriendlyName);
-        }
+        // Mic routing: Apollo virtual_sink → MicRender; games capture from MicCapture.
+        seat.AudioDeviceId       = pair.MicRender.DeviceId;
+        seat.AudioFriendlyName   = pair.MicRender.FriendlyName;
+        seat.AudioCaptureDeviceId = pair.MicCapture.DeviceId;
+
+        seat.VacCableIndex = pair.GameRender.VacCableIndex;
 
         _logger.LogInformation(
-            "Assigned VAC '{Name}' (cable {Cable}) to seat {Id} — device: {DeviceId}",
-            endpoint.FriendlyName, endpoint.VacCableIndex, seat.Id, endpoint.DeviceId);
+            "Assigned audio pair to seat {Id}: game={Game}, mic={Mic} → {Cap}",
+            seat.Id,
+            pair.GameRender.FriendlyName,
+            pair.MicRender.FriendlyName,
+            pair.MicCapture.FriendlyName);
 
-        // NOTE: We intentionally do NOT call SetDefaultAudioInSession here.
-        // Apollo runs inside an RDP session where the default render device is
-        // "Remote Audio Output" — the only WASAPI-visible device in that context.
-        // VAC/VoiceMeeter devices are NOT enumerable via WASAPI inside RDP sessions,
-        // so changing the session default to a VAC device causes Apollo to lose its
-        // audio capture source entirely. audio_sink is left empty in sunshine.conf
-        // so Apollo captures "Remote Audio Output" directly.
-
-        return endpoint.VacCableIndex;
+        return seat.VacCableIndex;
     }
 
     /// <summary>
-    /// Release a VAC cable assignment when a seat is torn down.
+    /// Release the audio pair assignment when a seat is torn down.
     /// </summary>
     public void ReleaseCable(SeatInfo seat)
     {
         if (_assignments.TryRemove(seat.Id, out var assignment))
         {
             _logger.LogInformation(
-                "Released VAC '{Name}' (cable {Cable}) from seat {Id}",
-                assignment.Endpoint.FriendlyName,
-                assignment.Endpoint.VacCableIndex,
+                "Released audio pair (game={Game}, mic={Mic}) from seat {Id}",
+                assignment.Pair.GameRender.FriendlyName,
+                assignment.Pair.MicRender.FriendlyName,
                 seat.Id);
         }
     }
@@ -167,7 +159,7 @@ public sealed class AudioRouter
         lock (_vacLock)
         {
             _vacScanned = false;
-            _vacEndpoints.Clear();
+            _vacPairs.Clear();
         }
         EnsureVacScanned();
     }
@@ -184,24 +176,24 @@ public sealed class AudioRouter
 
             EnsureVoiceMeeterRunning();
 
-            _vacEndpoints.Clear();
-            _vacEndpoints.AddRange(_deviceEnumerator.FindVacEndpoints());
+            _vacPairs.Clear();
+            _vacPairs.AddRange(_deviceEnumerator.FindSeatAudioPairs());
             _vacScanned = true;
 
-            if (_vacEndpoints.Count == 0)
+            if (_vacPairs.Count == 0)
             {
                 _logger.LogWarning(
-                    "No virtual audio devices detected. " +
-                    "Audio isolation will not work. " +
+                    "No audio seat pairs detected. " +
+                    "Audio routing will not work. " +
                     "Run prerequisites\\install-prerequisites.ps1 to install VB-CABLE and VoiceMeeter Potato.");
             }
-            else if (_vacEndpoints.Count < _options.MaxSeats)
+            else if (_vacPairs.Count < _options.MaxSeats)
             {
                 _logger.LogWarning(
-                    "Only {Count} virtual audio device(s) found but MaxSeats is {Max}. " +
-                    "Some seats may not have audio isolation. " +
-                    "Ensure VoiceMeeter Potato is installed and running.",
-                    _vacEndpoints.Count, _options.MaxSeats);
+                    "Only {Count} audio pair(s) found but MaxSeats is {Max}. " +
+                    "Each seat requires 2 virtual audio devices (1 game + 1 mic). " +
+                    "Install more VB-CABLE devices for additional seats.",
+                    _vacPairs.Count, _options.MaxSeats);
             }
         }
     }
@@ -257,97 +249,9 @@ public sealed class AudioRouter
         }
     }
 
-    /// <summary>
-    /// Launch a helper process inside the target session that sets the
-    /// default audio device via IPolicyConfig.
-    ///
-    /// This is the key to per-session audio isolation: the IPolicyConfig
-    /// COM call happens within the session's own audio context, so it
-    /// only affects that session's default device.
-    /// </summary>
-    private void SetDefaultAudioInSession(SeatInfo seat, AudioEndpointInfo endpoint)
-    {
-        if (seat.SessionId < 0)
-        {
-            _logger.LogWarning("Seat {Id}: no active session — skipping audio device set", seat.Id);
-            return;
-        }
-
-        try
-        {
-            // Build the helper command that will run inside the target session.
-            // We use PowerShell to invoke the COM call directly — no separate binary needed.
-            // This is a one-shot process that sets the default device and exits.
-            var script = BuildPowerShellAudioHelper(endpoint.DeviceId);
-
-            _ = _processInjector.LaunchInSessionAsync(
-                seat.SessionId,
-                seat.AccountName,
-                "powershell.exe",
-                $"-NoProfile -NonInteractive -ExecutionPolicy Bypass -Command \"{script}\"",
-                null,
-                CancellationToken.None);
-
-            _logger.LogInformation(
-                "Launched audio helper in session {Sid} to set default device to '{Name}'",
-                seat.SessionId, endpoint.FriendlyName);
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex,
-                "Failed to set default audio device in session {Sid} for seat {Id}. " +
-                "Audio may play through the wrong device.",
-                seat.SessionId, seat.Id);
-        }
-    }
-
-    /// <summary>
-    /// Build a PowerShell one-liner that uses IPolicyConfig COM to set
-    /// the default audio endpoint. Runs inside the target session.
-    ///
-    /// This avoids needing a separate compiled helper binary — PowerShell
-    /// can create COM objects and call methods directly.
-    /// </summary>
-    private static string BuildPowerShellAudioHelper(string deviceId)
-    {
-        // The PowerShell script:
-        // 1. Creates the PolicyConfigClient COM object
-        // 2. Calls SetDefaultEndpoint for all 3 roles
-        // 3. Exits
-        //
-        // We use the COM interop approach directly in PowerShell.
-        // The IPolicyConfig interface requires some boilerplate, so
-        // we use an alternative approach: calling the nircmd utility
-        // or using the AudioDeviceCmdlets module if available.
-        //
-        // Simplest reliable approach: use a C# snippet via Add-Type.
-
-        // Escape the device ID for embedding in a PS string
-        var escaped = deviceId.Replace("'", "''");
-
-        return
-            "$code = @'" + "\n" +
-            "using System; using System.Runtime.InteropServices;" + "\n" +
-            "[ComImport, Guid(\"870AF99C-171D-4F9E-AF0D-E63DF40C2BC9\")] class PolicyConfigClient { }" + "\n" +
-            "[ComImport, Guid(\"F8679F50-850A-41CF-9C72-430F290290C8\"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]" + "\n" +
-            "interface IPolicyConfig {" + "\n" +
-            "  void R1(); void R2(); void R3(); void R4(); void R5();" + "\n" +
-            "  void R6(); void R7(); void R8(); void R9(); void R10();" + "\n" +
-            "  [PreserveSig] int SetDefaultEndpoint([MarshalAs(UnmanagedType.LPWStr)] string id, int role);" + "\n" +
-            "}" + "\n" +
-            "public class AudioHelper {" + "\n" +
-            "  public static void Set(string devId) {" + "\n" +
-            "    var pc = (IPolicyConfig)new PolicyConfigClient();" + "\n" +
-            "    for(int r=0;r<3;r++) pc.SetDefaultEndpoint(devId, r);" + "\n" +
-            "  }" + "\n" +
-            "}" + "\n" +
-            "'@" + "\n" +
-            "Add-Type -TypeDefinition $code" + "\n" +
-            $"[AudioHelper]::Set('{escaped}')";
-    }
 }
 
 /// <summary>
-/// Tracks the VAC endpoint assigned to a seat.
+/// Tracks the audio seat pair assigned to a seat.
 /// </summary>
-public sealed record AudioAssignment(AudioEndpointInfo Endpoint, int SessionId);
+public sealed record AudioAssignment(AudioSeatPair Pair, int SessionId);

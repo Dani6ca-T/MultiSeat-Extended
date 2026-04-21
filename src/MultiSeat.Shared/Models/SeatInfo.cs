@@ -28,10 +28,14 @@ public sealed class SeatInfo
     public int PortBase { get; set; }
     public int ApolloProcessId { get; set; }
 
-    // Audio
-    public string? AudioDeviceId { get; set; }        // render device (VAC Input) Windows device ID → IPolicyConfig
-    public string? AudioFriendlyName { get; set; }    // render device friendly name → Apollo virtual_sink
-    public string? AudioCaptureDeviceId { get; set; } // capture device (VAC Output) → set as default mic in session
+    // Audio — game output (audiomode:i:1 makes host devices visible in RDP session)
+    public string? AudioGameRenderDeviceId { get; set; }     // session default render → Apollo loopback-captures for audio_sink
+    public string? AudioGameRenderFriendlyName { get; set; } // friendly name → Apollo audio_sink
+
+    // Audio — mic routing (Moonlight mic → games)
+    public string? AudioDeviceId { get; set; }        // mic render device ID (legacy/IPolicyConfig)
+    public string? AudioFriendlyName { get; set; }    // mic render friendly name → Apollo virtual_sink
+    public string? AudioCaptureDeviceId { get; set; } // mic capture device ID → set as session default capture
     public int VacCableIndex { get; set; } = -1;
 
     // Input

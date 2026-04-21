@@ -113,30 +113,35 @@ public sealed class ApolloConfigBuilder
         sb.AppendLine();
 
         // ── Audio output (game audio → Moonlight) ─────────────────────
-        // Leave audio_sink empty — Apollo uses the session's default render endpoint.
-        // In an RDP session with default audiomode (redirect to client), that endpoint is
-        // "Remote Audio Output", which IS enumerable via WASAPI and supports loopback capture.
-        // VAC/VoiceMeeter devices are NOT visible in RDP sessions via WASAPI loopback capture,
-        // so specifying them causes Apollo to fail silently (no audio in Moonlight).
-        sb.AppendLine("# Audio output — Apollo captures session default (Remote Audio Output in RDP session)");
-        sb.AppendLine("# audio_sink = (intentionally empty — use session default)");
+        // audio_sink: Apollo WASAPI loopback-captures from this render device to stream game
+        // audio to Moonlight. Requires audiomode:i:1 in the RDP session (set in Default.rdp)
+        // so host audio devices (VB-CABLE, VoiceMeeter) are visible via WASAPI inside the
+        // RDP session. SeatManager sets this device as the session's default render so games
+        // automatically output to it without any manual device selection.
+        if (!string.IsNullOrEmpty(seat.AudioGameRenderFriendlyName))
+        {
+            sb.AppendLine("# Audio output — Apollo loopback-captures session default render for game audio");
+            sb.AppendLine($"audio_sink = {seat.AudioGameRenderFriendlyName}");
+        }
+        else
+        {
+            sb.AppendLine("# audio_sink = (no game audio device assigned)");
+        }
         sb.AppendLine();
 
         // ── Audio input (mic from Moonlight → game) ────────────────────
-        // virtual_sink: Apollo receives mic audio from the Moonlight client and renders it
-        // to this device. Games then use the corresponding capture endpoint as their microphone.
-        // VB-Audio CABLE: Apollo renders TO "CABLE Input", games record FROM "CABLE Output".
-        // Note: this uses WASAPI render (not loopback capture), so VB-Cable IS accessible
-        // in RDP sessions — different API path from the audio_sink loopback limitation.
-        // Enable mic capture in Moonlight client settings for this to take effect.
+        // virtual_sink: Apollo renders Moonlight mic audio to this device. Games capture
+        // from the corresponding capture endpoint (set as session default capture by SeatManager).
+        // With audiomode:i:1, VoiceMeeter/VB-CABLE render devices ARE accessible via WASAPI
+        // inside the RDP session. Enable mic capture in Moonlight client settings.
         if (!string.IsNullOrEmpty(seat.AudioFriendlyName))
         {
-            sb.AppendLine("# Audio input — Apollo plays Moonlight mic audio to VB-Cable; games mic = CABLE Output");
+            sb.AppendLine("# Audio input — Apollo plays Moonlight mic audio here; games capture counterpart as mic");
             sb.AppendLine($"virtual_sink = {seat.AudioFriendlyName}");
         }
         else
         {
-            sb.AppendLine("# virtual_sink = (no VAC device assigned — mic forwarding unavailable)");
+            sb.AppendLine("# virtual_sink = (no mic device assigned — mic forwarding unavailable)");
         }
         sb.AppendLine();
 

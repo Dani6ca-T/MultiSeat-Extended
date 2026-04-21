@@ -48,13 +48,21 @@ if (args.Length == 2 && args[0] == "--enum-displays")
 }
 
 // ── Set-default-capture helper mode ──────────────────────────────────
-// Invoked by the service inside each seat's RDP session after provisioning.
-// Sets the Windows default audio capture (microphone) device for that session
-// so Moonlight-forwarded mic audio arrives at games without manual config.
+// Sets the Windows default audio capture (microphone) device for the current session.
 // Usage: MultiSeat.Service.exe --set-default-capture <deviceId>
 if (args.Length == 2 && args[0] == "--set-default-capture")
 {
-    return MultiSeat.Service.Audio.AudioCaptureHelper.SetDefaultCaptureDevice(args[1]) ? 0 : 1;
+    return MultiSeat.Service.Audio.AudioCaptureHelper.SetDefaultAudioDevice(args[1]) ? 0 : 1;
+}
+
+// ── Set-default-render helper mode ───────────────────────────────────
+// Sets the Windows default audio render (output) device for the current session so
+// games automatically output game audio to the assigned VAC device. Apollo
+// loopback-captures that device for audio_sink streaming to Moonlight.
+// Usage: MultiSeat.Service.exe --set-default-render <deviceId>
+if (args.Length == 2 && args[0] == "--set-default-render")
+{
+    return MultiSeat.Service.Audio.AudioCaptureHelper.SetDefaultAudioDevice(args[1]) ? 0 : 1;
 }
 
 // ── Set-display-hz helper mode ────────────────────────────────────────

@@ -4,6 +4,21 @@ using MultiSeat.Service.Interop;
 namespace MultiSeat.Service.Audio;
 
 /// <summary>
+/// One seat's complete audio assignment: a game-audio render device and a mic render/capture pair.
+/// </summary>
+public sealed class AudioSeatPair
+{
+    /// <summary>Set as the session's default render device; Apollo loopback-captures it for audio_sink.</summary>
+    public required AudioEndpointInfo GameRender { get; init; }
+
+    /// <summary>Apollo renders Moonlight mic audio here (virtual_sink).</summary>
+    public required AudioEndpointInfo MicRender { get; init; }
+
+    /// <summary>Set as the session's default capture device so games use it as their microphone.</summary>
+    public required AudioEndpointInfo MicCapture { get; init; }
+}
+
+/// <summary>
 /// Represents a discovered audio endpoint device.
 /// </summary>
 public sealed class AudioEndpointInfo
@@ -197,6 +212,58 @@ public sealed class AudioDeviceEnumerator : IDisposable
             d.FriendlyName.Contains(
                 captureName.Split('(')[0].Trim(), // match on the part before the "(VB-Audio ...)" suffix
                 StringComparison.OrdinalIgnoreCase));
+    }
+
+    /// <summary>
+    /// Build seat-level audio pairs from the available VAC devices.
+    ///
+    /// Requires audiomode:i:1 in the RDP session so host audio devices are visible inside it.
+    ///
+    /// Pairing strategy — sort all VAC render endpoints by VacCableIndex, then take in
+    /// consecutive pairs of 2: (i) = game-audio render, (i+1) = mic render.
+    /// With current hardware (VacCableIndex order: CABLE=1, VM=2, VMAux=3, VAIO3=4):
+    ///   Seat 0: game = CABLE Input (pure loopback, no speaker bleed)
+    ///           mic  = VoiceMeeter Input / VoiceMeeter Output
+    ///   Seat 1: game = VoiceMeeter Aux Input (may route through VoiceMeeter to speakers)
+    ///           mic  = VoiceMeeter VAIO3 Input / VoiceMeeter VAIO3 Output
+    /// Install more VB-CABLE devices to support additional seats cleanly.
+    /// </summary>
+    public List<AudioSeatPair> FindSeatAudioPairs()
+    {
+        var allVac = FindVacEndpoints();
+        var pairs = new List<AudioSeatPair>();
+
+        for (int i = 0; i + 1 < allVac.Count; i += 2)
+        {
+            var gameRender = allVac[i];
+            var micRender  = allVac[i + 1];
+
+            var micCapture = FindCaptureCounterpart(micRender.FriendlyName);
+            if (micCapture is null)
+            {
+                _logger.LogWarning(
+                    "No capture counterpart for mic device '{Name}' — skipping seat pair",
+                    micRender.FriendlyName);
+                continue;
+            }
+
+            _logger.LogDebug(
+                "Audio seat pair: game={Game}, mic={Mic} → capture={Cap}",
+                gameRender.FriendlyName, micRender.FriendlyName, micCapture.FriendlyName);
+
+            pairs.Add(new AudioSeatPair
+            {
+                GameRender = gameRender,
+                MicRender  = micRender,
+                MicCapture = micCapture,
+            });
+        }
+
+        _logger.LogInformation(
+            "Discovered {Pairs} audio seat pair(s) from {Total} VAC endpoints",
+            pairs.Count, allVac.Count);
+
+        return pairs;
     }
 
     /// <summary>

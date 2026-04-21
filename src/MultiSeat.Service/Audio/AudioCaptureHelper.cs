@@ -18,12 +18,13 @@ namespace MultiSeat.Service.Audio;
 public static class AudioCaptureHelper
 {
     /// <summary>
-    /// Set the Windows default audio capture endpoint for the current session.
-    /// Applies to all three ERole values (eConsole, eMultimedia, eCommunications)
-    /// so it covers both game audio capture and communication apps (Discord, etc.).
+    /// Set a Windows default audio endpoint for the current session.
+    /// Works for both render (output) and capture (input) device IDs —
+    /// IPolicyConfig.SetDefaultEndpoint infers direction from the device.
+    /// Applies to all three ERole values (eConsole, eMultimedia, eCommunications).
     /// Returns true on success.
     /// </summary>
-    public static bool SetDefaultCaptureDevice(string deviceId)
+    public static bool SetDefaultAudioDevice(string deviceId)
     {
         try
         {
