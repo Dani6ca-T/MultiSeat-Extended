@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Diagnostics;
 using Microsoft.Extensions.Options;
 using MultiSeat.Service.Accounts;
 using MultiSeat.Service.Api;
@@ -123,6 +124,52 @@ public sealed class SeatManager
 
             seat.Status = SeatStatus.Configuring;
             await BroadcastState(seat);
+
+            // ── 2.5. Suppress RustDesk audio capture in seat session ──────────
+            // RustDesk.exe runs in every session and opens the default render
+            // endpoint in exclusive WASAPI mode at startup, causing
+            // AUDCLNT_E_DEVICE_IN_USE (0x8889000A) for Apollo's loopback.
+            // Write a per-user RustDesk2.toml with enable-audio=N before the
+            // audio default is set, then kill any RustDesk that started before
+            // the config landed. RustDesk re-reads config on each launch, so
+            // the service's auto-restart will pick up the new setting.
+            try
+            {
+                var rustDeskConfigDir = Path.Combine(
+                    @"C:\Users", seat.AccountName,
+                    @"AppData\Roaming\RustDesk\config");
+                Directory.CreateDirectory(rustDeskConfigDir);
+                var rustDeskConfig = Path.Combine(rustDeskConfigDir, "RustDesk2.toml");
+                await File.WriteAllTextAsync(rustDeskConfig,
+                    "[options]\nenable-audio = \"N\"\n", ct);
+                _logger.LogInformation(
+                    "Seat {Id}: wrote RustDesk audio-disable config to {Path}",
+                    seat.Id, rustDeskConfig);
+
+                var killed = 0;
+                foreach (var p in Process.GetProcessesByName("RustDesk"))
+                {
+                    try
+                    {
+                        if (p.SessionId == seat.SessionId)
+                        {
+                            p.Kill();
+                            killed++;
+                        }
+                    }
+                    catch { /* already exited */ }
+                    finally { p.Dispose(); }
+                }
+                if (killed > 0)
+                    _logger.LogInformation(
+                        "Seat {Id}: killed {N} RustDesk process(es) in session {Sid}",
+                        seat.Id, killed, seat.SessionId);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex,
+                    "Seat {Id}: could not suppress RustDesk audio (non-critical)", seat.Id);
+            }
 
             // ── 3. Virtual display ────────────────────────────────────
             await _displayManager.CreateDisplayAsync(seat, ct);
