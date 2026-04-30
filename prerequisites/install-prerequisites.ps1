@@ -626,36 +626,36 @@ if ($existingDll) {
 }
 
 # ----------------------------------------------------------------
-# 5. Apollo (Sunshine fork for multi-instance streaming)
+# 5. Apollo (vibesoftwarecoder fork — mic passthrough + latest Apollo HEAD)
 # ----------------------------------------------------------------
 Write-Step "Apollo (game streaming server)"
 
-$apolloPath = "C:\Program Files\Apollo\sunshine.exe"
+$apolloInstallDir = "C:\Program Files\Apollo"
+$apolloPath = "$apolloInstallDir\sunshine.exe"
+$apolloZipName = "apollo-v2026.4.30-multiseat.1-windows-x64.zip"
+$apolloDownloadUrl = "https://github.com/vibesoftwarecoder/Apollo/releases/download/v2026.4.30-multiseat.1/$apolloZipName"
+
 if (Test-Path $apolloPath) {
     Write-OK "Already installed at $apolloPath"
 } else {
-    $setup = Get-ChildItem $ScriptDir | Where-Object { $_.Name -match "^[Aa]pollo.*\.exe$" } | Select-Object -First 1
-    if (-not $setup) {
-        $f = Get-Prerequisite "Apollo-0.4.6.exe" `
-            "https://github.com/ClassicOldSong/Apollo/releases/download/v0.4.6/Apollo-0.4.6.exe" `
-            "Apollo v0.4.6 (Sunshine fork)"
-        if ($f) { $setup = Get-Item $f }
+    $zip = Get-ChildItem $ScriptDir | Where-Object { $_.Name -eq $apolloZipName } | Select-Object -First 1
+    if (-not $zip) {
+        $f = Get-Prerequisite $apolloZipName $apolloDownloadUrl "Apollo v2026.4.30-multiseat.1 (vibesoftwarecoder fork)"
+        if ($f) { $zip = Get-Item $f }
     }
-    if ($setup) {
-        Write-Host "  Installing $($setup.Name)..."
-        Start-Process $setup.FullName -ArgumentList "/S" -Wait -NoNewWindow
-        if (!(Test-Path $apolloPath)) {
-            Write-Host "  Silent install not supported  --  launching interactive installer..." -ForegroundColor Yellow
-            Start-Process $setup.FullName -Wait
-        }
+    if ($zip) {
+        Write-Host "  Extracting $($zip.Name) to $apolloInstallDir ..."
+        New-Item -ItemType Directory -Path $apolloInstallDir -Force | Out-Null
+        Expand-Archive -Path $zip.FullName -DestinationPath $apolloInstallDir -Force
         if (Test-Path $apolloPath) {
             Write-OK "Installed"
             $Installed += "Apollo"
         } else {
-            Write-Host "  WARNING: Apollo not at expected path. Set ApolloExePath in appsettings.json." -ForegroundColor Yellow
+            Write-Host "  WARNING: Apollo not found at $apolloPath after extraction." -ForegroundColor Yellow
+            Write-Host "  Check the zip structure and set ApolloExePath in appsettings.json." -ForegroundColor Yellow
         }
     } else {
-        Write-Skip "Apollo  --  get from https://github.com/ClassicOldSong/Apollo/releases"
+        Write-Skip "Apollo  --  download from https://github.com/vibesoftwarecoder/Apollo/releases"
     }
 }
 
