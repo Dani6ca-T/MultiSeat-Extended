@@ -91,12 +91,11 @@ public sealed class ApolloConfigBuilder
         sb.AppendLine();
 
         // ── Display ───────────────────────────────────────────────────
-        // always_use_virtual_display: Apollo creates and manages its own SudoVDA
-        // virtual monitor per instance. Each running Apollo holds a device handle
-        // to the SudoVDA adapter; Windows presents that monitor as active only
-        // while the handle is open. No external display assignment is needed.
-        sb.AppendLine("# Display — Apollo creates and owns a SudoVDA virtual display per instance");
-        sb.AppendLine("always_use_virtual_display = enabled");
+        // output_name is set after SudoVDA creates the virtual display (UpdateDisplayOutput).
+        // always_use_virtual_display is NOT a sunshine.conf key in ClassicOldSong/Apollo — it
+        // was moved to per-paired-device state in sunshine_state.json. MultiSeat manages the
+        // virtual display externally via VirtualDisplayManager; output_name points Apollo at it.
+        sb.AppendLine("# Display — output_name patched in after SudoVDA display creation");
         sb.AppendLine($"resolutions = [{seat.Width}x{seat.Height}]");
         // Provide all standard framerates up to the seat's configured max so Moonlight
         // can offer the user a choice. Apollo picks the closest supported rate.
