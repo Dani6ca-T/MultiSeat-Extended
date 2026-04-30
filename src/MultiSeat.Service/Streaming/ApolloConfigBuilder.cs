@@ -47,15 +47,15 @@ public sealed class ApolloConfigBuilder
 
         var configPath = Path.Combine(seatDir, "sunshine.conf");
         var logPath = Path.Combine(seatDir, "apollo.log").Replace('\\', '/');
+        var statePath = Path.Combine(seatDir, "config", "sunshine_state.json").Replace('\\', '/');
         // All seats share one credentials file so web UI login persists across re-provisioning.
         // The file is created by MultiSeat on first run (from Apollo's default config) and survives seat teardown.
         var credPath = Path.Combine(configDir, "shared_credentials.json").Replace('\\', '/');
         EnsureSharedCredentials(configDir);
-        // Apollo resolves sunshine_state.json and apps.json relative to its WORKING DIRECTORY:
-        //   {workingDir}/config/sunshine_state.json
-        //   {workingDir}/config/apps.json
-        // ProcessInjector sets workingDir = seatDir, so we seed these files here.
-        // sunshine_state.json gets a unique UUID per seat so Moonlight shows each seat separately.
+        // platf::appdata() on Windows resolves to {exe_dir}/config/ — not the working directory.
+        // To isolate each seat's state file (and thus its UUID), we seed sunshine_state.json in
+        // the per-seat config/ dir and write an explicit file_state = <absolute_path> in the
+        // generated sunshine.conf so Apollo uses that path instead of the shared exe-dir default.
         // Only create if absent — pairings (stored in sunshine_state) survive re-provisioning.
         EnsureSeatConfigDir(seatDir);
         EnsureSeatStateFile(seatDir);
@@ -151,10 +151,11 @@ public sealed class ApolloConfigBuilder
         sb.AppendLine();
 
         // ── Security ──────────────────────────────────────────────────
-        // Each seat gets its own config/ subdir as the Apollo working directory.
-        // Apollo resolves sunshine_state.json from {workingDir}/config/sunshine_state.json,
-        // giving each seat a unique uniqueid so Moonlight lists them as separate servers.
+        // file_state must be an absolute path — Apollo resolves relative paths against
+        // {exe_dir}/config/, which is shared by all instances. Each seat needs its own
+        // sunshine_state.json so Moonlight sees distinct UUIDs and lists them separately.
         sb.AppendLine("# Security");
+        sb.AppendLine($"file_state = {statePath}");
         sb.AppendLine($"credentials_file = {credPath}");
         // Each seat has independent pairing — Moonlight pairs per-seat
         sb.AppendLine("origin_web_ui_allowed = lan");
@@ -236,9 +237,10 @@ public sealed class ApolloConfigBuilder
     /// Ensure the per-seat config/ and config/credentials/ subdirectories exist,
     /// and seed the TLS cert/key from Apollo's install dir.
     ///
-    /// Apollo resolves config files from {workingDir}/config/:
+    /// Apollo resolves config files from {exe_dir}/config/ by default.
+    /// We override file_state and credentials_file to absolute per-seat paths in the conf:
     ///   sunshine_state.json — unique UUID per seat (Moonlight server identity)
-    ///   apps.json           — game/app list
+    ///   apps.json           — game/app list (no override; always copied fresh each provision)
     ///   credentials/        — TLS cert + key for HTTPS pairing
     ///
     /// ProcessInjector sets workingDir = seatDir. BUILTIN\Users only has Write
@@ -315,7 +317,7 @@ public sealed class ApolloConfigBuilder
 
     /// <summary>
     /// Ensure a per-seat sunshine_state.json exists with a unique server UUID.
-    /// Apollo loads this from {workingDir}/config/sunshine_state.json (workingDir = seatDir).
+    /// Apollo is pointed here via file_state = {seatDir}/config/sunshine_state.json in the config.
     /// Only creates the file if absent — preserves pairings on re-provision.
     /// </summary>
     private void EnsureSeatStateFile(string seatDir)
