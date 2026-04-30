@@ -12,6 +12,11 @@ public sealed class MultiSeatOptions
     public string ApolloExePath { get; set; } = Shared.Constants.DefaultApolloPath;
     public string ApolloConfigDir { get; set; } = Shared.Constants.DefaultApolloConfigDir;
 
+    // NVENC quality preset: 1 (P1, lowest latency) → 7 (P7, highest quality).
+    // P4 is balanced — good quality without perceptible encode latency.
+    // Apollo default is 1; we raise it because the NVENC hardware handles P4 at full framerate.
+    public int NvencPreset { get; set; } = 4;
+
     // ── API ──────────────────────────────────────────────────────────
     public int ApiPort { get; set; } = Shared.Constants.DefaultApiPort;
     public string ApiKey { get; set; } = string.Empty;  // set in appsettings or env

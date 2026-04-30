@@ -112,6 +112,25 @@ public sealed class ApolloConfigBuilder
         sb.AppendLine("encoder = nvenc");
         sb.AppendLine();
 
+        // ── NVENC tuning ──────────────────────────────────────────────
+        // nvenc_preset: 1 (P1, lowest latency) → 7 (P7, highest quality).
+        //   Apollo default=1. P4 adds minor encode latency but meaningfully better motion quality.
+        sb.AppendLine("# NVENC tuning");
+        sb.AppendLine($"nvenc_preset = {_options.NvencPreset}");
+        // nvenc_twopass: preliminary pass improves motion vectors and bitrate distribution.
+        //   quarter_res is already the Apollo default but we set it explicitly.
+        sb.AppendLine("nvenc_twopass = quarter_res");
+        // nvenc_spatial_aq: allocates more bits to flat/uniform regions (e.g. skies, walls).
+        //   Apollo default=false. Worth enabling — free quality improvement on CUDA-capable cards.
+        sb.AppendLine("nvenc_spatial_aq = enabled");
+        // nvenc_vbv_increase: relaxes the single-frame VBV buffer by 20% above the per-frame average.
+        //   Apollo default=0. Reduces blockiness on fast cuts and explosions without hurting avg bitrate.
+        sb.AppendLine("nvenc_vbv_increase = 20");
+        // nvenc_latency_over_power: requests high GPU power state during encode.
+        //   Apollo default=true — explicit for clarity.
+        sb.AppendLine("nvenc_latency_over_power = enabled");
+        sb.AppendLine();
+
         // ── Audio output (game audio → Moonlight) ─────────────────────
         // audio_sink: Apollo WASAPI loopback-captures from this render device to stream game
         // audio to Moonlight. Requires audiomode:i:1 in the RDP session (set in Default.rdp)
