@@ -1,5 +1,5 @@
 import { useState } from "react";
-import type { AccountInfo } from "../api/types";
+import type { AccountInfo, NvencQualityPreset } from "../api/types";
 import { seats as seatsApi } from "../api/client";
 
 interface Props {
@@ -20,6 +20,7 @@ export function CreateSeatForm({ accounts, onCreated }: Props) {
   const [accountName, setAccountName] = useState("");
   const [resolution, setResolution] = useState("1080p");
   const [fps, setFps] = useState(60);
+  const [nvencPreset, setNvencPreset] = useState<NvencQualityPreset>("Balanced");
   const [creating, setCreating] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -37,6 +38,7 @@ export function CreateSeatForm({ accounts, onCreated }: Props) {
         width: res.w,
         height: res.h,
         fps,
+        nvencPreset,
       });
       onCreated();
       setAccountName("");
@@ -85,6 +87,22 @@ export function CreateSeatForm({ accounts, onCreated }: Props) {
           <option value={160}>160</option>
           <option value={240}>240</option>
         </select>
+      </label>
+
+      <label>
+        Quality
+        <div className="preset-toggle">
+          {(["Latency", "Balanced", "Quality"] as NvencQualityPreset[]).map((p) => (
+            <button
+              key={p}
+              type="button"
+              className={`preset-btn${nvencPreset === p ? " preset-btn--active" : ""}`}
+              onClick={() => setNvencPreset(p)}
+            >
+              {p}
+            </button>
+          ))}
+        </div>
       </label>
 
       {error && <div className="error-banner">{error}</div>}

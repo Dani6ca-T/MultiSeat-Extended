@@ -1,5 +1,7 @@
 // Mirrors MultiSeat.Shared.Models — keep in sync with the C# models
 
+export type NvencQualityPreset = "Latency" | "Balanced" | "Quality";
+
 export type SeatStatus =
   | "Idle"
   | "Provisioning"
@@ -28,6 +30,7 @@ export interface SeatInfo {
   errorMessage: string | null;
   launchApp: string | null;
   autoStart: boolean;
+  nvencPreset: NvencQualityPreset;
 }
 
 export interface SeatPreset {
@@ -37,6 +40,7 @@ export interface SeatPreset {
   height: number;
   fps: number;
   autoStart: boolean;
+  nvencPreset: NvencQualityPreset;
   createdAt: string;
 }
 
@@ -46,6 +50,7 @@ export interface SeatRequest {
   height?: number;
   fps?: number;
   launchApp?: string;
+  nvencPreset?: NvencQualityPreset;
 }
 
 export interface LaunchAppRequest {

@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from "react";
-import type { SeatInfo, SeatServices } from "../api/types";
+import type { SeatInfo, SeatServices, NvencQualityPreset } from "../api/types";
 import { seats as seatsApi } from "../api/client";
 import { StatusBadge } from "./StatusBadge";
 
@@ -17,6 +17,7 @@ export function SeatCard({ seat, onUpdate }: Props) {
   const [showServices, setShowServices] = useState(false);
   const [actionLoading, setActionLoading] = useState<string | null>(null);
   const [autoStartLoading, setAutoStartLoading] = useState(false);
+  const [presetLoading, setPresetLoading] = useState(false);
 
   const isActive = seat.status === "Ready" || seat.status === "Streaming";
 
@@ -36,6 +37,19 @@ export function SeatCard({ seat, onUpdate }: Props) {
     const interval = setInterval(fetchServices, 3000);
     return () => clearInterval(interval);
   }, [fetchServices, showServices]);
+
+  const handleNvencPreset = async (preset: NvencQualityPreset) => {
+    if (preset === seat.nvencPreset || presetLoading) return;
+    setPresetLoading(true);
+    try {
+      await seatsApi.setNvencPreset(seat.id, preset);
+      onUpdate();
+    } catch (e) {
+      alert(e instanceof Error ? e.message : "Failed to change quality preset");
+    } finally {
+      setPresetLoading(false);
+    }
+  };
 
   const handleAutoStart = async () => {
     setAutoStartLoading(true);
@@ -155,6 +169,28 @@ export function SeatCard({ seat, onUpdate }: Props) {
             >
               {autoStartLoading ? "..." : seat.autoStart ? "On" : "Off"}
             </button>
+          </div>
+        )}
+
+        {/* NVENC quality preset */}
+        {seat.status !== "Idle" && seat.status !== "TearingDown" && (
+          <div className="autostart-row">
+            <span className="stat-label">Quality</span>
+            <div className="preset-toggle">
+              {(["Latency", "Balanced", "Quality"] as NvencQualityPreset[]).map((p) => (
+                <button
+                  key={p}
+                  className={`preset-btn${seat.nvencPreset === p ? " preset-btn--active" : ""}`}
+                  onClick={() => handleNvencPreset(p)}
+                  disabled={presetLoading}
+                  title={p === "Latency" ? "P1 — lowest encode latency"
+                       : p === "Quality" ? "P7 — best quality, more GPU"
+                       : "P4 — balanced (default)"}
+                >
+                  {presetLoading && seat.nvencPreset !== p ? p : p}
+                </button>
+              ))}
+            </div>
           </div>
         )}
 

@@ -10,6 +10,7 @@ import type {
   ControllerAssignments,
   HookStatus,
   SeatServices,
+  NvencQualityPreset,
 } from "./types";
 
 const BASE = "/api";
@@ -104,6 +105,12 @@ export const seats = {
     request<{ autoStart: boolean }>(`/seats/${id}/autostart`, {
       method: "PUT",
       body: JSON.stringify({ enabled }),
+    }),
+
+  setNvencPreset: (id: string, preset: NvencQualityPreset) =>
+    request<{ preset: string }>(`/seats/${id}/nvenc-preset`, {
+      method: "POST",
+      body: JSON.stringify({ preset }),
     }),
 };
 

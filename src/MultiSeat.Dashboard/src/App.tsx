@@ -4,6 +4,7 @@ import { AccountsPage } from "./pages/AccountsPage";
 import { SystemPage } from "./pages/SystemPage";
 import { InputPage } from "./pages/InputPage";
 import { SettingsPage } from "./pages/SettingsPage";
+import { TipsPage } from "./pages/TipsPage";
 
 export default function App() {
   return (
@@ -31,6 +32,9 @@ export default function App() {
             <NavLink to="/settings">
               Settings
             </NavLink>
+            <NavLink to="/tips">
+              Tips
+            </NavLink>
           </div>
         </nav>
 
@@ -41,6 +45,7 @@ export default function App() {
             <Route path="/accounts" element={<AccountsPage />} />
             <Route path="/system" element={<SystemPage />} />
             <Route path="/settings" element={<SettingsPage />} />
+            <Route path="/tips" element={<TipsPage />} />
           </Routes>
         </main>
       </div>

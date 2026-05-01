@@ -491,6 +491,67 @@ select:focus {
   cursor: not-allowed;
 }
 
+/* ── NVENC quality preset toggle ─────────────────────────────── */
+.preset-toggle {
+  display: flex;
+  gap: 4px;
+}
+
+.preset-btn {
+  padding: 3px 10px;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  background: var(--bg-secondary);
+  color: var(--text-secondary);
+  font-size: 12px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.preset-btn:hover:not(:disabled) {
+  border-color: var(--accent);
+  color: var(--text-primary);
+}
+
+.preset-btn--active {
+  background: #1e3a5f;
+  border-color: #3b82f6;
+  color: #93c5fd;
+}
+
+.preset-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* ── Tips page ───────────────────────────────────────────────── */
+.tips-body p {
+  font-size: 13px;
+  color: var(--text-secondary);
+  line-height: 1.6;
+  margin-bottom: 8px;
+}
+
+.tips-body ul {
+  margin: 0;
+  padding-left: 18px;
+}
+
+.tips-body li {
+  font-size: 13px;
+  color: var(--text-secondary);
+  line-height: 1.7;
+}
+
+.tips-body a {
+  color: var(--accent);
+  text-decoration: none;
+}
+
+.tips-body a:hover {
+  text-decoration: underline;
+}
+
 /* ── Info banner ─────────────────────────────────────────────── */
 .info-banner {
   background: #1e3a5f;
