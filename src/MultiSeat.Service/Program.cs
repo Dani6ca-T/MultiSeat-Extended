@@ -96,6 +96,13 @@ builder.Services.AddWindowsService(options =>
     options.ServiceName = "MultiSeatService";
 });
 
+// Give the host enough time to tear down all seats gracefully.
+// Default is 5 seconds; seat teardown (Apollo kill + session logoff) can take 30-60s.
+builder.Services.Configure<HostOptions>(options =>
+{
+    options.ShutdownTimeout = TimeSpan.FromSeconds(60);
+});
+
 // ── Core services (singletons — one per host lifetime) ───────────────
 builder.Services.AddSingleton<AccountManager>();
 builder.Services.AddSingleton<SessionLauncher>();

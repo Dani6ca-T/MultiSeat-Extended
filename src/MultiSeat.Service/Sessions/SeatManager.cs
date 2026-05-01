@@ -386,8 +386,7 @@ public sealed class SeatManager
     public async Task TeardownAllAsync(CancellationToken ct)
     {
         var ids = _seats.Keys.ToList();
-        foreach (var id in ids)
-            await TeardownSeatAsync(id, ct);
+        await Task.WhenAll(ids.Select(id => TeardownSeatAsync(id, ct)));
     }
 
     private async Task TeardownSeatInternalAsync(SeatInfo seat, CancellationToken ct)

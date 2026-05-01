@@ -387,14 +387,17 @@ public sealed class SessionLauncher
             }
         }
 
-        if (!WtsApi.WTSLogoffSession(WtsApi.WTS_CURRENT_SERVER_HANDLE, sessionId, true))
+        // Non-blocking: session logs off asynchronously; we don't wait.
+        // Blocking (bWait: true) takes 10-30s per seat and causes the SCM stop
+        // timeout to expire during shutdown.
+        if (!WtsApi.WTSLogoffSession(WtsApi.WTS_CURRENT_SERVER_HANDLE, sessionId, false))
         {
             _logger.LogWarning("WTSLogoffSession({Sid}) failed: {Err}",
                 sessionId, Marshal.GetLastWin32Error());
         }
         else
         {
-            _logger.LogInformation("Session {Sid} logged off", sessionId);
+            _logger.LogInformation("Session {Sid} logoff initiated", sessionId);
         }
     }
 
