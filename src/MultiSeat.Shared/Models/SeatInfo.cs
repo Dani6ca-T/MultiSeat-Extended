@@ -47,4 +47,5 @@ public sealed class SeatInfo
 
     // Preset
     public bool AutoStart { get; set; } = false;
+    public NvencQualityPreset NvencPreset { get; set; } = NvencQualityPreset.Balanced;
 }

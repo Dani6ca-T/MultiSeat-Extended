@@ -104,6 +104,7 @@ public sealed class SeatManager
             Height = request.Height,
             Fps = request.Fps,
             LaunchApp = request.LaunchApp,
+            NvencPreset = request.NvencPreset,
             Status = SeatStatus.Provisioning
         };
 
@@ -509,7 +510,7 @@ public sealed class SeatManager
         _logger.LogInformation("Seat {Id}: Apollo restarted by user (PID {Pid})", seatId, seat.ApolloProcessId);
     }
 
-    /// <summary>Reset the audio routing for a seat (release + re-assign cable).</summary>
+    /// <summary>Reset the audio routing for a seat (release + re-assign cable + re-apply session defaults).</summary>
     public void ResetAudio(Guid seatId)
     {
         var seat = GetSeat(seatId)
@@ -518,8 +519,99 @@ public sealed class SeatManager
         _audioRouter.ReleaseCable(seat);
         seat.VacCableIndex = _audioRouter.AssignCable(seat);
 
+        ApplyAudioDefaults(seat);
+
         _ = BroadcastState(seat);
         _logger.LogInformation("Seat {Id}: audio reset, cable #{C}", seatId, seat.VacCableIndex);
+    }
+
+    /// <summary>
+    /// Re-run the --set-default-render and --set-default-capture helpers in the seat's session
+    /// without reassigning devices. Call this to fix audio when the initial helper invocation
+    /// during provisioning failed or ran in the wrong session.
+    /// </summary>
+    public void ApplyAudioDefaults(Guid seatId)
+    {
+        var seat = GetSeat(seatId)
+            ?? throw new InvalidOperationException("Seat not found.");
+        ApplyAudioDefaults(seat);
+    }
+
+    private void ApplyAudioDefaults(SeatInfo seat)
+    {
+        var helperExe = Path.Combine(AppContext.BaseDirectory, "MultiSeat.Service.exe");
+
+        if (!string.IsNullOrEmpty(seat.AudioGameRenderDeviceId))
+        {
+            try
+            {
+                _sessionLauncher.RunHelperInSeatSession(
+                    seat.SessionId, seat.AccountName,
+                    $"\"{helperExe}\" --set-default-render \"{seat.AudioGameRenderDeviceId}\"");
+                _logger.LogInformation(
+                    "Seat {Id}: applied render default {Dev} in session {Sid}",
+                    seat.Id, seat.AudioGameRenderDeviceId, seat.SessionId);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex,
+                    "Seat {Id}: could not apply render default (non-critical)", seat.Id);
+            }
+        }
+
+        if (!string.IsNullOrEmpty(seat.AudioCaptureDeviceId))
+        {
+            try
+            {
+                _sessionLauncher.RunHelperInSeatSession(
+                    seat.SessionId, seat.AccountName,
+                    $"\"{helperExe}\" --set-default-capture \"{seat.AudioCaptureDeviceId}\"");
+                _logger.LogInformation(
+                    "Seat {Id}: applied capture default {Dev} in session {Sid}",
+                    seat.Id, seat.AudioCaptureDeviceId, seat.SessionId);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex,
+                    "Seat {Id}: could not apply capture default (non-critical)", seat.Id);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Change the NVENC quality preset for a live seat.
+    /// Updates the seat's NvencPreset, regenerates sunshine.conf, and restarts Apollo.
+    /// Also persists the change to the autostart preset if AutoStart is enabled.
+    /// </summary>
+    public async Task SetNvencPresetAsync(Guid seatId, NvencQualityPreset preset,
+        SeatPresetStore presetStore, CancellationToken ct)
+    {
+        var seat = GetSeat(seatId)
+            ?? throw new InvalidOperationException("Seat not found.");
+
+        seat.NvencPreset = preset;
+
+        _apolloManager.KillForReconnect(seat);
+        await Task.Delay(500, ct);
+        seat.ApolloProcessId = await _apolloManager.StartAsync(seat, ct);
+
+        if (seat.AutoStart)
+        {
+            presetStore.Upsert(new SeatPreset
+            {
+                AccountName = seat.AccountName,
+                Width = seat.Width,
+                Height = seat.Height,
+                Fps = seat.Fps,
+                AutoStart = true,
+                NvencPreset = preset,
+            });
+        }
+
+        _ = BroadcastState(seat);
+        _logger.LogInformation(
+            "Seat {Id}: NVENC preset changed to {Preset} (Apollo PID {Pid})",
+            seatId, preset, seat.ApolloProcessId);
     }
 
     /// <summary>Recreate the virtual display for a seat.</summary>

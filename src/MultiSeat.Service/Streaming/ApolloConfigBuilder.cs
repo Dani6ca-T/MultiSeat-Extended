@@ -95,7 +95,11 @@ public sealed class ApolloConfigBuilder
         // always_use_virtual_display is NOT a sunshine.conf key in ClassicOldSong/Apollo — it
         // was moved to per-paired-device state in sunshine_state.json. MultiSeat manages the
         // virtual display externally via VirtualDisplayManager; output_name points Apollo at it.
-        sb.AppendLine("# Display — output_name patched in after SudoVDA display creation");
+        sb.AppendLine("# Display — output_name set to SudoVDA virtual display UUID");
+        if (!string.IsNullOrEmpty(seat.DisplayDevicePath))
+            sb.AppendLine($"output_name = {seat.DisplayDevicePath}");
+        else
+            sb.AppendLine("# output_name = pending");
         sb.AppendLine($"resolutions = [{seat.Width}x{seat.Height}]");
         // Provide all standard framerates up to the seat's configured max so Moonlight
         // can offer the user a choice. Apollo picks the closest supported rate.
@@ -112,21 +116,13 @@ public sealed class ApolloConfigBuilder
         sb.AppendLine();
 
         // ── NVENC tuning ──────────────────────────────────────────────
-        // nvenc_preset: 1 (P1, lowest latency) → 7 (P7, highest quality).
-        //   Apollo default=1. P4 adds minor encode latency but meaningfully better motion quality.
-        sb.AppendLine("# NVENC tuning");
-        sb.AppendLine($"nvenc_preset = {_options.NvencPreset}");
-        // nvenc_twopass: preliminary pass improves motion vectors and bitrate distribution.
-        //   quarter_res is already the Apollo default but we set it explicitly.
-        sb.AppendLine("nvenc_twopass = quarter_res");
-        // nvenc_spatial_aq: allocates more bits to flat/uniform regions (e.g. skies, walls).
-        //   Apollo default=false. Worth enabling — free quality improvement on CUDA-capable cards.
-        sb.AppendLine("nvenc_spatial_aq = enabled");
-        // nvenc_vbv_increase: relaxes the single-frame VBV buffer by 20% above the per-frame average.
-        //   Apollo default=0. Reduces blockiness on fast cuts and explosions without hurting avg bitrate.
-        sb.AppendLine("nvenc_vbv_increase = 20");
-        // nvenc_latency_over_power: requests high GPU power state during encode.
-        //   Apollo default=true — explicit for clarity.
+        var (nvencPresetNum, nvencTwopass, nvencSpatialAq, nvencVbvIncrease) =
+            GetNvencSettings(seat.NvencPreset);
+        sb.AppendLine($"# NVENC tuning — {seat.NvencPreset} preset");
+        sb.AppendLine($"nvenc_preset = {nvencPresetNum}");
+        sb.AppendLine($"nvenc_twopass = {nvencTwopass}");
+        sb.AppendLine($"nvenc_spatial_aq = {nvencSpatialAq}");
+        sb.AppendLine($"nvenc_vbv_increase = {nvencVbvIncrease}");
         sb.AppendLine("nvenc_latency_over_power = enabled");
         sb.AppendLine();
 
@@ -247,7 +243,7 @@ public sealed class ApolloConfigBuilder
         if (updated)
         {
             File.WriteAllLines(configPath, lines, Encoding.UTF8);
-            _logger.LogDebug("Updated output_name in {Path}", configPath);
+            _logger.LogInformation("Updated output_name={DevicePath} in {Path}", displayDevicePath, configPath);
         }
     }
 
@@ -451,4 +447,14 @@ public sealed class ApolloConfigBuilder
             }
         }
     }
+
+    // ── NVENC preset tables ───────────────────────────────────────────────
+
+    private static (int preset, string twopass, string spatialAq, int vbvIncrease)
+        GetNvencSettings(NvencQualityPreset quality) => quality switch
+    {
+        NvencQualityPreset.Latency  => (1, "disabled",    "disabled", 0),
+        NvencQualityPreset.Quality  => (7, "full_res",    "enabled",  40),
+        _                           => (4, "quarter_res", "enabled",  20),  // Balanced
+    };
 }

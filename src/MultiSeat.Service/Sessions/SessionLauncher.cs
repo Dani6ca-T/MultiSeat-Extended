@@ -787,10 +787,15 @@ public sealed class SessionLauncher
         // it defaults to Session 0. Without this, CreateProcessAsUser launches the helper in
         // Session 0 and ChangeDisplaySettingsEx(null) changes the wrong display.
         var sid = sessionId;
-        AdvApi.SetTokenInformation(
-            token.DangerousGetHandle(),
-            AdvApi.TokenInformationClass.TokenSessionId,
-            ref sid, sizeof(int));
+        if (!AdvApi.SetTokenInformation(
+                token.DangerousGetHandle(),
+                AdvApi.TokenInformationClass.TokenSessionId,
+                ref sid, sizeof(int)))
+        {
+            _logger.LogWarning(
+                "SetTokenInformation(TokenSessionId={Sid}) failed: error {Err} — helper may run in wrong session",
+                sessionId, Marshal.GetLastWin32Error());
+        }
 
         if (!UserEnv.CreateEnvironmentBlock(out var envBlock, token, false))
             envBlock = IntPtr.Zero;
@@ -820,7 +825,20 @@ public sealed class SessionLauncher
             }
 
             Kernel32.CloseHandle(pi.hThread);
-            Kernel32.WaitForSingleObject(pi.hProcess, 10_000);
+            var waitResult = Kernel32.WaitForSingleObject(pi.hProcess, 10_000);
+
+            if (Kernel32.GetExitCodeProcess(pi.hProcess, out var exitCode))
+            {
+                if (exitCode != 0)
+                    _logger.LogWarning(
+                        "Helper '{Cmd}' in session {Sid} exited with code {Code}",
+                        commandLine, sessionId, exitCode);
+                else
+                    _logger.LogDebug(
+                        "Helper '{Cmd}' in session {Sid} exited OK (waitResult={W})",
+                        commandLine, sessionId, waitResult);
+            }
+
             Kernel32.CloseHandle(pi.hProcess);
         }
         finally

@@ -132,6 +132,23 @@ public static class SeatEndpoints
             }
         });
 
+        // Re-run --set-default-render / --set-default-capture in the seat's live session
+        // without reassigning devices. Use this when audio is silent after provisioning.
+        group.MapPost("/{id:guid}/audio/apply-defaults", (Guid id, SeatManager mgr) =>
+        {
+            if (mgr.GetSeat(id) is null)
+                return Results.NotFound();
+            try
+            {
+                mgr.ApplyAudioDefaults(id);
+                return Results.Ok(new { status = "applied" });
+            }
+            catch (InvalidOperationException ex)
+            {
+                return Results.BadRequest(new { error = ex.Message });
+            }
+        });
+
         group.MapPost("/{id:guid}/display/reset",
             async (Guid id, SeatManager mgr, CancellationToken ct) =>
             {
@@ -185,6 +202,7 @@ public static class SeatEndpoints
                         Height = seat.Height,
                         Fps = seat.Fps,
                         AutoStart = true,
+                        NvencPreset = seat.NvencPreset,
                     });
                 }
                 else
@@ -204,6 +222,23 @@ public static class SeatEndpoints
 
                 await sessionLauncher.LaunchSessionAsync(seat.AccountName, ct);
                 return Results.Ok(new { sessionId = seat.SessionId, message = "Session reconnected" });
+            });
+
+        group.MapPost("/{id:guid}/nvenc-preset",
+            async (Guid id, NvencPresetRequest req, SeatManager mgr,
+                   SeatPresetStore presets, CancellationToken ct) =>
+            {
+                if (mgr.GetSeat(id) is null)
+                    return Results.NotFound();
+                try
+                {
+                    await mgr.SetNvencPresetAsync(id, req.Preset, presets, ct);
+                    return Results.Ok(new { preset = req.Preset.ToString() });
+                }
+                catch (InvalidOperationException ex)
+                {
+                    return Results.BadRequest(new { error = ex.Message });
+                }
             });
     }
 }

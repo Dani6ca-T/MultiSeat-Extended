@@ -147,6 +147,7 @@ public sealed class MultiSeatWorker : BackgroundService
                         Width = preset.Width,
                         Height = preset.Height,
                         Fps = preset.Fps,
+                        NvencPreset = preset.NvencPreset,
                     }, ct);
 
                 seat.AutoStart = true;

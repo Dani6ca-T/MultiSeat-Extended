@@ -12,5 +12,6 @@ public sealed class SeatPreset
     public int Height { get; set; } = 1080;
     public int Fps { get; set; } = 60;
     public bool AutoStart { get; set; } = false;
+    public NvencQualityPreset NvencPreset { get; set; } = NvencQualityPreset.Balanced;
     public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;
 }

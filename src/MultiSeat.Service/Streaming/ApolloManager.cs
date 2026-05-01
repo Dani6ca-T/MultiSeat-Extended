@@ -348,7 +348,10 @@ public sealed class ApolloManager
 
         try
         {
-            var text = File.ReadAllText(logPath);
+            string text;
+            using (var fs = new FileStream(logPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite))
+            using (var sr = new StreamReader(fs))
+                text = sr.ReadToEnd();
 
             var marker = "Currently available display devices:";
             var start = text.IndexOf(marker, StringComparison.Ordinal);
@@ -364,27 +367,40 @@ public sealed class ApolloManager
             var json = text[jsonStart..(jsonEnd + 2)];
 
             // Walk through each display entry and find the SudoVDA one.
-            // JSON field order: device_id → display_name → edid → friendly_name
-            // We capture device_id (UUID) and check friendly_name for SudoVDA.
+            // JSON field order: device_id → display_name → edid → friendly_name → info (numerator)
+            //
+            // Primary match: friendly_name contains "VDD", "SudoVDA", or "SudoMaker".
+            // Fallback: SudoVDA registers at 1000Hz by default. When running inside an RDP
+            // session, libdisplaydevice returns friendly_name="" for the virtual display
+            // (no EDID, no SetupDi description available in the session context). In that
+            // case we fall back to the first display whose refresh rate numerator is 1000.
             string? currentDeviceId = null;
+            int currentNumerator = 0;
+            string? hz1000Candidate = null;
 
             foreach (var line in json.Split('\n'))
             {
                 var trimmed = line.Trim().TrimEnd(',');
 
-                // Capture device_id (UUID like {f0cfefd7-be89-5733-a759-8fe046803517})
+                // New display object — finalize previous 1000Hz candidate if applicable
                 var deviceIdMatch = Regex.Match(trimmed,
                     @"""device_id""\s*:\s*""([^""]+)""");
                 if (deviceIdMatch.Success)
                 {
+                    if (currentDeviceId != null && currentNumerator == 1000)
+                        hz1000Candidate ??= currentDeviceId;
+
                     currentDeviceId = deviceIdMatch.Groups[1].Value;
+                    currentNumerator = 0;
                     continue;
                 }
 
-                // Check if this is the SudoVDA display by friendly name
+                if (currentDeviceId == null) continue;
+
+                // Check friendly_name — allow empty string ([^"]* not [^"]+)
                 var nameMatch = Regex.Match(trimmed,
-                    @"""friendly_name""\s*:\s*""([^""]+)""");
-                if (nameMatch.Success && currentDeviceId != null)
+                    @"""friendly_name""\s*:\s*""([^""]*)""");
+                if (nameMatch.Success)
                 {
                     var friendlyName = nameMatch.Groups[1].Value;
                     if (IsSudoVdaFriendlyName(friendlyName))
@@ -394,15 +410,33 @@ public sealed class ApolloManager
                             currentDeviceId, friendlyName);
                         return currentDeviceId;
                     }
-
-                    // friendly_name closes the display object — reset for next entry
-                    currentDeviceId = null;
+                    continue;
                 }
+
+                // Track refresh-rate numerator for 1000Hz fallback
+                var numeratorMatch = Regex.Match(trimmed, @"""numerator""\s*:\s*(\d+)");
+                if (numeratorMatch.Success &&
+                    int.TryParse(numeratorMatch.Groups[1].Value, out var num))
+                {
+                    currentNumerator = Math.Max(currentNumerator, num);
+                }
+            }
+
+            // Finalize last display entry
+            if (currentDeviceId != null && currentNumerator == 1000)
+                hz1000Candidate ??= currentDeviceId;
+
+            if (hz1000Candidate != null)
+            {
+                _logger.LogInformation(
+                    "Found SudoVDA display by 1000Hz refresh rate (friendly_name was empty): {DeviceId}",
+                    hz1000Candidate);
+                return hz1000Candidate;
             }
         }
         catch (Exception ex)
         {
-            _logger.LogDebug(ex, "Error parsing Apollo log for SudoVDA display");
+            _logger.LogWarning(ex, "Error parsing Apollo log for SudoVDA display at {Path}", logPath);
         }
 
         return null;
