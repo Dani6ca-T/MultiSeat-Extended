@@ -2,7 +2,11 @@
 bin/
 obj/
 publish/
+publish_tmp/
 out/
+
+# TypeScript incremental build info
+*.tsbuildinfo
 
 # IDE
 .vs/
