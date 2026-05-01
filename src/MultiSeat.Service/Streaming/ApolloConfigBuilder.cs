@@ -433,18 +433,26 @@ public sealed class ApolloConfigBuilder
     public void CleanupConfig(Guid seatId, string configDir)
     {
         var seatDir = Path.Combine(configDir, seatId.ToString("N"));
-        if (Directory.Exists(seatDir))
+        if (!Directory.Exists(seatDir)) return;
+
+        try
         {
-            try
+            // Delete junction points (assets, tools) non-recursively first.
+            // Directory.Delete(recursive:true) throws "The parameter is incorrect"
+            // when it hits a reparse point — it must not traverse into junctions.
+            foreach (var entry in Directory.EnumerateFileSystemEntries(seatDir))
             {
-                Directory.Delete(seatDir, recursive: true);
-                _logger.LogDebug("Cleaned up Apollo config dir: {Path}", seatDir);
+                var di = new DirectoryInfo(entry);
+                if (di.Exists && di.Attributes.HasFlag(FileAttributes.ReparsePoint))
+                    di.Delete();
             }
-            catch (Exception ex)
-            {
-                _logger.LogWarning(ex,
-                    "Failed to clean up Apollo config dir: {Path}", seatDir);
-            }
+
+            Directory.Delete(seatDir, recursive: true);
+            _logger.LogDebug("Cleaned up Apollo config dir: {Path}", seatDir);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to clean up Apollo config dir: {Path}", seatDir);
         }
     }
 

@@ -224,8 +224,7 @@ if ($vmExe) {
         }
     }
 } else {
-    Write-Host "  NOTE: VoiceMeeter not found — audio isolation unavailable. " `
-        "Run prerequisites\install-prerequisites.ps1." -ForegroundColor Yellow
+    Write-Host "  NOTE: VoiceMeeter not found - audio isolation unavailable. Run prerequisites\install-prerequisites.ps1." -ForegroundColor Yellow
 }
 
 # -- Disable default ApolloService (prevents port 47984 conflicts) ------------

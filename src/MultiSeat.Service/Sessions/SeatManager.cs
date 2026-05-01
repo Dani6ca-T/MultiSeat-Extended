@@ -177,26 +177,6 @@ public sealed class SeatManager
             _logger.LogDebug("Seat {Id}: VDA ready ({W}x{H}@{F})",
                 seat.Id, seat.Width, seat.Height, seat.Fps);
 
-            // ── 3.5. Set RDP session display Hz ──────────────────────
-            // The "Microsoft Remote Display Adapter" in the RDP session is what
-            // Apollo falls back to when SudoVDA isn't available, and what mstsc
-            // renders. Its refresh rate is session-scoped so we inject a helper
-            // into the session to call ChangeDisplaySettingsEx(null) from within.
-            try
-            {
-                var helperExe = Path.Combine(AppContext.BaseDirectory, "MultiSeat.Service.exe");
-                _sessionLauncher.RunHelperInSeatSession(
-                    seat.SessionId, seat.AccountName,
-                    $"\"{helperExe}\" --set-display-hz {seat.Fps}");
-                _logger.LogInformation(
-                    "Seat {Id}: session display set to {F}Hz", seat.Id, seat.Fps);
-            }
-            catch (Exception ex)
-            {
-                _logger.LogWarning(ex,
-                    "Seat {Id}: could not set session display Hz (non-critical)", seat.Id);
-            }
-
             // ── 4. Firewall ───────────────────────────────────────────
             await _firewall.OpenPortsAsync(seat, ct);
 
