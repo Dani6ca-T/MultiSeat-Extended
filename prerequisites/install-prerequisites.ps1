@@ -632,15 +632,15 @@ Write-Step "Apollo (game streaming server)"
 
 $apolloInstallDir = "C:\Program Files\Apollo"
 $apolloPath = "$apolloInstallDir\sunshine.exe"
-$apolloZipName = "apollo-v2026.4.30-multiseat.1-windows-x64.zip"
-$apolloDownloadUrl = "https://github.com/vibesoftwarecoder/Apollo/releases/download/v2026.4.30-multiseat.1/$apolloZipName"
+$apolloZipName = "apollo-v2026.4.30-multiseat.3-windows-x64.zip"
+$apolloDownloadUrl = "https://github.com/vibesoftwarecoder/Apollo/releases/download/v2026.4.30-multiseat.3/$apolloZipName"
 
 if (Test-Path $apolloPath) {
     Write-OK "Already installed at $apolloPath"
 } else {
     $zip = Get-ChildItem $ScriptDir | Where-Object { $_.Name -eq $apolloZipName } | Select-Object -First 1
     if (-not $zip) {
-        $f = Get-Prerequisite $apolloZipName $apolloDownloadUrl "Apollo v2026.4.30-multiseat.1 (vibesoftwarecoder fork)"
+        $f = Get-Prerequisite $apolloZipName $apolloDownloadUrl "ApolloVibe v2026.4.30-multiseat.3 (vibesoftwarecoder fork)"
         if ($f) { $zip = Get-Item $f }
     }
     if ($zip) {
