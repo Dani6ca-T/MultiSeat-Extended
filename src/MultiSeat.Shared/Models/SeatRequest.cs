@@ -10,9 +10,28 @@ public enum NvencQualityPreset
 public sealed class SeatRequest
 {
     public required string AccountName { get; init; }
-    public int Width { get; init; } = 1920;
-    public int Height { get; init; } = 1080;
-    public int Fps { get; init; } = 60;
+
+    private int _width = 1920;
+    public int Width
+    {
+        get => _width;
+        init => _width = Math.Clamp(value, 640, 7680);
+    }
+
+    private int _height = 1080;
+    public int Height
+    {
+        get => _height;
+        init => _height = Math.Clamp(value, 480, 4320);
+    }
+
+    private int _fps = 60;
+    public int Fps
+    {
+        get => _fps;
+        init => _fps = Math.Clamp(value, 1, 240);
+    }
+
     public string? LaunchApp { get; init; }
     public NvencQualityPreset NvencPreset { get; init; } = NvencQualityPreset.Balanced;
 }

@@ -14,6 +14,8 @@ public static class AccountEndpoints
 
         group.MapPost("/", (AccountCreateRequest request, AccountManager mgr) =>
         {
+            if (!ApiInputValidation.IsValidAccountName(request.Username))
+                return ApiInputValidation.AccountNameError();
             try
             {
                 var account = mgr.CreateAccount(request.Username, request.Password);
@@ -27,6 +29,8 @@ public static class AccountEndpoints
 
         group.MapPost("/link", (AccountCreateRequest request, AccountManager mgr) =>
         {
+            if (!ApiInputValidation.IsValidAccountName(request.Username))
+                return ApiInputValidation.AccountNameError();
             try
             {
                 var account = mgr.LinkExistingAccount(request.Username, request.Password);
@@ -40,6 +44,8 @@ public static class AccountEndpoints
 
         group.MapDelete("/{username}", (string username, AccountManager mgr) =>
         {
+            if (!ApiInputValidation.IsValidAccountName(username))
+                return ApiInputValidation.AccountNameError();
             try
             {
                 mgr.DeleteAccount(username);

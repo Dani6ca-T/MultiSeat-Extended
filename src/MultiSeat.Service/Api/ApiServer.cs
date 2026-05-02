@@ -1,3 +1,4 @@
+using System.Security.Cryptography;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using MultiSeat.Service.Configuration;
@@ -54,6 +55,11 @@ public static class ApiServer
 
         var app = builder.Build();
 
+        // Resolve effective API key — generate and persist if not configured.
+        // Key is saved to C:\ProgramData\MultiSeat\api-key.txt so the operator can
+        // copy it into the dashboard Settings page. It is never embedded in appsettings.json.
+        var apiKey = ResolveApiKey(options.ApiKey);
+
         // ── Middleware ───────────────────────────────────────────────
         app.UseWebSockets();
 
@@ -65,29 +71,33 @@ public static class ApiServer
             app.UseStaticFiles();
         }
 
-        // API key auth middleware (skip if key is empty — dev mode)
-        if (!string.IsNullOrWhiteSpace(options.ApiKey))
+        // API key auth — always enforced for /api/ routes (no bypass for empty key).
+        // Static files and WebSocket upgrade are exempt.
+        app.Use(async (context, next) =>
         {
-            app.Use(async (context, next) =>
+            if (!context.Request.Path.StartsWithSegments("/api") ||
+                context.Request.Path.StartsWithSegments("/ws"))
             {
-                // Skip auth for static files and WebSocket
-                if (context.Request.Path.StartsWithSegments("/ws") ||
-                    (!context.Request.Path.StartsWithSegments("/api")))
-                {
-                    await next();
-                    return;
-                }
-
-                if (!context.Request.Headers.TryGetValue(Constants.ApiKeyHeader, out var key)
-                    || key != options.ApiKey)
-                {
-                    context.Response.StatusCode = 401;
-                    await context.Response.WriteAsJsonAsync(new { error = "Invalid API key" });
-                    return;
-                }
-
                 await next();
-            });
+                return;
+            }
+
+            if (!context.Request.Headers.TryGetValue(Constants.ApiKeyHeader, out var key)
+                || key != apiKey)
+            {
+                context.Response.StatusCode = 401;
+                await context.Response.WriteAsJsonAsync(new { error = "Unauthorized" });
+                return;
+            }
+
+            await next();
+        });
+
+        if (string.IsNullOrWhiteSpace(options.ApiKey))
+        {
+            app.Logger.LogWarning(
+                "No ApiKey set in appsettings.json — a key was auto-generated. " +
+                "Copy it from C:\\ProgramData\\MultiSeat\\api-key.txt into the dashboard Settings page.");
         }
 
         // CORS — restrict to configured origins in production, permissive if none set
@@ -121,5 +131,33 @@ public static class ApiServer
         }
 
         return app;
+    }
+
+    /// <summary>
+    /// Returns the configured API key, or generates+persists a random one if none is set.
+    /// Reads an existing persisted key so the same key survives service restarts.
+    /// </summary>
+    private static string ResolveApiKey(string configured)
+    {
+        if (!string.IsNullOrWhiteSpace(configured))
+            return configured;
+
+        var keyFile = Path.Combine(@"C:\ProgramData\MultiSeat", "api-key.txt");
+
+        if (File.Exists(keyFile))
+        {
+            var persisted = File.ReadAllText(keyFile).Trim();
+            if (!string.IsNullOrWhiteSpace(persisted))
+                return persisted;
+        }
+
+        // Generate a URL-safe 32-char random key
+        var raw = RandomNumberGenerator.GetBytes(24);
+        var generated = Convert.ToBase64String(raw)
+            .Replace('+', 'A').Replace('/', 'B').Replace('=', 'C');
+
+        Directory.CreateDirectory(Path.GetDirectoryName(keyFile)!);
+        File.WriteAllText(keyFile, generated);
+        return generated;
     }
 }

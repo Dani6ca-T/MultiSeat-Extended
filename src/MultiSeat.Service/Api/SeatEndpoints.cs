@@ -22,6 +22,8 @@ public static class SeatEndpoints
 
         group.MapPost("/", async (SeatRequest request, SeatManager mgr, CancellationToken ct) =>
         {
+            if (!ApiInputValidation.IsValidAccountName(request.AccountName))
+                return ApiInputValidation.AccountNameError();
             try
             {
                 var seat = await mgr.ProvisionSeatAsync(request, ct);

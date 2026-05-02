@@ -77,7 +77,7 @@ public sealed class FirewallManager
             $"advfirewall firewall add rule name=\"{ruleName}-TCP\" " +
             $"dir=in action=allow protocol=TCP localport={tcpPorts} " +
             $"profile=private,domain " +
-            $"description=\"MultiSeat seat {seat.AccountName} — Apollo streaming (TCP)\"",
+            $"description=\"MultiSeat Apollo streaming (TCP)\"",
             ct);
 
         // UDP rule for Video + Audio + Control (streaming data)
@@ -89,7 +89,7 @@ public sealed class FirewallManager
             $"advfirewall firewall add rule name=\"{ruleName}-UDP\" " +
             $"dir=in action=allow protocol=UDP localport={udpPorts} " +
             $"profile=private,domain " +
-            $"description=\"MultiSeat seat {seat.AccountName} — Apollo streaming (UDP)\"",
+            $"description=\"MultiSeat Apollo streaming (UDP)\"",
             ct);
 
         _ruleNames[seat.Id] = ruleName;

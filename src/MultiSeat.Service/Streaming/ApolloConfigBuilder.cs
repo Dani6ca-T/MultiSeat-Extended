@@ -48,7 +48,11 @@ public sealed class ApolloConfigBuilder
         // directory across teardown/re-provision. This lets sunshine_state.json (and thus
         // the server UUID and paired clients) survive seat teardowns, avoiding the need
         // to re-enter a PIN in Moonlight after every re-provision.
-        var seatDir = Path.Combine(configDir, seat.AccountName);
+        var seatDir = Path.GetFullPath(Path.Combine(configDir, seat.AccountName));
+        // Guard against path traversal — seat.AccountName must stay inside configDir.
+        if (!seatDir.StartsWith(Path.GetFullPath(configDir) + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException(
+                $"Account name '{seat.AccountName}' would escape the Apollo config directory.");
         Directory.CreateDirectory(seatDir);
 
         var configPath = Path.Combine(seatDir, "sunshine.conf");
@@ -400,6 +404,9 @@ public sealed class ApolloConfigBuilder
     /// Skips silently if the link already exists. Junction points work without
     /// SeCreateSymbolicLinkPrivilege so they work in SYSTEM context.
     /// </summary>
+    // Characters that would allow escaping a double-quoted cmd.exe argument.
+    private static readonly char[] CmdMetachars = { '"', '\'' };
+
     private void CreateJunctionIfMissing(string linkPath, string targetPath)
     {
         if (Directory.Exists(linkPath)) return;
@@ -407,6 +414,13 @@ public sealed class ApolloConfigBuilder
         if (!Directory.Exists(targetPath))
         {
             _logger.LogWarning("Junction target missing — skipping: {Target}", targetPath);
+            return;
+        }
+
+        // Reject paths with characters that could break out of the quoted cmd.exe argument.
+        if (linkPath.IndexOfAny(CmdMetachars) >= 0 || targetPath.IndexOfAny(CmdMetachars) >= 0)
+        {
+            _logger.LogWarning("Junction paths contain unsafe characters — skipping: {Link} -> {Target}", linkPath, targetPath);
             return;
         }
 
