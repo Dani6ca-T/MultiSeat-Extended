@@ -113,13 +113,33 @@ From any other device on the same LAN:
 http://<host-ip>:9550
 ```
 
-### Step 5 — Create accounts and provision seats
+### Step 5 — Enter your API key
+
+The first time the service starts it auto-generates a random API key and saves it to:
+
+```
+C:\ProgramData\MultiSeat\api-key.txt
+```
+
+Read it in PowerShell:
+
+```powershell
+Get-Content "C:\ProgramData\MultiSeat\api-key.txt"
+```
+
+Then open the dashboard, click the **Settings** gear icon (top-right), paste the key, and click **Save**. The key is stored in your browser's `localStorage` — you only need to enter it once per browser.
+
+> **Fixed key:** Set `"ApiKey": "yourkey"` in `appsettings.json` before first start and the auto-generated file will never be created.
+>
+> **No auth:** Set `"ApiKey": "disabled"` to skip authentication entirely. Only do this on a fully trusted private network — the API can create Windows accounts and launch executables on the host.
+
+### Step 6 — Create accounts and provision seats
 
 1. Go to the **Accounts** tab — create a Windows local account for each seat (e.g., `MultiSeat01`, `MultiSeat02`).
 2. Go to the **Seats** tab — click **+ New Seat**, select an account, and choose resolution and FPS.
 3. Wait ~15 seconds for the seat to reach **Ready** status.
 
-### Step 6 — Connect with Moonlight
+### Step 7 — Connect with Moonlight
 
 Add the host to Moonlight using its IP address and the seat's assigned port:
 
@@ -148,7 +168,7 @@ Edit `appsettings.json` in `C:\Program Files\MultiSeat\` (restart the service af
 | `ApolloExePath` | `C:\Program Files\Apollo\sunshine.exe` | Path to Apollo executable |
 | `ApolloConfigDir` | `C:\ProgramData\MultiSeat\apollo` | Per-seat config directory |
 | `ApiPort` | `9550` | Dashboard port |
-| `ApiKey` | *(empty)* | Optional API key for dashboard access |
+| `ApiKey` | *(auto-generated)* | API key required to access the dashboard. Auto-generated on first start and saved to `C:\ProgramData\MultiSeat\api-key.txt`. Set a fixed value here to override. Set to `disabled` to turn off authentication entirely (only safe on a fully trusted private network). |
 | `VacCableCount` | `4` | Number of installed VB-CABLE devices |
 | `EnableKeyboardMouseIsolation` | `true` | Route keyboard/mouse to the active seat |
 
@@ -175,7 +195,7 @@ Remove-Item "C:\ProgramData\MultiSeat"   -Recurse -Force
 
 - [.NET 9 SDK](https://dotnet.microsoft.com/download/dotnet/9.0)
 - [Node.js 20+](https://nodejs.org/)
-- [CMake 3.20+](https://cmake.org/) and MSVC (only needed for the InputHook DLL)
+- [CMake 3.20+](https://cmake.org/) and [MSYS2 UCRT64](https://www.msys2.org/) with `mingw-w64-ucrt-x86_64-gcc` and `ninja` (only needed for the InputHook DLL — `install-service.ps1` builds it automatically if MSYS2 is present at `C:\msys64`)
 
 > If you ran `prerequisites\install-prerequisites.ps1`, .NET SDK and Node.js are already installed.
 
@@ -203,10 +223,9 @@ node build.cjs     # compiles TypeScript + bundles with Vite
 cd ..\..
 
 # (Optional) Build the InputHook DLL — required for keyboard/mouse isolation
-cd src\MultiSeat.InputHook
-cmake -B build -A x64
-cmake --build build --config Release
-cd ..\..
+# install-service.ps1 builds this automatically when MSYS2 is present at C:\msys64.
+# To build manually, open an MSYS2 UCRT64 terminal and run:
+#   cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release && cmake --build build
 ```
 
 ### Run tests

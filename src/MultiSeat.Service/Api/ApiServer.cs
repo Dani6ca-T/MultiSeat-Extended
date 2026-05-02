@@ -71,29 +71,38 @@ public static class ApiServer
             app.UseStaticFiles();
         }
 
-        // API key auth — always enforced for /api/ routes (no bypass for empty key).
+        // API key auth — enforced for /api/ routes unless explicitly disabled.
         // Static files and WebSocket upgrade are exempt.
-        app.Use(async (context, next) =>
+        // Set ApiKey = "disabled" in appsettings.json to turn off auth on trusted networks.
+        if (!string.IsNullOrEmpty(apiKey))
         {
-            if (!context.Request.Path.StartsWithSegments("/api") ||
-                context.Request.Path.StartsWithSegments("/ws"))
+            app.Use(async (context, next) =>
             {
+                if (!context.Request.Path.StartsWithSegments("/api") ||
+                    context.Request.Path.StartsWithSegments("/ws"))
+                {
+                    await next();
+                    return;
+                }
+
+                if (!context.Request.Headers.TryGetValue(Constants.ApiKeyHeader, out var key)
+                    || key != apiKey)
+                {
+                    context.Response.StatusCode = 401;
+                    await context.Response.WriteAsJsonAsync(new { error = "Unauthorized" });
+                    return;
+                }
+
                 await next();
-                return;
-            }
+            });
+        }
 
-            if (!context.Request.Headers.TryGetValue(Constants.ApiKeyHeader, out var key)
-                || key != apiKey)
-            {
-                context.Response.StatusCode = 401;
-                await context.Response.WriteAsJsonAsync(new { error = "Unauthorized" });
-                return;
-            }
-
-            await next();
-        });
-
-        if (string.IsNullOrWhiteSpace(options.ApiKey))
+        if (options.ApiKey.Equals("disabled", StringComparison.OrdinalIgnoreCase))
+        {
+            app.Logger.LogWarning(
+                "API authentication is DISABLED — the dashboard is open to anyone on the network.");
+        }
+        else if (string.IsNullOrWhiteSpace(options.ApiKey))
         {
             app.Logger.LogWarning(
                 "No ApiKey set in appsettings.json — a key was auto-generated. " +
@@ -139,6 +148,10 @@ public static class ApiServer
     /// </summary>
     private static string ResolveApiKey(string configured)
     {
+        // "disabled" is an explicit opt-out — return empty so the auth middleware is skipped.
+        if (configured.Equals("disabled", StringComparison.OrdinalIgnoreCase))
+            return string.Empty;
+
         if (!string.IsNullOrWhiteSpace(configured))
             return configured;
 
