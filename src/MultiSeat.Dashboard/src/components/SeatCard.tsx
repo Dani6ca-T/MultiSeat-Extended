@@ -172,7 +172,7 @@ export function SeatCard({ seat, onUpdate }: Props) {
           </span>
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-          {seat.status === "Streaming" && <span className="live-badge">● LIVE</span>}
+          {seat.status === "Streaming" && <span className="live-badge">● CONNECTED</span>}
           <StatusBadge status={seat.status} />
         </div>
       </div>

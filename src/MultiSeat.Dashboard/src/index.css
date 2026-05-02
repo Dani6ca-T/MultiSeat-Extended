@@ -607,11 +607,11 @@ select:focus {
 
 /* ── Card status accents ─────────────────────────────────────── */
 .card--ready {
-  border-left: 3px solid var(--accent);
+  border-left: 3px solid #3b6fd4;
 }
 
 .card--streaming {
-  border-left: 3px solid var(--success);
+  border-left: 3px solid var(--accent);
 }
 
 .card--provisioning {
@@ -622,11 +622,11 @@ select:focus {
   border-left: 3px solid var(--danger);
 }
 
-/* ── LIVE badge ──────────────────────────────────────────────── */
+/* ── CONNECTED badge ─────────────────────────────────────────── */
 .live-badge {
   font-size: 11px;
   font-weight: 700;
-  color: var(--success);
+  color: var(--accent);
   letter-spacing: 0.5px;
   animation: pulse 2s ease-in-out infinite;
 }
