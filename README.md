@@ -141,7 +141,9 @@ Then open the dashboard, click the **Settings** gear icon (top-right), paste the
 
 ### Step 7 — Connect with Moonlight
 
-Add the host to Moonlight using its IP address and the seat's assigned port:
+**Recommended: use [MoonlightVibe](https://github.com/vibesoftwarecoder/MoonlightVibe/releases/latest)** — the companion Moonlight fork for MultiSeat. It auto-discovers all active seats from the local MultiSeat service; each seat appears as a separate server in the computer list within ~15 seconds of becoming ready. No manual host entry needed. Also includes mic passthrough support for use with ApolloVibe.
+
+**Standard Moonlight:** add the host manually using its IP address and the seat's assigned port:
 
 ```
 <host-ip>:<seat-port>
