@@ -661,6 +661,27 @@ public sealed class SeatManager
     /// <summary>Get the ApolloManager for API queries.</summary>
     public ApolloManager ApolloManager => _apolloManager;
 
+    public IReadOnlyList<string> GetPairedClients(Guid seatId)
+    {
+        var seat = GetSeat(seatId);
+        if (seat is null) return Array.Empty<string>();
+        return _configBuilder.GetPairedClients(seat.AccountName, _options.ApolloConfigDir);
+    }
+
+    public bool UnpairClient(Guid seatId, string clientName)
+    {
+        var seat = GetSeat(seatId);
+        if (seat is null) return false;
+        return _configBuilder.UnpairClient(seat.AccountName, _options.ApolloConfigDir, clientName);
+    }
+
+    public void UnpairAllClients(Guid seatId)
+    {
+        var seat = GetSeat(seatId);
+        if (seat is null) return;
+        _configBuilder.UnpairAllClients(seat.AccountName, _options.ApolloConfigDir);
+    }
+
     private void UnassignControllersForSeat(Guid seatId)
     {
         foreach (var (idx, assignedSeat) in _inputRouter.GetAssignments())

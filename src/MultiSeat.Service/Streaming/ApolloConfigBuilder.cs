@@ -1,5 +1,7 @@
 using System.Diagnostics;
 using System.Text;
+using System.Text.Json;
+using System.Text.Json.Nodes;
 using Microsoft.Extensions.Options;
 using MultiSeat.Service.Configuration;
 using MultiSeat.Shared;
@@ -462,6 +464,109 @@ public sealed class ApolloConfigBuilder
             _logger.LogWarning(ex, "Failed to clean up Apollo config dir: {Path}", seatDir);
         }
     }
+
+    // ── Paired client management ──────────────────────────────────────────
+
+    /// <summary>
+    /// Returns the names of all Moonlight clients currently paired to this seat.
+    /// Reads named_devices from sunshine_state.json. Returns empty if not provisioned.
+    /// </summary>
+    public IReadOnlyList<string> GetPairedClients(string accountName, string configDir)
+    {
+        var statePath = GetStateFilePath(accountName, configDir);
+        if (!File.Exists(statePath)) return Array.Empty<string>();
+
+        try
+        {
+            var node = JsonNode.Parse(File.ReadAllText(statePath));
+            var devices = node?["root"]?["named_devices"]?.AsArray();
+            if (devices == null) return Array.Empty<string>();
+
+            return devices
+                .Select(d => d?["name"]?.GetValue<string>() ?? "(unknown)")
+                .ToList();
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to read paired clients from {Path}", statePath);
+            return Array.Empty<string>();
+        }
+    }
+
+    /// <summary>
+    /// Removes a single paired Moonlight client by name from sunshine_state.json.
+    /// Returns true if a matching entry was found and removed.
+    /// Changes take effect after Apollo restarts (it holds the file in memory).
+    /// </summary>
+    public bool UnpairClient(string accountName, string configDir, string clientName)
+    {
+        var statePath = GetStateFilePath(accountName, configDir);
+        if (!File.Exists(statePath)) return false;
+
+        try
+        {
+            var node = JsonNode.Parse(File.ReadAllText(statePath));
+            var devices = node?["root"]?["named_devices"]?.AsArray();
+            if (devices == null) return false;
+
+            var removed = false;
+            for (int i = devices.Count - 1; i >= 0; i--)
+            {
+                if (devices[i]?["name"]?.GetValue<string>() == clientName)
+                {
+                    devices.RemoveAt(i);
+                    removed = true;
+                }
+            }
+
+            if (removed)
+            {
+                WriteStateFile(statePath, node!);
+                _logger.LogInformation("Unpaired client '{Name}' from seat {Account}", clientName, accountName);
+            }
+
+            return removed;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to unpair client '{Name}' from {Account}", clientName, accountName);
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Removes all paired Moonlight clients from sunshine_state.json.
+    /// The server UUID is preserved so no re-pairing is needed — clients just
+    /// need to re-pair once to re-establish trust.
+    /// </summary>
+    public void UnpairAllClients(string accountName, string configDir)
+    {
+        var statePath = GetStateFilePath(accountName, configDir);
+        if (!File.Exists(statePath)) return;
+
+        try
+        {
+            var node = JsonNode.Parse(File.ReadAllText(statePath));
+            var devices = node?["root"]?["named_devices"]?.AsArray();
+            if (devices == null) return;
+
+            devices.Clear();
+            WriteStateFile(statePath, node!);
+            _logger.LogInformation("Unpaired all clients from seat {Account}", accountName);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to unpair all clients from {Account}", accountName);
+        }
+    }
+
+    private static string GetStateFilePath(string accountName, string configDir) =>
+        Path.Combine(configDir, accountName, "config", "sunshine_state.json");
+
+    private static void WriteStateFile(string path, JsonNode node) =>
+        File.WriteAllText(path,
+            node.ToJsonString(new JsonSerializerOptions { WriteIndented = true }),
+            Encoding.UTF8);
 
     // ── NVENC preset tables ───────────────────────────────────────────────
 

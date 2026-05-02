@@ -112,6 +112,15 @@ export const seats = {
       method: "POST",
       body: JSON.stringify({ preset }),
     }),
+
+  clients: (id: string) =>
+    request<string[]>(`/seats/${id}/clients`),
+
+  unpairClient: (id: string, name: string) =>
+    request<void>(`/seats/${id}/clients/${encodeURIComponent(name)}`, { method: "DELETE" }),
+
+  unpairAll: (id: string) =>
+    request<void>(`/seats/${id}/clients`, { method: "DELETE" }),
 };
 
 // ── Accounts ──────────────────────────────────────────────────────

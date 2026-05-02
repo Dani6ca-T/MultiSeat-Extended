@@ -731,6 +731,27 @@ select:focus {
   justify-content: flex-end;
 }
 
+/* ── Paired clients panel ────────────────────────────────────── */
+.paired-clients {
+  padding: 8px 0 4px;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 6px;
+}
+
+.paired-clients-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 6px;
+}
+
+.paired-client-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 3px 0;
+}
+
 /* ── Animations ──────────────────────────────────────────────── */
 @keyframes pulse {
   0%, 100% { opacity: 1; }

@@ -224,6 +224,28 @@ public static class SeatEndpoints
                 return Results.Ok(new { sessionId = seat.SessionId, message = "Session reconnected" });
             });
 
+        // ── Paired client management ───────────────────────────────────
+
+        group.MapGet("/{id:guid}/clients", (Guid id, SeatManager mgr) =>
+        {
+            if (mgr.GetSeat(id) is null) return Results.NotFound();
+            return Results.Ok(mgr.GetPairedClients(id));
+        });
+
+        group.MapDelete("/{id:guid}/clients", (Guid id, SeatManager mgr) =>
+        {
+            if (mgr.GetSeat(id) is null) return Results.NotFound();
+            mgr.UnpairAllClients(id);
+            return Results.NoContent();
+        });
+
+        group.MapDelete("/{id:guid}/clients/{name}", (Guid id, string name, SeatManager mgr) =>
+        {
+            if (mgr.GetSeat(id) is null) return Results.NotFound();
+            var removed = mgr.UnpairClient(id, name);
+            return removed ? Results.NoContent() : Results.NotFound();
+        });
+
         group.MapPost("/{id:guid}/nvenc-preset",
             async (Guid id, NvencPresetRequest req, SeatManager mgr,
                    SeatPresetStore presets, CancellationToken ct) =>

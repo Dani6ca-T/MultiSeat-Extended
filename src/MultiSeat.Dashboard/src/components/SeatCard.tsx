@@ -35,6 +35,8 @@ export function SeatCard({ seat, onUpdate }: Props) {
   const [actionLoading, setActionLoading] = useState<string | null>(null);
   const [autoStartLoading, setAutoStartLoading] = useState(false);
   const [presetLoading, setPresetLoading] = useState(false);
+  const [clients, setClients] = useState<string[] | null>(null);
+  const [unpairingClient, setUnpairingClient] = useState<string | null>(null);
 
   const isActive = seat.status === "Ready" || seat.status === "Streaming";
   const isProvisioning = seat.status === "Provisioning" || seat.status === "Configuring";
@@ -43,8 +45,12 @@ export function SeatCard({ seat, onUpdate }: Props) {
   const fetchServices = useCallback(async () => {
     if (!showServices || seat.status === "Idle") return;
     try {
-      const s = await seatsApi.services(seat.id);
+      const [s, c] = await Promise.all([
+        seatsApi.services(seat.id),
+        seatsApi.clients(seat.id),
+      ]);
       setServices(s);
+      setClients(c);
     } catch { /* ignore */ }
   }, [seat.id, seat.status, showServices]);
 
@@ -112,6 +118,30 @@ export function SeatCard({ seat, onUpdate }: Props) {
       alert(e instanceof Error ? e.message : "Failed to launch app");
     } finally {
       setLaunching(false);
+    }
+  };
+
+  const handleUnpair = async (name: string) => {
+    setUnpairingClient(name);
+    try {
+      await seatsApi.unpairClient(seat.id, name);
+      setClients((prev) => prev?.filter((c) => c !== name) ?? null);
+    } catch (e) {
+      alert(e instanceof Error ? e.message : "Failed to unpair client");
+    } finally {
+      setUnpairingClient(null);
+    }
+  };
+
+  const handleUnpairAll = async () => {
+    setUnpairingClient("all");
+    try {
+      await seatsApi.unpairAll(seat.id);
+      setClients([]);
+    } catch (e) {
+      alert(e instanceof Error ? e.message : "Failed to unpair clients");
+    } finally {
+      setUnpairingClient(null);
     }
   };
 
@@ -242,6 +272,39 @@ export function SeatCard({ seat, onUpdate }: Props) {
 
             {showServices && services && (
               <div className="service-panel">
+                {/* Paired Moonlight clients */}
+                <div className="paired-clients">
+                  <div className="paired-clients-header">
+                    <span className="stat-label">Paired Clients</span>
+                    {clients && clients.length > 1 && (
+                      <button
+                        className="btn-sm btn-danger"
+                        disabled={unpairingClient !== null}
+                        onClick={handleUnpairAll}
+                        title="Remove all paired Moonlight clients"
+                      >
+                        {unpairingClient === "all" ? "..." : "Unpair All"}
+                      </button>
+                    )}
+                  </div>
+                  {!clients || clients.length === 0 ? (
+                    <span className="text-muted" style={{ fontSize: 12 }}>No paired clients</span>
+                  ) : (
+                    clients.map((name) => (
+                      <div key={name} className="paired-client-row">
+                        <span style={{ fontSize: 13 }}>{name}</span>
+                        <button
+                          className="btn-sm btn-danger"
+                          disabled={unpairingClient !== null}
+                          onClick={() => handleUnpair(name)}
+                          title={`Unpair ${name}`}
+                        >
+                          {unpairingClient === name ? "..." : "Unpair"}
+                        </button>
+                      </div>
+                    ))
+                  )}
+                </div>
                 <ServiceRow
                   name="Apollo"
                   active={services.apollo}
