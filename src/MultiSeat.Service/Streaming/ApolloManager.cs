@@ -320,9 +320,9 @@ public sealed class ApolloManager
     /// <summary>
     /// Get the log file path for a seat's Apollo instance.
     /// </summary>
-    public string GetLogPath(Guid seatId, string configDir)
+    public string GetLogPath(string accountName, string configDir)
     {
-        var seatDir = Path.Combine(configDir, seatId.ToString("N"));
+        var seatDir = Path.Combine(configDir, accountName);
         return Path.Combine(seatDir, "apollo.log");
     }
 

@@ -263,7 +263,7 @@ public sealed class SeatManager
             await BroadcastState(seat);
 
             {
-                var logPath = _apolloManager.GetLogPath(seat.Id, _options.ApolloConfigDir);
+                var logPath = _apolloManager.GetLogPath(seat.AccountName, _options.ApolloConfigDir);
                 var configPath = _apolloManager.GetConfigPath(seat.Id);
 
                 // Wait for Apollo to initialize SudoVDA IPC and write its display log.
@@ -417,7 +417,7 @@ public sealed class SeatManager
         try { _portAllocator.Release(seat.PortBase); } catch { /* best effort */ }
 
         // Clean up per-seat Apollo config directory
-        try { _configBuilder.CleanupConfig(seat.Id, _options.ApolloConfigDir); } catch { /* best effort */ }
+        try { _configBuilder.CleanupConfig(seat.AccountName, _options.ApolloConfigDir); } catch { /* best effort */ }
     }
 
     // ═══════════════════════════════════════════════════════════════════

@@ -42,7 +42,11 @@ public sealed class ApolloConfigBuilder
     /// </summary>
     public string BuildConfig(SeatInfo seat, string configDir)
     {
-        var seatDir = Path.Combine(configDir, seat.Id.ToString("N"));
+        // Use accountName as the directory so the same account always lands in the same
+        // directory across teardown/re-provision. This lets sunshine_state.json (and thus
+        // the server UUID and paired clients) survive seat teardowns, avoiding the need
+        // to re-enter a PIN in Moonlight after every re-provision.
+        var seatDir = Path.Combine(configDir, seat.AccountName);
         Directory.CreateDirectory(seatDir);
 
         var configPath = Path.Combine(seatDir, "sunshine.conf");
@@ -428,18 +432,21 @@ public sealed class ApolloConfigBuilder
     }
 
     /// <summary>
-    /// Delete the config directory for a seat (on teardown).
+    /// Clean up ephemeral files for a seat on teardown.
+    /// Removes junction points (assets, tools) so they are recreated fresh on the next
+    /// provision — important if Apollo is reinstalled to a different path.
+    /// The config/ subdirectory (sunshine_state.json, certs) is intentionally preserved
+    /// so that Moonlight pairing survives seat teardown and re-provision.
     /// </summary>
-    public void CleanupConfig(Guid seatId, string configDir)
+    public void CleanupConfig(string accountName, string configDir)
     {
-        var seatDir = Path.Combine(configDir, seatId.ToString("N"));
+        var seatDir = Path.Combine(configDir, accountName);
         if (!Directory.Exists(seatDir)) return;
 
         try
         {
-            // Delete junction points (assets, tools) non-recursively first.
-            // Directory.Delete(recursive:true) throws "The parameter is incorrect"
-            // when it hits a reparse point — it must not traverse into junctions.
+            // Only delete junction points (assets, tools). Leave everything else —
+            // particularly config/sunshine_state.json — so Moonlight stays paired.
             foreach (var entry in Directory.EnumerateFileSystemEntries(seatDir))
             {
                 var di = new DirectoryInfo(entry);
@@ -447,8 +454,8 @@ public sealed class ApolloConfigBuilder
                     di.Delete();
             }
 
-            Directory.Delete(seatDir, recursive: true);
-            _logger.LogDebug("Cleaned up Apollo config dir: {Path}", seatDir);
+            _logger.LogDebug("Cleaned up Apollo junctions for seat {Account}: {Path}",
+                accountName, seatDir);
         }
         catch (Exception ex)
         {

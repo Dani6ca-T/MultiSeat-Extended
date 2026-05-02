@@ -11,6 +11,20 @@ namespace MultiSeat.Tests.Streaming;
 
 public class StreamingTests
 {
+    // BuildConfig creates junction points (assets, tools) inside the seat dir.
+    // Directory.Delete(recursive:true) throws on reparse points — strip them first.
+    private static void DeleteTestDir(string dir)
+    {
+        if (!Directory.Exists(dir)) return;
+        foreach (var entry in Directory.EnumerateFileSystemEntries(dir, "*", SearchOption.AllDirectories))
+        {
+            var di = new DirectoryInfo(entry);
+            if (di.Exists && di.Attributes.HasFlag(FileAttributes.ReparsePoint))
+                di.Delete();
+        }
+        Directory.Delete(dir, recursive: true);
+    }
+
     // ── PortAllocator tests ───────────────────────────────────────────
     // (existing tests in Sessions/PortAllocatorTests.cs cover allocation;
     //  these test port offset calculations)
@@ -134,7 +148,7 @@ public class StreamingTests
             Assert.Contains("sunshine_name = MultiSeat-MultiSeatSeat01", content);
             Assert.Contains($"port = {47984 + Constants.OffsetHttps}", content);
             Assert.Contains("resolutions = [1920x1080]", content);
-            Assert.Contains("fps = [60]", content);
+            Assert.Contains("fps = [30, 60]", content);
             Assert.Contains("encoder = nvenc", content);
             Assert.Contains("controller = enabled", content);
             Assert.Contains("stream_mic = enabled", content);
@@ -142,8 +156,7 @@ public class StreamingTests
         }
         finally
         {
-            if (Directory.Exists(tempDir))
-                Directory.Delete(tempDir, recursive: true);
+            DeleteTestDir(tempDir);
         }
     }
 
@@ -172,13 +185,12 @@ public class StreamingTests
         }
         finally
         {
-            if (Directory.Exists(tempDir))
-                Directory.Delete(tempDir, recursive: true);
+            DeleteTestDir(tempDir);
         }
     }
 
     [Fact]
-    public void ApolloConfigBuilder_CleanupConfig_RemovesDirectory()
+    public void ApolloConfigBuilder_CleanupConfig_PreservesStateFile()
     {
         var tempDir = Path.Combine(Path.GetTempPath(), $"multiseat-test-{Guid.NewGuid():N}");
 
@@ -196,18 +208,23 @@ public class StreamingTests
             var configPath = builder.BuildConfig(seat, tempDir);
             Assert.True(File.Exists(configPath));
 
-            builder.CleanupConfig(seat.Id, tempDir);
-            Assert.False(File.Exists(configPath));
+            var statePath = Path.Combine(tempDir, seat.AccountName, "config", "sunshine_state.json");
+            Assert.True(File.Exists(statePath));
+
+            // CleanupConfig preserves config/ (sunshine_state.json + certs) so Moonlight
+            // pairing survives teardown and re-provision. Only junctions are removed.
+            builder.CleanupConfig(seat.AccountName, tempDir);
+            Assert.True(File.Exists(configPath),   "sunshine.conf should be preserved (re-provision overwrites it)");
+            Assert.True(File.Exists(statePath),     "sunshine_state.json must survive teardown to keep Moonlight pairing");
         }
         finally
         {
-            if (Directory.Exists(tempDir))
-                Directory.Delete(tempDir, recursive: true);
+            DeleteTestDir(tempDir);
         }
     }
 
     [Fact]
-    public void ApolloConfigBuilder_SeatConfigDir_UsesGuidFormat()
+    public void ApolloConfigBuilder_SeatConfigDir_UsesAccountName()
     {
         var tempDir = Path.Combine(Path.GetTempPath(), $"multiseat-test-{Guid.NewGuid():N}");
 
@@ -224,15 +241,15 @@ public class StreamingTests
 
             var configPath = builder.BuildConfig(seat, tempDir);
 
-            // Config should be in {tempDir}/{seatId:N}/sunshine.conf
-            var expectedDir = Path.Combine(tempDir, seat.Id.ToString("N"));
+            // Config should be in {tempDir}/{accountName}/sunshine.conf so the same
+            // account always gets the same dir and pairing survives re-provision.
+            var expectedDir = Path.Combine(tempDir, seat.AccountName);
             Assert.StartsWith(expectedDir, configPath);
             Assert.EndsWith("sunshine.conf", configPath);
         }
         finally
         {
-            if (Directory.Exists(tempDir))
-                Directory.Delete(tempDir, recursive: true);
+            DeleteTestDir(tempDir);
         }
     }
 
