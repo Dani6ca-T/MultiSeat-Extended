@@ -5,6 +5,9 @@ publish/
 publish_tmp/
 out/
 
+# C++ InputHook DLL build output
+src/MultiSeat.InputHook/build/
+
 # TypeScript incremental build info
 *.tsbuildinfo
 

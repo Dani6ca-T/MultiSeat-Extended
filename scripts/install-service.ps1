@@ -275,6 +275,21 @@ if ($LASTEXITCODE -ne 0) {
     throw "dotnet publish failed"
 }
 
+# -- Build InputHook DLL ----------------------------------------------
+$InputHookSrc = Join-Path $PSScriptRoot "..\src\MultiSeat.InputHook"
+$Bash = "C:\msys64\usr\bin\bash.exe"
+if (Test-Path $Bash) {
+    Write-Step "Building MultiSeatInputHook.dll..."
+    $srcUnix = ($InputHookSrc -replace '\\', '/') -replace '^([A-Z]):', { "/$(([string]$_[0]).ToLower())" }
+    $buildScript = "export PATH='/ucrt64/bin:`$PATH'; cmake -B '$srcUnix/build/Release' -S '$srcUnix' -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_COMPILER=/ucrt64/bin/g++.exe -DCMAKE_MAKE_PROGRAM=/ucrt64/bin/ninja.exe && cmake --build '$srcUnix/build/Release'"
+    & $Bash -lc $buildScript 2>&1 | Out-Null
+    if ($LASTEXITCODE -ne 0) {
+        Write-Warning "InputHook build failed -- keyboard/mouse isolation unavailable"
+    }
+} else {
+    Write-Warning "MSYS2 not found at C:\msys64 -- skipping InputHook build"
+}
+
 # -- Copy InputHook DLL -----------------------------------------------
 if (Test-Path $InputHookBuild) {
     Copy-Item $InputHookBuild "$InstallDir\MultiSeatInputHook.dll" -Force

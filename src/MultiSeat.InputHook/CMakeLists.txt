@@ -21,8 +21,16 @@ target_link_libraries(MultiSeatInputHook PRIVATE
     kernel32
 )
 
-# Set the .def file for controlled exports
 set_target_properties(MultiSeatInputHook PROPERTIES
-    LINK_FLAGS "/DEF:${CMAKE_CURRENT_SOURCE_DIR}/src/exports.def"
     OUTPUT_NAME "MultiSeatInputHook"
+    PREFIX ""  # prevent MinGW from adding "lib" prefix -> MultiSeatInputHook.dll not libMultiSeatInputHook.dll
 )
+
+if(MSVC)
+    set_target_properties(MultiSeatInputHook PROPERTIES
+        LINK_FLAGS "/DEF:${CMAKE_CURRENT_SOURCE_DIR}/src/exports.def"
+    )
+else()
+    # Static link the GCC/C++ runtimes so the DLL has no MSYS2 .dll dependencies
+    target_link_options(MultiSeatInputHook PRIVATE -static-libgcc -static-libstdc++)
+endif()
