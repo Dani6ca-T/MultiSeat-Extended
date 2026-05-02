@@ -48,4 +48,7 @@ public sealed class SeatInfo
     // Preset
     public bool AutoStart { get; set; } = false;
     public NvencQualityPreset NvencPreset { get; set; } = NvencQualityPreset.Balanced;
+
+    // Granular provisioning progress — set at each major step, cleared on Ready/Error
+    public string? ProvisioningStep { get; set; }
 }

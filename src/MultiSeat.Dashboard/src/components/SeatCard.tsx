@@ -3,6 +3,22 @@ import type { SeatInfo, SeatServices, NvencQualityPreset } from "../api/types";
 import { seats as seatsApi } from "../api/client";
 import { StatusBadge } from "./StatusBadge";
 
+const PROVISION_STEPS: { key: string; label: string }[] = [
+  { key: "Session",       label: "Session"    },
+  { key: "Display",       label: "Display"    },
+  { key: "Audio",         label: "Audio"      },
+  { key: "Apollo",        label: "Apollo"     },
+  { key: "DetectDisplay", label: "Display ID" },
+];
+
+const STATUS_CARD_CLASS: Partial<Record<string, string>> = {
+  Streaming:    "card--streaming",
+  Ready:        "card--ready",
+  Provisioning: "card--provisioning",
+  Configuring:  "card--provisioning",
+  Error:        "card--error",
+};
+
 interface Props {
   seat: SeatInfo;
   onUpdate: () => void;
@@ -11,6 +27,7 @@ interface Props {
 export function SeatCard({ seat, onUpdate }: Props) {
   const [launching, setLaunching] = useState(false);
   const [destroying, setDestroying] = useState(false);
+  const [confirmDestroy, setConfirmDestroy] = useState(false);
   const [launchPath, setLaunchPath] = useState("");
   const [showLaunch, setShowLaunch] = useState(false);
   const [services, setServices] = useState<SeatServices | null>(null);
@@ -20,15 +37,15 @@ export function SeatCard({ seat, onUpdate }: Props) {
   const [presetLoading, setPresetLoading] = useState(false);
 
   const isActive = seat.status === "Ready" || seat.status === "Streaming";
+  const isProvisioning = seat.status === "Provisioning" || seat.status === "Configuring";
+  const accentClass = STATUS_CARD_CLASS[seat.status] ?? "";
 
   const fetchServices = useCallback(async () => {
     if (!showServices || seat.status === "Idle") return;
     try {
       const s = await seatsApi.services(seat.id);
       setServices(s);
-    } catch {
-      /* ignore */
-    }
+    } catch { /* ignore */ }
   }, [seat.id, seat.status, showServices]);
 
   useEffect(() => {
@@ -37,6 +54,13 @@ export function SeatCard({ seat, onUpdate }: Props) {
     const interval = setInterval(fetchServices, 3000);
     return () => clearInterval(interval);
   }, [fetchServices, showServices]);
+
+  // Auto-cancel teardown confirm after 4 seconds
+  useEffect(() => {
+    if (!confirmDestroy) return;
+    const t = setTimeout(() => setConfirmDestroy(false), 4000);
+    return () => clearTimeout(t);
+  }, [confirmDestroy]);
 
   const handleNvencPreset = async (preset: NvencQualityPreset) => {
     if (preset === seat.nvencPreset || presetLoading) return;
@@ -64,7 +88,7 @@ export function SeatCard({ seat, onUpdate }: Props) {
   };
 
   const handleDestroy = async () => {
-    if (!confirm(`Tear down seat ${seat.accountName}?`)) return;
+    setConfirmDestroy(false);
     setDestroying(true);
     try {
       await seatsApi.destroy(seat.id);
@@ -104,13 +128,12 @@ export function SeatCard({ seat, onUpdate }: Props) {
     }
   };
 
-  // Apollo 'port' config = HTTP GameStream port — this is what Moonlight "Add Host" needs.
-  // portBase+1 is the HTTPS web UI port, which returns 404 for /serverinfo.
   const moonlightPort = seat.portBase > 0 ? seat.portBase : null;
   const uptime = seat.readyAt ? formatDuration(new Date(seat.readyAt)) : null;
+  const showControls = seat.status !== "Idle" && seat.status !== "TearingDown";
 
   return (
-    <div className="card">
+    <div className={`card ${accentClass}`}>
       <div className="card-header">
         <div>
           <h3 style={{ margin: 0 }}>{seat.accountName}</h3>
@@ -118,10 +141,18 @@ export function SeatCard({ seat, onUpdate }: Props) {
             {seat.id.substring(0, 8)}
           </span>
         </div>
-        <StatusBadge status={seat.status} />
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          {seat.status === "Streaming" && <span className="live-badge">● LIVE</span>}
+          <StatusBadge status={seat.status} />
+        </div>
       </div>
 
       <div className="card-body">
+        {/* Provisioning step indicator */}
+        {isProvisioning && (
+          <ProvisioningSteps currentStep={seat.provisioningStep} />
+        )}
+
         <div className="stat-grid">
           <StatItem
             label="Session"
@@ -131,22 +162,16 @@ export function SeatCard({ seat, onUpdate }: Props) {
             label="Resolution"
             value={`${seat.width}x${seat.height}@${seat.fps}`}
           />
-          <StatItem label="Port" value={moonlightPort ? String(moonlightPort) : "--"} />
+          <StatItem
+            label="Port"
+            value={moonlightPort ? String(moonlightPort) : "--"}
+          />
           <StatItem
             label="Apollo PID"
             value={seat.apolloProcessId > 0 ? String(seat.apolloProcessId) : "--"}
           />
-          <StatItem
-            label="VAC Cable"
-            value={seat.vacCableIndex >= 0 ? `#${seat.vacCableIndex}` : "--"}
-          />
-          <StatItem
-            label="Controller"
-            value={seat.viGEmControllerIndex >= 0 ? `#${seat.viGEmControllerIndex}` : "--"}
-          />
         </div>
 
-        {/* Moonlight connection info */}
         {moonlightPort && isActive && (
           <MoonlightAddress host={window.location.hostname} port={moonlightPort} />
         )}
@@ -154,43 +179,6 @@ export function SeatCard({ seat, onUpdate }: Props) {
         {seat.launchApp && (
           <div className="text-muted" style={{ fontSize: 12, marginTop: 8 }}>
             App: {seat.launchApp}
-          </div>
-        )}
-
-        {/* Auto-start toggle */}
-        {seat.status !== "Idle" && seat.status !== "TearingDown" && (
-          <div className="autostart-row">
-            <span className="stat-label">Auto-start on boot</span>
-            <button
-              className={`toggle-btn${seat.autoStart ? " toggle-btn--on" : ""}`}
-              onClick={handleAutoStart}
-              disabled={autoStartLoading}
-              title={seat.autoStart ? "Disable auto-start" : "Enable auto-start"}
-            >
-              {autoStartLoading ? "..." : seat.autoStart ? "On" : "Off"}
-            </button>
-          </div>
-        )}
-
-        {/* NVENC quality preset */}
-        {seat.status !== "Idle" && seat.status !== "TearingDown" && (
-          <div className="autostart-row">
-            <span className="stat-label">Quality</span>
-            <div className="preset-toggle">
-              {(["Latency", "Balanced", "Quality"] as NvencQualityPreset[]).map((p) => (
-                <button
-                  key={p}
-                  className={`preset-btn${seat.nvencPreset === p ? " preset-btn--active" : ""}`}
-                  onClick={() => handleNvencPreset(p)}
-                  disabled={presetLoading}
-                  title={p === "Latency" ? "P1 — lowest encode latency"
-                       : p === "Quality" ? "P7 — best quality, more GPU"
-                       : "P4 — balanced (default)"}
-                >
-                  {presetLoading && seat.nvencPreset !== p ? p : p}
-                </button>
-              ))}
-            </div>
           </div>
         )}
 
@@ -204,8 +192,45 @@ export function SeatCard({ seat, onUpdate }: Props) {
           </div>
         )}
 
-        {/* ── Service Management Panel ─────────────────────────── */}
-        {seat.status !== "Idle" && seat.status !== "TearingDown" && (
+        {/* Controls row: auto-start + quality preset side by side */}
+        {showControls && (
+          <div className="controls-row">
+            <div className="control-group">
+              <span className="stat-label">Auto-start</span>
+              <button
+                className={`toggle-btn${seat.autoStart ? " toggle-btn--on" : ""}`}
+                onClick={handleAutoStart}
+                disabled={autoStartLoading}
+                title={seat.autoStart ? "Disable auto-start" : "Enable auto-start"}
+              >
+                {autoStartLoading ? "..." : seat.autoStart ? "On" : "Off"}
+              </button>
+            </div>
+            <div className="control-group">
+              <span className="stat-label">Quality</span>
+              <div className="preset-toggle">
+                {(["Latency", "Balanced", "Quality"] as NvencQualityPreset[]).map((p) => (
+                  <button
+                    key={p}
+                    className={`preset-btn${seat.nvencPreset === p ? " preset-btn--active" : ""}`}
+                    onClick={() => handleNvencPreset(p)}
+                    disabled={presetLoading}
+                    title={
+                      p === "Latency" ? "P1 — lowest encode latency"
+                      : p === "Quality" ? "P7 — best quality, more GPU"
+                      : "P4 — balanced (default)"
+                    }
+                  >
+                    {p}
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Service Management Panel */}
+        {showControls && (
           <div style={{ marginTop: 12 }}>
             <button
               className="btn-ghost btn-sm"
@@ -279,6 +304,7 @@ export function SeatCard({ seat, onUpdate }: Props) {
                 <ServiceRow
                   name="Audio"
                   active={services.audio}
+                  detail={seat.vacCableIndex >= 0 ? `VAC #${seat.vacCableIndex}` : undefined}
                   actions={
                     <button
                       className="btn-sm"
@@ -292,6 +318,7 @@ export function SeatCard({ seat, onUpdate }: Props) {
                 <ServiceRow
                   name="Controller"
                   active={services.controller}
+                  detail={seat.viGEmControllerIndex >= 0 ? `ViGEm #${seat.viGEmControllerIndex}` : undefined}
                   actions={
                     <button
                       className="btn-sm"
@@ -311,7 +338,7 @@ export function SeatCard({ seat, onUpdate }: Props) {
                       className="btn-sm"
                       disabled={actionLoading !== null}
                       onClick={() => serviceAction("session-reconnect", () => seatsApi.sessionReconnect(seat.id))}
-                      title="Reconnect mstsc to keep session Active. Required for Moonlight streaming — do not disconnect while streaming."
+                      title="Reconnect mstsc to keep session Active."
                     >
                       {actionLoading === "session-reconnect" ? "..." : "Reconnect"}
                     </button>
@@ -326,48 +353,79 @@ export function SeatCard({ seat, onUpdate }: Props) {
       </div>
 
       <div className="card-actions">
-        {isActive && (
-          <>
-            {showLaunch ? (
-              <div style={{ display: "flex", gap: 4, flex: 1 }}>
-                <input
-                  type="text"
-                  placeholder="C:\path\to\game.exe"
-                  value={launchPath}
-                  onChange={(e) => setLaunchPath(e.target.value)}
-                  onKeyDown={(e) => e.key === "Enter" && handleLaunch()}
-                  style={{ flex: 1 }}
-                  disabled={launching}
-                />
-                <button
-                  onClick={handleLaunch}
-                  disabled={launching || !launchPath.trim()}
-                >
-                  {launching ? "..." : "Go"}
-                </button>
-                <button
-                  className="btn-ghost"
-                  onClick={() => setShowLaunch(false)}
-                >
-                  X
-                </button>
-              </div>
-            ) : (
-              <button onClick={() => setShowLaunch(true)}>Launch App</button>
-            )}
-          </>
+        {/* Launch app — hidden while confirming teardown */}
+        {isActive && !confirmDestroy && (
+          showLaunch ? (
+            <div style={{ display: "flex", gap: 4, flex: 1 }}>
+              <input
+                type="text"
+                placeholder="C:\path\to\game.exe"
+                value={launchPath}
+                onChange={(e) => setLaunchPath(e.target.value)}
+                onKeyDown={(e) => e.key === "Enter" && handleLaunch()}
+                style={{ flex: 1 }}
+                disabled={launching}
+              />
+              <button onClick={handleLaunch} disabled={launching || !launchPath.trim()}>
+                {launching ? "..." : "Go"}
+              </button>
+              <button className="btn-ghost" onClick={() => setShowLaunch(false)}>
+                X
+              </button>
+            </div>
+          ) : (
+            <button onClick={() => setShowLaunch(true)}>Launch App</button>
+          )
         )}
 
-        {seat.status !== "Idle" && seat.status !== "TearingDown" && (
-          <button
-            className="btn-danger"
-            onClick={handleDestroy}
-            disabled={destroying}
-          >
-            {destroying ? "Tearing down..." : "Teardown"}
-          </button>
+        {/* Teardown — two-step inline confirmation */}
+        {showControls && (
+          confirmDestroy ? (
+            <div className="teardown-confirm">
+              <span className="text-muted" style={{ fontSize: 12 }}>Confirm teardown?</span>
+              <button className="btn-danger btn-sm" onClick={handleDestroy} disabled={destroying}>
+                {destroying ? "..." : "Yes, teardown"}
+              </button>
+              <button className="btn-ghost btn-sm" onClick={() => setConfirmDestroy(false)}>
+                Cancel
+              </button>
+            </div>
+          ) : (
+            <button
+              className="btn-danger"
+              onClick={() => setConfirmDestroy(true)}
+              disabled={destroying}
+              style={{ marginLeft: "auto" }}
+            >
+              Teardown
+            </button>
+          )
         )}
       </div>
+    </div>
+  );
+}
+
+function ProvisioningSteps({ currentStep }: { currentStep: string | null }) {
+  const currentIdx = PROVISION_STEPS.findIndex((s) => s.key === currentStep);
+
+  return (
+    <div className="provision-steps">
+      {PROVISION_STEPS.map((step, idx) => {
+        const isDone = idx < currentIdx;
+        const isCurrent = idx === currentIdx;
+        return (
+          <div
+            key={step.key}
+            className={`provision-step${isDone ? " done" : ""}${isCurrent ? " current" : ""}`}
+          >
+            <div className="provision-dot">
+              {isDone ? "✓" : null}
+            </div>
+            <span className="provision-label">{step.label}</span>
+          </div>
+        );
+      })}
     </div>
   );
 }
@@ -391,7 +449,11 @@ function ServiceRow({
           style={{ background: active ? "var(--success)" : "var(--text-secondary)" }}
         />
         <span className="service-name">{name}</span>
-        {detail && <span className="text-muted" style={{ fontSize: 11 }}>({detail})</span>}
+        {detail && (
+          <span className="text-muted" style={{ fontSize: 11 }}>
+            ({detail})
+          </span>
+        )}
       </div>
       {actions && <div className="service-actions">{actions}</div>}
     </div>

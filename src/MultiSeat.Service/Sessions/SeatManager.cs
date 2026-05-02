@@ -105,7 +105,8 @@ public sealed class SeatManager
             Fps = request.Fps,
             LaunchApp = request.LaunchApp,
             NvencPreset = request.NvencPreset,
-            Status = SeatStatus.Provisioning
+            Status = SeatStatus.Provisioning,
+            ProvisioningStep = "Session"
         };
 
         _seats.TryAdd(seat.Id, seat);
@@ -124,6 +125,7 @@ public sealed class SeatManager
             _logger.LogInformation("Seat {Id}: Windows session {Sid}", seat.Id, seat.SessionId);
 
             seat.Status = SeatStatus.Configuring;
+            seat.ProvisioningStep = "Display";
             await BroadcastState(seat);
 
             // ── 2.5. Suppress RustDesk audio capture in seat session ──────────
@@ -181,6 +183,9 @@ public sealed class SeatManager
             await _firewall.OpenPortsAsync(seat, ct);
 
             // ── 5. Audio routing ──────────────────────────────────────
+            seat.ProvisioningStep = "Audio";
+            await BroadcastState(seat);
+
             // Assign VAC before Apollo so the config has the audio device
             seat.VacCableIndex = _audioRouter.AssignCable(seat);
             _logger.LogDebug("Seat {Id}: VAC cable {C}", seat.Id, seat.VacCableIndex);
@@ -241,6 +246,9 @@ public sealed class SeatManager
             // The session is still ACTIVE (mstsc connected) so Apollo's SudoVDA IPC
             // can initialize the virtual display. Without an active session,
             // QueryDisplayConfig returns ERROR_ACCESS_DENIED and the encoder probe fails.
+            seat.ProvisioningStep = "Apollo";
+            await BroadcastState(seat);
+
             seat.ApolloProcessId = await _apolloManager.StartAsync(seat, ct);
             _logger.LogInformation("Seat {Id}: Apollo PID {Pid}", seat.Id, seat.ApolloProcessId);
 
@@ -251,6 +259,9 @@ public sealed class SeatManager
             // After the first-pass probe completes, Apollo has cached encoder results.
             // The second start with UUID skips the full probe (uses cache), so the
             // SudoVDA IddCx watchdog has time to establish its connection properly.
+            seat.ProvisioningStep = "DetectDisplay";
+            await BroadcastState(seat);
+
             {
                 var logPath = _apolloManager.GetLogPath(seat.Id, _options.ApolloConfigDir);
                 var configPath = _apolloManager.GetConfigPath(seat.Id);
@@ -326,6 +337,7 @@ public sealed class SeatManager
             // ── 9. Ready ──────────────────────────────────────────────
             seat.Status = SeatStatus.Ready;
             seat.ReadyAt = DateTimeOffset.UtcNow;
+            seat.ProvisioningStep = null;
             await BroadcastState(seat);
             _logger.LogInformation(
                 "Seat {Id}: READY for Moonlight connection on port {P}",

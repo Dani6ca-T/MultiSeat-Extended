@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import { Link } from "react-router-dom";
 import type { AccountInfo } from "../api/types";
 import { accounts as accountsApi } from "../api/client";
 import { useSeats } from "../hooks/useSeats";
@@ -56,9 +57,12 @@ export function SeatsPage() {
       {seats.length === 0 ? (
         <div className="empty-state">
           <p>No seats provisioned yet.</p>
-          <p className="text-muted">
-            Create an account first, then provision a seat to start streaming.
+          <p className="text-muted" style={{ marginBottom: 20 }}>
+            Create an account first, then use "+ New Seat" to start streaming.
           </p>
+          <Link to="/accounts" className="btn-link" style={{ padding: "8px 20px" }}>
+            Go to Accounts →
+          </Link>
         </div>
       ) : (
         <div className="card-grid">

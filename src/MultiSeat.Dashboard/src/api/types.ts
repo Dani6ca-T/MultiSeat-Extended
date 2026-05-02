@@ -31,6 +31,7 @@ export interface SeatInfo {
   launchApp: string | null;
   autoStart: boolean;
   nvencPreset: NvencQualityPreset;
+  provisioningStep: string | null;
 }
 
 export interface SeatPreset {
