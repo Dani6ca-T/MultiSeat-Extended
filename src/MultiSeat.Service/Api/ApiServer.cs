@@ -81,7 +81,10 @@ public static class ApiServer
         {
             if (!authState.IsEnabled ||
                 !context.Request.Path.StartsWithSegments("/api") ||
-                context.Request.Path.StartsWithSegments("/ws"))
+                context.Request.Path.StartsWithSegments("/ws") ||
+                // Auth status endpoint is always public — GET lets the dashboard
+                // show the toggle even when the key isn't stored yet.
+                (context.Request.Path.Equals("/api/system/auth") && context.Request.Method == "GET"))
             {
                 await next();
                 return;
