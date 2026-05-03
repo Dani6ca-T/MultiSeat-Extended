@@ -152,6 +152,12 @@ export interface HookStatus {
   enabled: boolean;
 }
 
+// ── API Auth ──────────────────────────────────────────────────────
+
+export interface ApiAuthStatus {
+  authEnabled: boolean;
+}
+
 // ── Per-seat service status ───────────────────────────────────────
 
 export interface SeatServices {

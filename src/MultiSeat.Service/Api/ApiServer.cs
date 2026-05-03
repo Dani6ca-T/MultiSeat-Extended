@@ -53,12 +53,14 @@ public static class ApiServer
         // Register CORS services (required before UseCors)
         builder.Services.AddCors();
 
-        var app = builder.Build();
-
-        // Resolve effective API key — generate and persist if not configured.
+        // Resolve effective API key before Build() so ApiAuthState can be registered in DI.
         // Key is saved to C:\ProgramData\MultiSeat\api-key.txt so the operator can
         // copy it into the dashboard Settings page. It is never embedded in appsettings.json.
         var apiKey = ResolveApiKey(options.ApiKey);
+        var authState = new ApiAuthState(!string.IsNullOrEmpty(apiKey), apiKey);
+        builder.Services.AddSingleton(authState);
+
+        var app = builder.Build();
 
         // ── Middleware ───────────────────────────────────────────────
         app.UseWebSockets();
@@ -72,32 +74,31 @@ public static class ApiServer
         }
 
         // API key auth — enforced for /api/ routes unless explicitly disabled.
-        // Static files and WebSocket upgrade are exempt.
-        // Set ApiKey = "disabled" in appsettings.json to turn off auth on trusted networks.
-        if (!string.IsNullOrEmpty(apiKey))
+        // Checks ApiAuthState.IsEnabled on every request so toggling via the dashboard
+        // takes effect immediately without a service restart.
+        // Static files and WebSocket upgrades are exempt.
+        app.Use(async (context, next) =>
         {
-            app.Use(async (context, next) =>
+            if (!authState.IsEnabled ||
+                !context.Request.Path.StartsWithSegments("/api") ||
+                context.Request.Path.StartsWithSegments("/ws"))
             {
-                if (!context.Request.Path.StartsWithSegments("/api") ||
-                    context.Request.Path.StartsWithSegments("/ws"))
-                {
-                    await next();
-                    return;
-                }
-
-                if (!context.Request.Headers.TryGetValue(Constants.ApiKeyHeader, out var key)
-                    || key != apiKey)
-                {
-                    context.Response.StatusCode = 401;
-                    await context.Response.WriteAsJsonAsync(new { error = "Unauthorized" });
-                    return;
-                }
-
                 await next();
-            });
-        }
+                return;
+            }
 
-        if (options.ApiKey.Equals("disabled", StringComparison.OrdinalIgnoreCase))
+            if (!context.Request.Headers.TryGetValue(Constants.ApiKeyHeader, out var key)
+                || key != authState.ApiKey)
+            {
+                context.Response.StatusCode = 401;
+                await context.Response.WriteAsJsonAsync(new { error = "Unauthorized" });
+                return;
+            }
+
+            await next();
+        });
+
+        if (!authState.IsEnabled)
         {
             app.Logger.LogWarning(
                 "API authentication is DISABLED — the dashboard is open to anyone on the network.");

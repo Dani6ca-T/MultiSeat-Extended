@@ -6,6 +6,7 @@ import type {
   AccountInfo,
   AccountCreateRequest,
   SystemStatus,
+  ApiAuthStatus,
   ControllerInfo,
   ControllerAssignments,
   HookStatus,
@@ -149,6 +150,12 @@ export const accounts = {
 export const system = {
   health: () => request<SystemStatus>("/system/health"),
   rebuild: () => request<{ message: string }>("/system/rebuild", { method: "POST" }),
+  getAuth: () => request<ApiAuthStatus>("/system/auth"),
+  setAuth: (enabled: boolean) =>
+    request<ApiAuthStatus>("/system/auth", {
+      method: "POST",
+      body: JSON.stringify({ enabled }),
+    }),
 };
 
 // ── Input ─────────────────────────────────────────────────────────

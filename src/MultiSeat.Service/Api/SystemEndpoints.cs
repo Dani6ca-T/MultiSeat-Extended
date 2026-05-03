@@ -1,4 +1,6 @@
 using System.Diagnostics;
+using System.Text.Json;
+using System.Text.Json.Nodes;
 using Microsoft.Extensions.Options;
 using MultiSeat.Service.Configuration;
 using MultiSeat.Service.Display;
@@ -58,6 +60,47 @@ public static class SystemEndpoints
                 paths = allPaths
             });
         });
+
+        // GET /api/system/auth — returns current authentication state.
+        group.MapGet("/auth", (ApiAuthState authState) =>
+            Results.Ok(new { authEnabled = authState.IsEnabled }))
+            .AllowAnonymous();
+
+        // POST /api/system/auth — toggles API key authentication on/off.
+        // Takes effect immediately (no restart needed); also persists to appsettings.json.
+        group.MapPost("/auth", async (ApiAuthState authState, AuthToggleRequest body, ILoggerFactory logFactory) =>
+        {
+            var log = logFactory.CreateLogger("MultiSeat.Auth");
+            authState.SetEnabled(body.Enabled);
+
+            // Persist to appsettings.json so the setting survives restarts.
+            var settingsPath = Path.Combine(AppContext.BaseDirectory, "appsettings.json");
+            if (File.Exists(settingsPath))
+            {
+                try
+                {
+                    var json = await File.ReadAllTextAsync(settingsPath);
+                    var node = JsonNode.Parse(json);
+                    if (node?["MultiSeat"] is JsonObject ms)
+                    {
+                        ms["ApiKey"] = body.Enabled ? "" : "disabled";
+                        await File.WriteAllTextAsync(settingsPath,
+                            node.ToJsonString(new JsonSerializerOptions { WriteIndented = true }));
+                    }
+                }
+                catch (Exception ex)
+                {
+                    log.LogWarning(ex, "Could not persist auth setting to appsettings.json");
+                }
+            }
+
+            log.LogInformation("API authentication {State} via dashboard",
+                body.Enabled ? "enabled" : "disabled");
+
+            return Results.Ok(new { authEnabled = authState.IsEnabled });
+        })
+        .AllowAnonymous(); // must be reachable even when auth is currently disabled
     }
 
+    private record AuthToggleRequest(bool Enabled);
 }

@@ -1,4 +1,4 @@
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { system, input } from "../api/client";
 import { usePolling } from "../hooks/usePolling";
 import type { HookStatus, TopProcess, DiskInfo } from "../api/types";
@@ -6,6 +6,27 @@ import type { HookStatus, TopProcess, DiskInfo } from "../api/types";
 export function SystemPage() {
   const [rebuilding, setRebuilding] = useState(false);
   const [rebuildMsg, setRebuildMsg] = useState<string | null>(null);
+  const [authEnabled, setAuthEnabled] = useState<boolean | null>(null);
+  const [authToggling, setAuthToggling] = useState(false);
+
+  useEffect(() => {
+    system.getAuth().then(r => setAuthEnabled(r.authEnabled)).catch(() => {});
+  }, []);
+
+  const handleToggleAuth = async () => {
+    const newState = !authEnabled;
+    const action = newState ? "Enable" : "Disable";
+    if (!confirm(`${action} API authentication?\n\n${newState ? "The dashboard will require an API key." : "The dashboard will be open to anyone on the network."}`)) return;
+    setAuthToggling(true);
+    try {
+      const r = await system.setAuth(newState);
+      setAuthEnabled(r.authEnabled);
+    } catch (e) {
+      alert(e instanceof Error ? e.message : "Failed to update auth setting");
+    } finally {
+      setAuthToggling(false);
+    }
+  };
 
   const healthFetcher = useCallback(() => system.health(), []);
   const hookFetcher = useCallback(() => input.hookStatus().catch(() => null), []);
@@ -232,6 +253,38 @@ export function SystemPage() {
             </div>
           </div>
         </div>
+
+        {/* API Auth */}
+        {authEnabled !== null && (
+          <div className="card" style={{ borderLeft: authEnabled ? undefined : "4px solid var(--warning)" }}>
+            <div className="card-body">
+              <h3>API Security</h3>
+              <div className="stat-grid" style={{ marginBottom: 12 }}>
+                <div className="stat-item">
+                  <span className="stat-label">Authentication</span>
+                  <span className="stat-value">
+                    {authEnabled
+                      ? <span style={{ color: "var(--success)" }}>Enabled</span>
+                      : <span style={{ color: "var(--warning)" }}>Disabled</span>}
+                  </span>
+                </div>
+              </div>
+              {!authEnabled && (
+                <div className="text-muted" style={{ fontSize: 12, marginBottom: 10 }}>
+                  The API is open to anyone on the network.
+                </div>
+              )}
+              <button
+                className={authEnabled ? "btn-danger btn-sm" : "btn-sm"}
+                style={authEnabled ? undefined : { background: "var(--success-dim, #166534)", borderColor: "#16a34a", color: "#4ade80" }}
+                onClick={handleToggleAuth}
+                disabled={authToggling}
+              >
+                {authToggling ? "Updating..." : authEnabled ? "Disable Auth" : "Enable Auth"}
+              </button>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Disk usage */}
