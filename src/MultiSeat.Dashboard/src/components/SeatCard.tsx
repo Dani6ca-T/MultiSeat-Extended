@@ -56,9 +56,6 @@ export function SeatCard({ seat, onUpdate }: Props) {
 
   useEffect(() => {
     fetchServices();
-    if (!showServices) return;
-    const interval = setInterval(fetchServices, 3000);
-    return () => clearInterval(interval);
   }, [fetchServices, showServices]);
 
   // Auto-cancel teardown confirm after 4 seconds

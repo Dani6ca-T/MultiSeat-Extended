@@ -134,23 +134,6 @@ public static class SeatEndpoints
             }
         });
 
-        // Re-run --set-default-render / --set-default-capture in the seat's live session
-        // without reassigning devices. Use this when audio is silent after provisioning.
-        group.MapPost("/{id:guid}/audio/apply-defaults", (Guid id, SeatManager mgr) =>
-        {
-            if (mgr.GetSeat(id) is null)
-                return Results.NotFound();
-            try
-            {
-                mgr.ApplyAudioDefaults(id);
-                return Results.Ok(new { status = "applied" });
-            }
-            catch (InvalidOperationException ex)
-            {
-                return Results.BadRequest(new { error = ex.Message });
-            }
-        });
-
         group.MapPost("/{id:guid}/display/reset",
             async (Guid id, SeatManager mgr, CancellationToken ct) =>
             {

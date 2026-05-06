@@ -1,9 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
-/**
- * Generic polling hook. Calls `fetcher` every `intervalMs` milliseconds.
- * Stops polling when the component unmounts.
- */
 export function usePolling<T>(
   fetcher: () => Promise<T>,
   intervalMs: number = 5000
@@ -12,10 +8,12 @@ export function usePolling<T>(
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const timerRef = useRef<ReturnType<typeof setInterval>>(undefined);
+  const fetcherRef = useRef(fetcher);
+  fetcherRef.current = fetcher;
 
   const fetch = useCallback(async () => {
     try {
-      const result = await fetcher();
+      const result = await fetcherRef.current();
       setData(result);
       setError(null);
     } catch (e) {
@@ -23,7 +21,7 @@ export function usePolling<T>(
     } finally {
       setLoading(false);
     }
-  }, [fetcher]);
+  }, []); // stable — reads latest fetcher via ref, no re-interval on each render
 
   useEffect(() => {
     fetch();
