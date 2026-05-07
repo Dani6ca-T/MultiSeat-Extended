@@ -55,7 +55,7 @@ public sealed class FirewallManager
         await RunNetshAsync(
             $"advfirewall firewall add rule name=\"{ruleName}\" " +
             $"dir=in action=allow protocol=TCP localport={port} " +
-            $"profile=private,domain " +
+            $"profile=any " +
             $"description=\"MultiSeat dashboard and API\"",
             ct);
 
@@ -76,7 +76,7 @@ public sealed class FirewallManager
         await RunNetshAsync(
             $"advfirewall firewall add rule name=\"{ruleName}-TCP\" " +
             $"dir=in action=allow protocol=TCP localport={tcpPorts} " +
-            $"profile=private,domain " +
+            $"profile=any " +
             $"description=\"MultiSeat Apollo streaming (TCP)\"",
             ct);
 
@@ -88,7 +88,7 @@ public sealed class FirewallManager
         await RunNetshAsync(
             $"advfirewall firewall add rule name=\"{ruleName}-UDP\" " +
             $"dir=in action=allow protocol=UDP localport={udpPorts} " +
-            $"profile=private,domain " +
+            $"profile=any " +
             $"description=\"MultiSeat Apollo streaming (UDP)\"",
             ct);
 
