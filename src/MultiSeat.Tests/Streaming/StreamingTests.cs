@@ -306,20 +306,28 @@ public class StreamingTests
     // ── Constants tests ───────────────────────────────────────────────
 
     [Fact]
-    public void Constants_PortOffsets_AreSequential()
+    public void Constants_PortOffsets_MatchApolloMapPort()
     {
-        Assert.Equal(0, Constants.OffsetHttps);
-        Assert.Equal(1, Constants.OffsetHttp);
-        Assert.Equal(2, Constants.OffsetVideo);
-        Assert.Equal(3, Constants.OffsetAudio);
-        Assert.Equal(4, Constants.OffsetControl);
+        // Values must match Apollo's map_port(N) constants exactly
+        Assert.Equal(-5, Constants.OffsetGfeHttps);
+        Assert.Equal(0,  Constants.OffsetGfeHttp);
+        Assert.Equal(1,  Constants.OffsetWebUi);
+        Assert.Equal(9,  Constants.OffsetVideo);
+        Assert.Equal(10, Constants.OffsetControl);
+        Assert.Equal(11, Constants.OffsetAudio);
+        Assert.Equal(12, Constants.OffsetMic);
+        Assert.Equal(26, Constants.OffsetRtsp);
+
+        // Legacy aliases
+        Assert.Equal(Constants.OffsetGfeHttp, Constants.OffsetHttps);
+        Assert.Equal(Constants.OffsetWebUi,   Constants.OffsetHttp);
     }
 
     [Fact]
-    public void Constants_PortsPerSeat_CoversAllOffsets()
+    public void Constants_PortsPerSeat_CoversFullRange()
     {
-        // PortsPerSeat must be > max offset
-        Assert.True(Constants.PortsPerSeat > Constants.OffsetControl);
+        // PortsPerSeat must span from min offset (-5) to max offset (+21)
+        Assert.True(Constants.PortsPerSeat >= Constants.OffsetRtsp - Constants.OffsetGfeHttps + 1);
     }
 
     [Fact]

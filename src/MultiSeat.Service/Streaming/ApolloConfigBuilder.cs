@@ -90,14 +90,17 @@ public sealed class ApolloConfigBuilder
         sb.AppendLine();
 
         // ── Network ports ─────────────────────────────────────────────
-        // Apollo uses 'port' as the HTTPS base; other ports are derived:
-        //   HTTPS = port + 0  (pairing + web UI)
-        //   HTTP  = port + 1  (web UI http fallback)
-        //   Video = port + 2  (RTP video stream)
-        //   Audio = port + 3  (RTP audio stream)
-        //   Control = port + 4 (ENet control channel)
+        // 'port' is Apollo's base; all other ports are derived via map_port(N) = base+N:
+        //   base-5  = GFE HTTPS (Moonlight pairing + launch)
+        //   base+0  = GFE HTTP  (same, plaintext fallback)  ← this is the 'port' value
+        //   base+1  = Apollo web UI HTTPS
+        //   base+9  = RTP video
+        //   base+10 = ENet control
+        //   base+11 = RTP audio
+        //   base+12 = RTP mic
+        //   base+21 = RTSP session setup
         sb.AppendLine("# Network — unique port range for this seat");
-        sb.AppendLine($"port = {seat.PortBase + Constants.OffsetHttps}");
+        sb.AppendLine($"port = {seat.PortBase + Constants.OffsetGfeHttp}");
         sb.AppendLine();
 
         // ── Display ───────────────────────────────────────────────────
@@ -210,10 +213,16 @@ public sealed class ApolloConfigBuilder
         sb.AppendLine($"log_path = {logPath}");
         sb.AppendLine();
 
+        // ── Compatibility ─────────────────────────────────────────────
+        // Standard Moonlight iOS (App Store) does not connect to rtspenc:// URLs —
+        // it sends corever=1 but never opens the RTSP port when Apollo replies with
+        // the encrypted scheme. Force plain rtsp:// so all Moonlight clients work.
+        sb.AppendLine("# Compatibility — force plain RTSP for standard Moonlight clients");
+        sb.AppendLine("disable_rtsp_encryption = enabled");
+        sb.AppendLine();
+
         // ── Advanced ──────────────────────────────────────────────────
         sb.AppendLine("# Advanced — notify MultiSeat on client connect/disconnect");
-        // Apollo can call external commands on client events
-        // We could use this to transition seat state Streaming ↔ Ready
         sb.AppendLine("# ping_timeout = 10000");
         sb.AppendLine("# back_button_timeout = 2000");
 

@@ -10,15 +10,26 @@ public static class Constants
     // Each seat reserves a block of 10 ports starting from the base.
     // Seat 0 → 47984-47993, Seat 1 → 47994-48003, etc.
     public const int PortBase = 47984;
-    public const int PortsPerSeat = 10;
+    // Apollo uses offsets from -5 (GFE HTTPS) to +21 (RTSP) = 27-port spread.
+    // 30 gives a 3-port gap between seats and avoids cross-seat collisions.
+    public const int PortsPerSeat = 30;
     public const int MaxSeats = 8;
 
     // ── Port offsets within a seat's block ────────────────────────────
-    public const int OffsetHttps = 0;   // Apollo HTTPS (pairing)
-    public const int OffsetHttp = 1;    // Apollo HTTP
-    public const int OffsetVideo = 2;   // RTP video
-    public const int OffsetAudio = 3;   // RTP audio
-    public const int OffsetControl = 4; // Control channel
+    // Matches Apollo's map_port(N) = sunshine.port + N (from network.cpp).
+    public const int OffsetGfeHttps  = -5;  // GFE HTTPS — Moonlight serverinfo/pair/launch
+    public const int OffsetGfeHttp   =  0;  // GFE HTTP  — same endpoints, plaintext fallback
+    public const int OffsetWebUi     =  1;  // Apollo web UI HTTPS
+    public const int OffsetVideo     =  9;  // RTP video stream
+    public const int OffsetControl   = 10;  // ENet control channel
+    public const int OffsetAudio     = 11;  // RTP audio stream
+    public const int OffsetMic       = 12;  // RTP mic stream (stream_mic)
+    public const int OffsetRtsp      = 26;  // RTSP session setup (TCP) — Sunshine stock RTSP port (48010 with PortBase=47984)
+
+    // Legacy aliases kept for the ApolloConfigBuilder "port =" line (value is OffsetGfeHttp = 0)
+    // and for FirewallManager until those callers are updated.
+    public const int OffsetHttps = OffsetGfeHttp;   // = 0; "port =" key in sunshine.conf
+    public const int OffsetHttp  = OffsetWebUi;     // = 1; web UI port
 
     // ── Default paths ────────────────────────────────────────────────
     public const string DefaultApolloPath = @"C:\Program Files\Apollo\sunshine.exe";

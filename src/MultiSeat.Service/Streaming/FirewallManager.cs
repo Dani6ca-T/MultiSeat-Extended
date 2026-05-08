@@ -12,12 +12,15 @@ namespace MultiSeat.Service.Streaming;
 /// Moonlight clients on the LAN can connect. Rules are created on
 /// seat provision and removed on teardown.
 ///
-/// Port layout per seat (5 ports from PortBase):
-///   +0  HTTPS  (TCP)   — Moonlight pairing + Apollo web UI
-///   +1  HTTP   (TCP)   — Apollo web UI fallback
-///   +2  Video  (UDP)   — RTP video stream
-///   +3  Audio  (UDP)   — RTP audio stream
-///   +4  Control (UDP)  — ENet control channel
+/// Port layout per seat (Apollo map_port offsets from PortBase):
+///   -5  GFE HTTPS (TCP) — Moonlight pairing + launch (primary)
+///    0  GFE HTTP  (TCP) — Moonlight pairing + launch (plaintext fallback)
+///    1  Web UI    (TCP) — Apollo web UI
+///    9  Video     (UDP) — RTP video stream
+///   10  Control   (UDP) — ENet control channel
+///   11  Audio     (UDP) — RTP audio stream
+///   12  Mic       (UDP) — RTP mic stream (stream_mic)
+///   26  RTSP      (TCP) — Session setup handshake (Sunshine stock 48010)
 ///
 /// Uses netsh advfirewall (available on all Windows 10/11 builds).
 /// Requires running as SYSTEM (Windows Service context).
@@ -71,8 +74,12 @@ public sealed class FirewallManager
         var ruleName = $"MultiSeat-Seat-{seat.Id:N}";
         var portBase = seat.PortBase;
 
-        // TCP rule for HTTPS + HTTP (pairing, web UI)
-        var tcpPorts = $"{portBase + Constants.OffsetHttps},{portBase + Constants.OffsetHttp}";
+        // TCP: GFE HTTPS (pairing/launch), GFE HTTP (fallback), web UI, RTSP setup
+        var tcpPorts = string.Join(',',
+            portBase + Constants.OffsetGfeHttps,
+            portBase + Constants.OffsetGfeHttp,
+            portBase + Constants.OffsetWebUi,
+            portBase + Constants.OffsetRtsp);
         await RunNetshAsync(
             $"advfirewall firewall add rule name=\"{ruleName}-TCP\" " +
             $"dir=in action=allow protocol=TCP localport={tcpPorts} " +
@@ -80,11 +87,12 @@ public sealed class FirewallManager
             $"description=\"MultiSeat Apollo streaming (TCP)\"",
             ct);
 
-        // UDP rule for Video + Audio + Control (streaming data)
+        // UDP: video + control + audio + mic
         var udpPorts = string.Join(',',
             portBase + Constants.OffsetVideo,
+            portBase + Constants.OffsetControl,
             portBase + Constants.OffsetAudio,
-            portBase + Constants.OffsetControl);
+            portBase + Constants.OffsetMic);
         await RunNetshAsync(
             $"advfirewall firewall add rule name=\"{ruleName}-UDP\" " +
             $"dir=in action=allow protocol=UDP localport={udpPorts} " +

@@ -1,38 +1,45 @@
-using System.Collections.Concurrent;
 using MultiSeat.Shared;
 
 namespace MultiSeat.Service.Streaming;
 
 /// <summary>
-/// Thread-safe port block allocator. Each seat reserves a contiguous
-/// block of ports for Apollo's HTTPS, HTTP, video, audio, and control channels.
+/// Thread-safe port block allocator. Each seat gets a PortsPerSeat-wide block
+/// covering Apollo's full port range (GFE HTTPS at base-5 through RTSP at base+21).
+/// Always allocates the lowest available port first so seat 0 consistently gets 47984.
 /// </summary>
 public sealed class PortAllocator
 {
-    private readonly int _basePort;
-    private readonly ConcurrentBag<int> _available = [];
-    private readonly ConcurrentDictionary<int, bool> _allocated = new();
+    private readonly object _lock = new();
+    private readonly SortedSet<int> _available = [];
+    private readonly HashSet<int> _allocated = [];
 
     public PortAllocator()
     {
-        _basePort = Constants.PortBase;
         for (int i = 0; i < Constants.MaxSeats; i++)
-            _available.Add(_basePort + i * Constants.PortsPerSeat);
+            _available.Add(Constants.PortBase + i * Constants.PortsPerSeat);
     }
 
     public int Allocate()
     {
-        if (!_available.TryTake(out var port))
-            throw new InvalidOperationException("No port blocks available. All seats occupied.");
+        lock (_lock)
+        {
+            if (_available.Count == 0)
+                throw new InvalidOperationException("No port blocks available. All seats occupied.");
 
-        _allocated.TryAdd(port, true);
-        return port;
+            var port = _available.Min;
+            _available.Remove(port);
+            _allocated.Add(port);
+            return port;
+        }
     }
 
     public void Release(int portBase)
     {
-        if (_allocated.TryRemove(portBase, out _))
-            _available.Add(portBase);
+        lock (_lock)
+        {
+            if (_allocated.Remove(portBase))
+                _available.Add(portBase);
+        }
     }
 
     public int GetHttpsPort(int portBase) => portBase + Constants.OffsetHttps;
