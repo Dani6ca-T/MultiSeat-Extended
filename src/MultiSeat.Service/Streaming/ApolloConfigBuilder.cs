@@ -213,14 +213,6 @@ public sealed class ApolloConfigBuilder
         sb.AppendLine($"log_path = {logPath}");
         sb.AppendLine();
 
-        // ── Compatibility ─────────────────────────────────────────────
-        // Standard Moonlight iOS (App Store) does not connect to rtspenc:// URLs —
-        // it sends corever=1 but never opens the RTSP port when Apollo replies with
-        // the encrypted scheme. Force plain rtsp:// so all Moonlight clients work.
-        sb.AppendLine("# Compatibility — force plain RTSP for standard Moonlight clients");
-        sb.AppendLine("disable_rtsp_encryption = enabled");
-        sb.AppendLine();
-
         // ── Advanced ──────────────────────────────────────────────────
         sb.AppendLine("# Advanced — notify MultiSeat on client connect/disconnect");
         sb.AppendLine("# ping_timeout = 10000");
