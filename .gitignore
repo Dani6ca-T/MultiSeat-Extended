@@ -3,7 +3,13 @@ bin/
 obj/
 publish/
 publish_tmp/
+publish_out/
 out/
+
+# Packet capture / diagnostic traces
+*.etl
+*.etx
+PktMon.*
 
 # C++ InputHook DLL build output
 src/MultiSeat.InputHook/build/
