@@ -83,10 +83,18 @@ static inline BOOL ShouldPassThrough()
 
 LRESULT CALLBACK LowLevelKeyboardProc(int nCode, WPARAM wParam, LPARAM lParam)
 {
-    if (nCode >= 0 && !ShouldPassThrough())
+    if (nCode >= 0)
     {
-        // Block the event — return non-zero without calling CallNextHookEx
-        return 1;
+        // Injected events (SendInput/keybd_event) are session-scoped — a process
+        // can only inject into its own session, so there is no cross-session bleed
+        // to filter. Passing them through immediately avoids blocking Apollo's
+        // input injection thread on every keystroke.
+        const KBDLLHOOKSTRUCT* khs = reinterpret_cast<const KBDLLHOOKSTRUCT*>(lParam);
+        if (khs->flags & LLKHF_INJECTED)
+            return CallNextHookEx(g_keyboardHook, nCode, wParam, lParam);
+
+        if (!ShouldPassThrough())
+            return 1;
     }
 
     return CallNextHookEx(g_keyboardHook, nCode, wParam, lParam);
@@ -94,9 +102,18 @@ LRESULT CALLBACK LowLevelKeyboardProc(int nCode, WPARAM wParam, LPARAM lParam)
 
 LRESULT CALLBACK LowLevelMouseProc(int nCode, WPARAM wParam, LPARAM lParam)
 {
-    if (nCode >= 0 && !ShouldPassThrough())
+    if (nCode >= 0)
     {
-        return 1;
+        // Same fast-path for injected mouse events — skips the session check and
+        // the GetForegroundWindow/ProcessIdToSessionId overhead on every event.
+        // At 1000 Hz mouse polling this avoids ~1000 blocking kernel calls/sec on
+        // Apollo's SendInput thread, which was starving the encode pipeline.
+        const MSLLHOOKSTRUCT* mhs = reinterpret_cast<const MSLLHOOKSTRUCT*>(lParam);
+        if (mhs->flags & LLMHF_INJECTED)
+            return CallNextHookEx(g_mouseHook, nCode, wParam, lParam);
+
+        if (!ShouldPassThrough())
+            return 1;
     }
 
     return CallNextHookEx(g_mouseHook, nCode, wParam, lParam);
