@@ -902,7 +902,7 @@ public sealed class SessionLauncher
             // shell Documents folder (written by EnsureDefaultRdp before this call).
             // Default.rdp is always trusted; only .rdp files passed as arguments trigger
             // the "Caution: Unknown remote connection / Unknown publisher" security warning.
-            var cmdLine = $"mstsc.exe /v:{RdpLoopbackAddress} /w:1 /h:1";
+            var cmdLine = $"mstsc.exe /v:{RdpLoopbackAddress}";
 
             if (!AdvApi.CreateProcessAsUserW(
                     consoleToken, null, cmdLine,
@@ -1153,7 +1153,22 @@ public sealed class SessionLauncher
             // security dialog that the DismissMstscSecurityDialog dismisser cannot catch,
             // causing the RDP connection to hang. VAC-based mic routing via virtual_sink is
             // sufficient and does not require mic redirect from the console session.
-            "audiomode:i:1\r\n";
+            "audiomode:i:1\r\n" +
+            // The mstsc window is hidden — RDP stream quality has zero user-visible impact.
+            // These settings minimize TermService encoding CPU on the host:
+            //   session bpp:i:8      → 8-bit color (256 colors): 1/4 the pixel data vs 32-bit
+            //   connection type:i:1  → modem quality: simplest RDP compression algorithm,
+            //                          suppresses RemoteFX/H.264 RDP codec entirely
+            //   disable wallpaper    → solid black background on the RDP display: nothing to encode
+            //   disable themes/anims → no Aero rendering overhead on the RDP virtual display
+            "session bpp:i:8\r\n" +
+            "connection type:i:1\r\n" +
+            "disable wallpaper:i:1\r\n" +
+            "disable full window drag:i:1\r\n" +
+            "disable menu anims:i:1\r\n" +
+            "disable themes:i:1\r\n" +
+            "allow font smoothing:i:0\r\n" +
+            "allow desktop composition:i:0\r\n";
 
         // Stage the file content in ProgramData where SYSTEM always has write access.
         const string stagingPath = @"C:\ProgramData\MultiSeat\default_rdp_staging.rdp";
