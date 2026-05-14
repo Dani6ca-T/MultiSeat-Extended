@@ -387,17 +387,14 @@ public sealed class SessionLauncher
             }
         }
 
-        // Non-blocking: session logs off asynchronously; we don't wait.
-        // Blocking (bWait: true) takes 10-30s per seat and causes the SCM stop
-        // timeout to expire during shutdown.
-        if (!WtsApi.WTSLogoffSession(WtsApi.WTS_CURRENT_SERVER_HANDLE, sessionId, false))
+        if (!WtsApi.WTSLogoffSession(WtsApi.WTS_CURRENT_SERVER_HANDLE, sessionId, true))
         {
             _logger.LogWarning("WTSLogoffSession({Sid}) failed: {Err}",
                 sessionId, Marshal.GetLastWin32Error());
         }
         else
         {
-            _logger.LogInformation("Session {Sid} logoff initiated", sessionId);
+            _logger.LogInformation("Session {Sid} logged off", sessionId);
         }
     }
 
@@ -790,15 +787,10 @@ public sealed class SessionLauncher
         // it defaults to Session 0. Without this, CreateProcessAsUser launches the helper in
         // Session 0 and ChangeDisplaySettingsEx(null) changes the wrong display.
         var sid = sessionId;
-        if (!AdvApi.SetTokenInformation(
-                token.DangerousGetHandle(),
-                AdvApi.TokenInformationClass.TokenSessionId,
-                ref sid, sizeof(int)))
-        {
-            _logger.LogWarning(
-                "SetTokenInformation(TokenSessionId={Sid}) failed: error {Err} — helper may run in wrong session",
-                sessionId, Marshal.GetLastWin32Error());
-        }
+        AdvApi.SetTokenInformation(
+            token.DangerousGetHandle(),
+            AdvApi.TokenInformationClass.TokenSessionId,
+            ref sid, sizeof(int));
 
         if (!UserEnv.CreateEnvironmentBlock(out var envBlock, token, false))
             envBlock = IntPtr.Zero;
@@ -828,20 +820,7 @@ public sealed class SessionLauncher
             }
 
             Kernel32.CloseHandle(pi.hThread);
-            var waitResult = Kernel32.WaitForSingleObject(pi.hProcess, 10_000);
-
-            if (Kernel32.GetExitCodeProcess(pi.hProcess, out var exitCode))
-            {
-                if (exitCode != 0)
-                    _logger.LogWarning(
-                        "Helper '{Cmd}' in session {Sid} exited with code {Code}",
-                        commandLine, sessionId, exitCode);
-                else
-                    _logger.LogDebug(
-                        "Helper '{Cmd}' in session {Sid} exited OK (waitResult={W})",
-                        commandLine, sessionId, waitResult);
-            }
-
+            Kernel32.WaitForSingleObject(pi.hProcess, 10_000);
             Kernel32.CloseHandle(pi.hProcess);
         }
         finally
@@ -923,7 +902,7 @@ public sealed class SessionLauncher
             // shell Documents folder (written by EnsureDefaultRdp before this call).
             // Default.rdp is always trusted; only .rdp files passed as arguments trigger
             // the "Caution: Unknown remote connection / Unknown publisher" security warning.
-            var cmdLine = $"mstsc.exe /v:{RdpLoopbackAddress}";
+            var cmdLine = $"mstsc.exe /v:{RdpLoopbackAddress} /w:1 /h:1";
 
             if (!AdvApi.CreateProcessAsUserW(
                     consoleToken, null, cmdLine,
@@ -1170,11 +1149,11 @@ public sealed class SessionLauncher
             // render Moonlight mic audio (virtual_sink). With the default audiomode:i:0 (redirect
             // to client), only "Remote Audio Output" is visible — VAC devices are invisible and
             // both audio_sink and virtual_sink silently fail.
-            "audiomode:i:1\r\n" +
-            // audiocapturemode:i:1 — expose the console session's physical mic as "Remote Audio
-            // Input" inside the seat session. Provides a fallback capture device in case the
-            // VAC-based mic routing (virtual_sink → MicCapture) is not yet set up.
-            "audiocapturemode:i:1\r\n";
+            // NOTE: do NOT add audiocapturemode:i:1 here — it triggers a Windows mic-access
+            // security dialog that the DismissMstscSecurityDialog dismisser cannot catch,
+            // causing the RDP connection to hang. VAC-based mic routing via virtual_sink is
+            // sufficient and does not require mic redirect from the console session.
+            "audiomode:i:1\r\n";
 
         // Stage the file content in ProgramData where SYSTEM always has write access.
         const string stagingPath = @"C:\ProgramData\MultiSeat\default_rdp_staging.rdp";
@@ -1528,19 +1507,11 @@ public sealed class SessionLauncher
     }
 
     /// <summary>
-    /// Mute mstsc's audio session so the RDP audio redirect doesn't bleed
-    /// through the console session's speakers to the main account.
-    ///
-    /// Mechanism: audiomode:i:0 (default) creates a "Remote Audio Output"
-    /// device in the RDP session — required for Apollo to capture game audio.
-    /// Side effect: mstsc plays that audio back through the console session.
-    /// This method mutes the mstsc audio session via ISimpleAudioVolume so
-    /// the sound reaches Moonlight but not the server's physical speakers.
-    ///
-    /// The Core Audio API is session-scoped: a SYSTEM service in Session 0
-    /// cannot see Session 1 audio sessions. We use RunInConsoleSession to
-    /// run a small helper (MultiSeat.Service.exe --mute-audio <pid>) in Session 1
-    /// where mstsc's audio session is visible.
+    /// Mute mstsc's audio session in the console session.
+    /// With audiomode:i:1 (play on remote), mstsc has no audio session in the
+    /// console session so this is typically a no-op — but it's kept as a safety
+    /// net in case mstsc creates a session-scoped audio endpoint for control traffic.
+    /// The Core Audio API is session-scoped, so the helper runs in the console session.
     /// </summary>
     private void MuteMstscAudio(SafeTokenHandle consoleToken, uint consoleSessionId, int mstscPid)
     {
