@@ -200,6 +200,7 @@ internal static class User32
     // Used to set the refresh rate and resolution of a virtual display.
     // Works from Session 0 against GDI device names (e.g. \\.\DISPLAY5).
 
+    public const uint DM_POSITION         = 0x00000020;
     public const uint DM_BITSPERPEL       = 0x00040000;
     public const uint DM_PELSWIDTH        = 0x00080000;
     public const uint DM_PELSHEIGHT       = 0x00100000;
@@ -207,6 +208,10 @@ internal static class User32
 
     public const uint CDS_UPDATEREGISTRY = 0x00000001;
     public const uint CDS_TEST           = 0x00000002;
+    public const uint CDS_NORESET        = 0x10000000;
+    public const uint CDS_SET_PRIMARY    = 0x00000010;
+
+    public const uint ENUM_CURRENT_SETTINGS = 0xFFFFFFFF;
 
     public const int DISP_CHANGE_SUCCESSFUL = 0;
     public const int DISP_CHANGE_RESTART    = 1;
@@ -256,10 +261,26 @@ internal static class User32
         public uint   dmPanningHeight;
     }
 
+    [DllImport(Lib, EntryPoint = "EnumDisplaySettingsExW", CharSet = CharSet.Unicode)]
+    public static extern bool EnumDisplaySettingsEx(
+        string? lpszDeviceName,
+        uint iModeNum,
+        ref DEVMODE lpDevMode,
+        uint dwFlags);
+
     [DllImport(Lib, EntryPoint = "ChangeDisplaySettingsExW", CharSet = CharSet.Unicode)]
     public static extern int ChangeDisplaySettingsEx(
         string? lpszDeviceName,
         ref DEVMODE lpDevMode,
+        IntPtr hwnd,
+        uint dwflags,
+        IntPtr lParam);
+
+    // Null-DEVMODE overload — used for the final "apply all" call (CDS_NORESET batch commit).
+    [DllImport(Lib, EntryPoint = "ChangeDisplaySettingsExW", CharSet = CharSet.Unicode)]
+    public static extern int ChangeDisplaySettingsExApply(
+        IntPtr lpszDeviceName,
+        IntPtr lpDevMode,
         IntPtr hwnd,
         uint dwflags,
         IntPtr lParam);

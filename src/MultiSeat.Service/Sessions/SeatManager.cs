@@ -291,6 +291,52 @@ public sealed class SeatManager
                     _apolloManager.Stop(seat);
                     await Task.Delay(2000, ct);
                     seat.ApolloProcessId = await _apolloManager.StartAsync(seat, ct);
+
+                    // ── 6.6: Display isolation ──────────────────────────────
+                    // With SudoVDA created and Apollo running, set SudoVDA as the session
+                    // primary and shrink the RDP virtual display to 640×480. This keeps
+                    // TermService encoding to near-zero CPU (it encodes 640×480 secondary
+                    // instead of the full-res game display) while preserving correct DPI
+                    // and resolution for games — they run on SudoVDA (primary, 1920×1080).
+                    // Apollo captures SudoVDA via output_name — streaming is unaffected.
+                    await Task.Delay(2000, ct); // let Apollo and SudoVDA IPC settle
+                    try
+                    {
+                        var helperExe = Path.Combine(AppContext.BaseDirectory, "MultiSeat.Service.exe");
+                        _sessionLauncher.RunHelperInSeatSession(
+                            seat.SessionId, seat.AccountName,
+                            $"\"{helperExe}\" --setup-display-isolation");
+                        _logger.LogInformation(
+                            "Seat {Id}: display isolation applied — SudoVDA is primary, RDP display shrunk to 640×480",
+                            seat.Id);
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogWarning(ex,
+                            "Seat {Id}: display isolation failed (non-critical — TermService CPU may be elevated)",
+                            seat.Id);
+                    }
+
+                    // ── 6.7: Set SudoVDA refresh rate ──────────────────────────
+                    // SudoVDA reports 1000Hz natively. After isolation it is the session
+                    // primary, so ChangeDisplaySettingsEx(null,...) targets it directly.
+                    // Set Hz to seat.Fps so games don't try to render at 1000fps.
+                    await Task.Delay(500, ct);
+                    try
+                    {
+                        var helperExe = Path.Combine(AppContext.BaseDirectory, "MultiSeat.Service.exe");
+                        _sessionLauncher.RunHelperInSeatSession(
+                            seat.SessionId, seat.AccountName,
+                            $"\"{helperExe}\" --set-display-hz {seat.Fps}");
+                        _logger.LogInformation(
+                            "Seat {Id}: SudoVDA refresh rate set to {Hz}Hz",
+                            seat.Id, seat.Fps);
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogWarning(ex,
+                            "Seat {Id}: could not set SudoVDA refresh rate (non-critical)", seat.Id);
+                    }
                 }
                 else
                 {

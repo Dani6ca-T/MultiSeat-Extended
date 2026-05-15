@@ -65,6 +65,16 @@ if (args.Length == 2 && args[0] == "--set-default-render")
     return MultiSeat.Service.Audio.AudioCaptureHelper.SetDefaultAudioDevice(args[1]) ? 0 : 1;
 }
 
+// ── Setup-display-isolation helper mode ──────────────────────────────
+// Invoked inside a seat's RDP session after Apollo has created the SudoVDA display.
+// Makes SudoVDA the primary display and shrinks the RDP display to 640×480 so
+// TermService only encodes a tiny secondary display instead of full game content.
+// Usage: MultiSeat.Service.exe --setup-display-isolation
+if (args.Length == 1 && args[0] == "--setup-display-isolation")
+{
+    return DisplayModeHelper.SetupDisplayIsolation();
+}
+
 // ── Set-display-hz helper mode ────────────────────────────────────────
 // 2-arg form: invoked inside a seat's RDP session — targets the session-primary display
 // (Microsoft Remote Display Adapter) via ChangeDisplaySettingsEx(null, ...).
@@ -94,13 +104,6 @@ builder.Services.Configure<MultiSeatOptions>(builder.Configuration.GetSection(Mu
 builder.Services.AddWindowsService(options =>
 {
     options.ServiceName = "MultiSeatService";
-});
-
-// Give the host enough time to tear down all seats gracefully.
-// Default is 5 seconds; seat teardown (Apollo kill + session logoff) can take 30-60s.
-builder.Services.Configure<HostOptions>(options =>
-{
-    options.ShutdownTimeout = TimeSpan.FromSeconds(60);
 });
 
 // ── Core services (singletons — one per host lifetime) ───────────────
