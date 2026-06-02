@@ -70,7 +70,8 @@ Two separate scripts — prereqs and service deploy are intentionally split:
 
 - Service runs as **SYSTEM** — all process creation uses `CreateProcessAsUser` with appropriate session tokens.
 - Sessions are created via **RDP loopback** (`127.0.0.2`) — the only reliable way to create new interactive sessions from Session 0.
-- `mstsc.exe` is launched in the console session and kept alive (hidden on the virtual display) to hold the seat session in **Active** state so display APIs work. Call `DisconnectSession()` once Apollo has initialized.
+- `mstsc.exe` is launched in the console session and kept alive (hidden via `SW_HIDE`) to hold the seat session in **Active** state for the lifetime of the seat. Do NOT disconnect — Apollo calls `QueryDisplayConfig` both at startup and when each Moonlight client connects; disconnected sessions return `ERROR_ACCESS_DENIED`.
+- After Apollo creates its SudoVDA monitor, `SeatManager.ApplyDisplayIsolationAsync` runs in the seat session to set SudoVDA as the session primary and shrink the RDP virtual adapter to 640×480. This drops TermService CPU from ~70% to under 5% during streaming. The helper REQUIRES `seat.DisplayDevicePath` (Apollo's `output_name`); without it the isolation is skipped to avoid grabbing the wrong virtual display.
 - Temp RDP files go to `C:\ProgramData\MultiSeat\` (not `%TEMP%`) so the console user's token can read them.
 - `WTSQueryUserToken` returns a filtered (medium-integrity) token for admin accounts — `SessionLauncher` fetches the linked elevated token via `GetTokenLinkedToken` for SudoVDA IPC access.
 
