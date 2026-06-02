@@ -22,15 +22,18 @@ public sealed class SessionHealthCheck
     private readonly ILogger<SessionHealthCheck> _logger;
     private readonly SessionLauncher _sessionLauncher;
     private readonly ApolloManager _apolloManager;
+    private readonly SeatManager _seatManager;
 
     public SessionHealthCheck(
         ILogger<SessionHealthCheck> logger,
         SessionLauncher sessionLauncher,
-        ApolloManager apolloManager)
+        ApolloManager apolloManager,
+        SeatManager seatManager)
     {
         _logger = logger;
         _sessionLauncher = sessionLauncher;
         _apolloManager = apolloManager;
+        _seatManager = seatManager;
     }
 
     /// <summary>
@@ -121,6 +124,12 @@ public sealed class SessionHealthCheck
                     _logger.LogInformation(
                         "Seat {Id}: Apollo restarted after reconnect (PID {Pid})",
                         seat.Id, newPid);
+
+                    // The session disconnect/reconnect wiped display-isolation state
+                    // (SudoVDA is no longer primary; the RDP adapter has come back at
+                    // its 1024×768 wake default). Without this, Apollo's mode change
+                    // ends up on the wrong display and the stream stays at 1024×768.
+                    await _seatManager.ApplyDisplayIsolationAsync(seat, ct);
                     return true;
                 }
             }
@@ -151,6 +160,11 @@ public sealed class SessionHealthCheck
                 _logger.LogInformation(
                     "Seat {Id}: Apollo restarted successfully (PID {Pid})",
                     seat.Id, newPid);
+
+                // Apollo restart re-creates the SudoVDA monitor — the in-session
+                // display-isolation state (SudoVDA-as-primary, RDP shrunk to 640×480)
+                // doesn't survive that, so reapply it.
+                await _seatManager.ApplyDisplayIsolationAsync(seat, ct);
                 return true; // state metadata changed (PID)
             }
             else

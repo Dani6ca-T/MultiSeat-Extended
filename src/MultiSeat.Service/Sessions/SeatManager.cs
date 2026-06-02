@@ -292,51 +292,8 @@ public sealed class SeatManager
                     await Task.Delay(2000, ct);
                     seat.ApolloProcessId = await _apolloManager.StartAsync(seat, ct);
 
-                    // ── 6.6: Display isolation ──────────────────────────────
-                    // With SudoVDA created and Apollo running, set SudoVDA as the session
-                    // primary and shrink the RDP virtual display to 640×480. This keeps
-                    // TermService encoding to near-zero CPU (it encodes 640×480 secondary
-                    // instead of the full-res game display) while preserving correct DPI
-                    // and resolution for games — they run on SudoVDA (primary, 1920×1080).
-                    // Apollo captures SudoVDA via output_name — streaming is unaffected.
-                    await Task.Delay(2000, ct); // let Apollo and SudoVDA IPC settle
-                    try
-                    {
-                        var helperExe = Path.Combine(AppContext.BaseDirectory, "MultiSeat.Service.exe");
-                        _sessionLauncher.RunHelperInSeatSession(
-                            seat.SessionId, seat.AccountName,
-                            $"\"{helperExe}\" --setup-display-isolation");
-                        _logger.LogInformation(
-                            "Seat {Id}: display isolation applied — SudoVDA is primary, RDP display shrunk to 640×480",
-                            seat.Id);
-                    }
-                    catch (Exception ex)
-                    {
-                        _logger.LogWarning(ex,
-                            "Seat {Id}: display isolation failed (non-critical — TermService CPU may be elevated)",
-                            seat.Id);
-                    }
-
-                    // ── 6.7: Set SudoVDA refresh rate ──────────────────────────
-                    // SudoVDA reports 1000Hz natively. After isolation it is the session
-                    // primary, so ChangeDisplaySettingsEx(null,...) targets it directly.
-                    // Set Hz to seat.Fps so games don't try to render at 1000fps.
-                    await Task.Delay(500, ct);
-                    try
-                    {
-                        var helperExe = Path.Combine(AppContext.BaseDirectory, "MultiSeat.Service.exe");
-                        _sessionLauncher.RunHelperInSeatSession(
-                            seat.SessionId, seat.AccountName,
-                            $"\"{helperExe}\" --set-display-hz {seat.Fps}");
-                        _logger.LogInformation(
-                            "Seat {Id}: SudoVDA refresh rate set to {Hz}Hz",
-                            seat.Id, seat.Fps);
-                    }
-                    catch (Exception ex)
-                    {
-                        _logger.LogWarning(ex,
-                            "Seat {Id}: could not set SudoVDA refresh rate (non-critical)", seat.Id);
-                    }
+                    // ── 6.6/6.7: Display isolation + refresh-rate clamp ─────
+                    await ApplyDisplayIsolationAsync(seat, ct);
                 }
                 else
                 {
@@ -543,8 +500,68 @@ public sealed class SeatManager
                 _configBuilder.UpdateDisplayOutput(configPath, seat.DisplayDevicePath);
         }
 
+        if (seat.ApolloProcessId > 0)
+            await ApplyDisplayIsolationAsync(seat, ct);
+
         _ = BroadcastState(seat);
         _logger.LogInformation("Seat {Id}: Apollo restarted by user (PID {Pid})", seatId, seat.ApolloProcessId);
+    }
+
+    /// <summary>
+    /// Make SudoVDA the session primary, shrink the RDP virtual display to 640×480,
+    /// and clamp SudoVDA's refresh rate to seat.Fps. Runs inside the seat's RDP session
+    /// via the --setup-display-isolation and --set-display-hz helper modes.
+    ///
+    /// This state does not survive a session disconnect (sleep/wake) or an Apollo restart,
+    /// so this method is called from every code path that (re)starts Apollo:
+    ///   - Initial provisioning (after the SudoVDA-output restart).
+    ///   - User-triggered RestartApolloAsync.
+    ///   - SessionHealthCheck after sleep-reconnect or crash auto-restart.
+    ///
+    /// Without re-applying after a wake event, SudoVDA stops being primary and the
+    /// stream falls back to the Microsoft Remote Display Adapter at its default
+    /// 1024×768 — even though Apollo logs request 1920×1080.
+    /// Both steps are best-effort; failures are logged and ignored.
+    /// </summary>
+    public async Task ApplyDisplayIsolationAsync(SeatInfo seat, CancellationToken ct)
+    {
+        var helperExe = Path.Combine(AppContext.BaseDirectory, "MultiSeat.Service.exe");
+
+        // Let Apollo + SudoVDA IPC settle so the helper sees both displays.
+        await Task.Delay(2000, ct);
+        try
+        {
+            _sessionLauncher.RunHelperInSeatSession(
+                seat.SessionId, seat.AccountName,
+                $"\"{helperExe}\" --setup-display-isolation");
+            _logger.LogInformation(
+                "Seat {Id}: display isolation applied — SudoVDA is primary, RDP display shrunk to 640×480",
+                seat.Id);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex,
+                "Seat {Id}: display isolation failed (non-critical — TermService CPU may be elevated)",
+                seat.Id);
+        }
+
+        // SudoVDA is now primary, so ChangeDisplaySettingsEx(null,...) in the helper
+        // targets it directly. Clamp Hz to seat.Fps so games don't try to render at 1000fps.
+        await Task.Delay(500, ct);
+        try
+        {
+            _sessionLauncher.RunHelperInSeatSession(
+                seat.SessionId, seat.AccountName,
+                $"\"{helperExe}\" --set-display-hz {seat.Fps}");
+            _logger.LogInformation(
+                "Seat {Id}: SudoVDA refresh rate set to {Hz}Hz",
+                seat.Id, seat.Fps);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex,
+                "Seat {Id}: could not set SudoVDA refresh rate (non-critical)", seat.Id);
+        }
     }
 
     /// <summary>Reset the audio routing for a seat (release + re-assign cable + re-apply session defaults).</summary>
