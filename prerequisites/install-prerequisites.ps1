@@ -660,45 +660,54 @@ if (Test-Path $apolloPath) {
 }
 
 # ----------------------------------------------------------------
-# 6. SudoVDA  --  Virtual Display Driver (one virtual display per seat)
+# 6. Persistent Virtual Display Driver (VirtualDrivers/Virtual-Display-Driver,
+#    aka MttVDD / itsmikethetech VDD)
 #
-# SudoVDA (Virtual Display Driver by VirtualDrivers) is REQUIRED for
-# display isolation. Without it, Apollo captures the primary physical
-# display. With it, each seat gets its own hidden virtual display in
-# the console session — mstsc runs fullscreen there, invisible to the
-# main user. The service assigns one virtual display per seat via
-# VirtualDisplayManager.
+# This is NOT Apollo's SudoVDA — Apollo ships its own SudoVDA driver
+# inside the Apollo package (step 5) and creates one virtual monitor per
+# Apollo instance on demand. This driver is a SEPARATE always-on IddCx
+# display that appears at boot, so headless hosts have a desktop for
+# RustDesk / AnyDesk / RDP to attach to before any seat is provisioned.
 #
+# Without this driver, a headless machine (no physical monitor) has no
+# console-session display at boot — remote desktop tools won't see
+# anything until Apollo + a seat have started. With it, you get a
+# persistent display at boot, and Apollo's SudoVDA still handles
+# per-seat isolation.
+#
+# Installed device shows up as "Root\MttVDD" in Device Manager.
 # Display count is configured via vdd_settings.xml (see below).
 # ----------------------------------------------------------------
-Write-Step "SudoVDA  --  Virtual Display Driver (one display per seat)"
+Write-Step "Persistent Virtual Display Driver (MttVDD — for headless boot)"
 
-function Test-SudoVdaInstalled {
+function Test-PersistentVddInstalled {
     return [bool](Get-PnpDevice -ErrorAction SilentlyContinue |
-        Where-Object { $_.FriendlyName -match "VDD|Virtual Display|SudoVDA|MTT" })
+        Where-Object { $_.FriendlyName -match "VDD|Virtual Display|MTT" } |
+        Where-Object { $_.FriendlyName -notmatch "SudoMaker" })
 }
 
-if (Test-SudoVdaInstalled) {
+if (Test-PersistentVddInstalled) {
     $dev = (Get-PnpDevice -ErrorAction SilentlyContinue |
-        Where-Object { $_.FriendlyName -match "VDD|Virtual Display|SudoVDA|MTT" } |
+        Where-Object { $_.FriendlyName -match "VDD|Virtual Display|MTT" } |
+        Where-Object { $_.FriendlyName -notmatch "SudoMaker" } |
         Select-Object -First 1).FriendlyName
     Write-OK "Already installed ($dev)"
 } else {
-    $setup = Get-ChildItem $ScriptDir | Where-Object { $_.Name -match "Virtual\.Display\.Driver.*\.exe|^VDD.*\.exe$|^SudoVDA.*\.exe$" } |
+    $setup = Get-ChildItem $ScriptDir | Where-Object { $_.Name -match "Virtual\.Display\.Driver.*\.exe|^VDD.*\.exe$" } |
              Select-Object -First 1
     if (-not $setup) {
         $f = Get-Prerequisite "Virtual.Display.Driver-setup-x64.exe" `
             "https://github.com/VirtualDrivers/Virtual-Display-Driver/releases/download/25.5.2/Virtual.Display.Driver-v25.05.03-setup-x64.exe" `
-            "SudoVDA (Virtual Display Driver v25.5.2)"
+            "Persistent VDD (VirtualDrivers/Virtual-Display-Driver v25.5.2)"
         if ($f) { $setup = Get-Item $f }
     }
     if ($setup) {
         Write-Host "  Installing $($setup.Name) (silent)..." -ForegroundColor White
         Start-Process $setup.FullName -ArgumentList "/S" -Wait -NoNewWindow
 
-        if (Test-SudoVdaInstalled) {
+        if (Test-PersistentVddInstalled) {
             Write-OK "Installed (reboot required to activate virtual display)"
-            $Installed += "SudoVDA"
+            $Installed += "VirtualDisplayDriver"
             $NeedsReboot = $true
         } else {
             # Silent install (/S) is not always supported — fall back to interactive
@@ -706,31 +715,33 @@ if (Test-SudoVdaInstalled) {
             Write-Host "  Click through the installer, accept any driver signing prompts, then press Enter here." -ForegroundColor Cyan
             Start-Process $setup.FullName -Wait
 
-            if (Test-SudoVdaInstalled) {
+            if (Test-PersistentVddInstalled) {
                 Write-OK "Installed (reboot required to activate virtual display)"
-                $Installed += "SudoVDA"
+                $Installed += "VirtualDisplayDriver"
                 $NeedsReboot = $true
             } else {
                 Write-Host ""
-                Write-Host "  ╔══════════════════════════════════════════════════════════════╗" -ForegroundColor Red
-                Write-Host "  ║  SudoVDA NOT INSTALLED — MultiSeat requires this driver!    ║" -ForegroundColor Red
-                Write-Host "  ╚══════════════════════════════════════════════════════════════╝" -ForegroundColor Red
-                Write-Host "  Without SudoVDA, seats cannot get isolated virtual displays." -ForegroundColor Yellow
+                Write-Host "  ╔══════════════════════════════════════════════════════════════╗" -ForegroundColor Yellow
+                Write-Host "  ║  Persistent VDD not installed — headless boot will have no  ║" -ForegroundColor Yellow
+                Write-Host "  ║  display until a seat is provisioned. Apollo's own SudoVDA  ║" -ForegroundColor Yellow
+                Write-Host "  ║  still handles per-seat virtual displays.                   ║" -ForegroundColor Yellow
+                Write-Host "  ╚══════════════════════════════════════════════════════════════╝" -ForegroundColor Yellow
                 Write-Host "  Try installing manually: $($setup.FullName)" -ForegroundColor Yellow
                 Write-Host "  Then re-run this script." -ForegroundColor Yellow
-                $Skipped += "SudoVDA (install failed — REQUIRED)"
+                $Skipped += "VirtualDisplayDriver (install failed — needed for headless boot)"
                 $NeedsReboot = $true
             }
         }
     } else {
         Write-Host ""
-        Write-Host "  ╔══════════════════════════════════════════════════════════════╗" -ForegroundColor Red
-        Write-Host "  ║  SudoVDA installer not found — MultiSeat requires this!     ║" -ForegroundColor Red
-        Write-Host "  ╚══════════════════════════════════════════════════════════════╝" -ForegroundColor Red
+        Write-Host "  ╔══════════════════════════════════════════════════════════════╗" -ForegroundColor Yellow
+        Write-Host "  ║  Persistent VDD installer not found — needed for headless  ║" -ForegroundColor Yellow
+        Write-Host "  ║  boot. Apollo's SudoVDA still handles per-seat displays.    ║" -ForegroundColor Yellow
+        Write-Host "  ╚══════════════════════════════════════════════════════════════╝" -ForegroundColor Yellow
         Write-Host "  Download from: https://github.com/VirtualDrivers/Virtual-Display-Driver/releases" -ForegroundColor Yellow
         Write-Host "  Place the installer in: $ScriptDir" -ForegroundColor Yellow
         Write-Host "  Then re-run this script." -ForegroundColor Yellow
-        $Skipped += "SudoVDA (installer not found — REQUIRED)"
+        $Skipped += "VirtualDisplayDriver (installer not found — needed for headless boot)"
     }
 }
 
@@ -744,7 +755,7 @@ if (Test-SudoVdaInstalled) {
 # Config location: C:\VirtualDisplayDriver\vdd_settings.xml
 # (installed alongside the driver by the setup exe)
 # ────────────────────────────────────────────────────────────────────
-Write-Step "SudoVDA display count  --  configuring $Seats virtual display(s)"
+Write-Step "Persistent VDD display count  --  configuring $Seats virtual display(s)"
 
 # The installer places config under one of these paths depending on version
 $vddConfigPaths = @(
@@ -818,7 +829,7 @@ if ($currentCount -eq $Seats) {
     } else {
         $NeedsReboot = $true
     }
-    $Installed += "SudoVDA config ($Seats displays)"
+    $Installed += "VirtualDisplayDriver config ($Seats displays)"
 }
 
 # ----------------------------------------------------------------
