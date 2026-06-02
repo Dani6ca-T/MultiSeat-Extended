@@ -527,13 +527,25 @@ public sealed class SeatManager
     {
         var helperExe = Path.Combine(AppContext.BaseDirectory, "MultiSeat.Service.exe");
 
+        // Skip isolation entirely if we don't know which SudoVDA Apollo created — the helper
+        // would otherwise risk grabbing an orphan SudoVDA attached to another session
+        // (e.g. the console's RustDesk display) and dragging its resolution along with the seat's.
+        if (string.IsNullOrEmpty(seat.DisplayDevicePath))
+        {
+            _logger.LogWarning(
+                "Seat {Id}: skipping display isolation — DisplayDevicePath is unset, " +
+                "TermService CPU may be elevated",
+                seat.Id);
+            return;
+        }
+
         // Let Apollo + SudoVDA IPC settle so the helper sees both displays.
         await Task.Delay(2000, ct);
         try
         {
             _sessionLauncher.RunHelperInSeatSession(
                 seat.SessionId, seat.AccountName,
-                $"\"{helperExe}\" --setup-display-isolation");
+                $"\"{helperExe}\" --setup-display-isolation \"{seat.DisplayDevicePath}\"");
             _logger.LogInformation(
                 "Seat {Id}: display isolation applied — SudoVDA is primary, RDP display shrunk to 640×480",
                 seat.Id);

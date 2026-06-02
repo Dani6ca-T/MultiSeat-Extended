@@ -69,10 +69,13 @@ if (args.Length == 2 && args[0] == "--set-default-render")
 // Invoked inside a seat's RDP session after Apollo has created the SudoVDA display.
 // Makes SudoVDA the primary display and shrinks the RDP display to 640×480 so
 // TermService only encodes a tiny secondary display instead of full game content.
-// Usage: MultiSeat.Service.exe --setup-display-isolation
-if (args.Length == 1 && args[0] == "--setup-display-isolation")
+// The SudoVDA IddCx device path (SeatInfo.DisplayDevicePath / Apollo's output_name)
+// MUST be passed — without it the helper has no safe way to disambiguate between
+// multiple active SudoMaker monitor instances and refuses to run.
+// Usage: MultiSeat.Service.exe --setup-display-isolation <sudovda-iddcx-path>
+if (args.Length == 2 && args[0] == "--setup-display-isolation")
 {
-    return DisplayModeHelper.SetupDisplayIsolation();
+    return DisplayModeHelper.SetupDisplayIsolation(args[1]);
 }
 
 // ── Set-display-hz helper mode ────────────────────────────────────────
