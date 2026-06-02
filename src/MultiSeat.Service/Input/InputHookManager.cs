@@ -39,7 +39,14 @@ public sealed class InputHookManager : IDisposable
         IOptions<MultiSeatOptions> options)
     {
         _logger = logger;
-        _dllPath = options.Value.InputHookDllPath;
+        // Windows Services run with CWD = C:\Windows\System32, so a bare filename
+        // like "MultiSeatInputHook.dll" won't resolve via File.Exists. Anchor relative
+        // paths to the service's install dir. (DllImport itself works either way —
+        // LoadLibrary already searches the EXE's directory.)
+        var configured = options.Value.InputHookDllPath;
+        _dllPath = Path.IsPathRooted(configured)
+            ? configured
+            : Path.Combine(AppContext.BaseDirectory, configured);
         _enabled = options.Value.EnableKeyboardMouseIsolation;
     }
 
