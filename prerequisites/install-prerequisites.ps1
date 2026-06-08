@@ -632,12 +632,23 @@ Write-Step "Apollo (game streaming server)"
 
 $apolloInstallDir = "C:\Program Files\Apollo"
 $apolloPath = "$apolloInstallDir\sunshine.exe"
+# Apollo seeds config\apps.json from assets\apps.json on first run; without it Apollo
+# exits at startup. A complete install needs BOTH files. Some earlier release zips
+# shipped sunshine.exe only (missing assets\), so checking sunshine.exe alone would
+# wrongly treat a broken install as complete and skip the fix. See MultiSeat issue #5.
+$apolloAssetsSeed = "$apolloInstallDir\assets\apps.json"
 $apolloZipName = "apollovibe-v2026.6.1-multiseat.1-windows-x64.zip"
 $apolloDownloadUrl = "https://github.com/vibesoftwarecoder/Apollo/releases/download/v2026.6.1-multiseat.1/$apolloZipName"
 
-if (Test-Path $apolloPath) {
+$apolloComplete = (Test-Path $apolloPath) -and (Test-Path $apolloAssetsSeed)
+
+if ($apolloComplete) {
     Write-OK "Already installed at $apolloPath"
 } else {
+    if (Test-Path $apolloPath) {
+        Write-Host "  Existing Apollo install is incomplete (missing assets\apps.json) -- re-extracting." -ForegroundColor Yellow
+        Write-Host "  If a stale zip in '$ScriptDir' is also incomplete, delete it so the fixed release is re-downloaded." -ForegroundColor Yellow
+    }
     $zip = Get-ChildItem $ScriptDir | Where-Object { $_.Name -eq $apolloZipName } | Select-Object -First 1
     if (-not $zip) {
         $f = Get-Prerequisite $apolloZipName $apolloDownloadUrl "ApolloVibe v2026.6.1-multiseat.1 (vibesoftwarecoder fork)"
@@ -647,9 +658,12 @@ if (Test-Path $apolloPath) {
         Write-Host "  Extracting $($zip.Name) to $apolloInstallDir ..."
         New-Item -ItemType Directory -Path $apolloInstallDir -Force | Out-Null
         Expand-Archive -Path $zip.FullName -DestinationPath $apolloInstallDir -Force
-        if (Test-Path $apolloPath) {
+        if ((Test-Path $apolloPath) -and (Test-Path $apolloAssetsSeed)) {
             Write-OK "Installed"
             $Installed += "Apollo"
+        } elseif (Test-Path $apolloPath) {
+            Write-Host "  WARNING: Apollo extracted but assets\apps.json is missing -- the release zip is incomplete." -ForegroundColor Yellow
+            Write-Host "  Apollo will fail to start. Re-download the latest release asset and try again." -ForegroundColor Yellow
         } else {
             Write-Host "  WARNING: Apollo not found at $apolloPath after extraction." -ForegroundColor Yellow
             Write-Host "  Check the zip structure and set ApolloExePath in appsettings.json." -ForegroundColor Yellow
