@@ -47,10 +47,10 @@ public class PortAllocatorTests
         var allocator = new PortAllocator();
         var basePort = allocator.Allocate();
 
-        Assert.Equal(basePort + 0, allocator.GetHttpsPort(basePort));
-        Assert.Equal(basePort + 1, allocator.GetHttpPort(basePort));
-        Assert.Equal(basePort + 2, allocator.GetVideoPort(basePort));
-        Assert.Equal(basePort + 3, allocator.GetAudioPort(basePort));
-        Assert.Equal(basePort + 4, allocator.GetControlPort(basePort));
+        Assert.Equal(basePort + Constants.OffsetHttps, allocator.GetHttpsPort(basePort));
+        Assert.Equal(basePort + Constants.OffsetHttp, allocator.GetHttpPort(basePort));
+        Assert.Equal(basePort + Constants.OffsetVideo, allocator.GetVideoPort(basePort));
+        Assert.Equal(basePort + Constants.OffsetAudio, allocator.GetAudioPort(basePort));
+        Assert.Equal(basePort + Constants.OffsetControl, allocator.GetControlPort(basePort));
     }
 }

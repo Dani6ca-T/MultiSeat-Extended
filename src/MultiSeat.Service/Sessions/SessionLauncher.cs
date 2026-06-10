@@ -41,8 +41,10 @@ public sealed class SessionLauncher
     private readonly MultiSeatOptions _options;
     private readonly AccountManager _accounts;
 
-    // Track keepalive process handles per session to prevent premature cleanup
-    private readonly Dictionary<int, KeepaliveInfo> _keepalives = new();
+    // Track keepalive process handles per session to prevent premature cleanup.
+    // Concurrent because provisioning, teardown, and the health-check loop can all
+    // touch it from different threads.
+    private readonly ConcurrentDictionary<int, KeepaliveInfo> _keepalives = new();
 
     // Track the mstsc process that is keeping a session Active.
     // DisconnectSession() kills mstsc, sending the session back to Disconnected.
@@ -370,7 +372,7 @@ public sealed class SessionLauncher
         DisconnectSession(sessionId);
 
         // Kill keepalive first
-        if (_keepalives.Remove(sessionId, out var keepalive))
+        if (_keepalives.TryRemove(sessionId, out var keepalive))
         {
             try
             {

@@ -285,27 +285,6 @@ public sealed class ApolloManager
             : 0;
     }
 
-    /// <summary>
-    /// Stop all Apollo instances. Called on service shutdown.
-    /// </summary>
-    public void StopAll()
-    {
-        foreach (var (seatId, instance) in _instances)
-        {
-            try
-            {
-                var proc = Process.GetProcessById(instance.ProcessId);
-                if (!proc.HasExited)
-                {
-                    proc.Kill(entireProcessTree: true);
-                    proc.WaitForExit(3000);
-                }
-            }
-            catch { /* best effort */ }
-        }
-        _instances.Clear();
-    }
-
     // ═══════════════════════════════════════════════════════════════════
     //  CONSTANTS
     // ═══════════════════════════════════════════════════════════════════
@@ -470,7 +449,7 @@ internal sealed record ApolloInstance(
             if (ProcessId <= 0) return false;
             try
             {
-                var proc = Process.GetProcessById(ProcessId);
+                using var proc = Process.GetProcessById(ProcessId);
                 return !proc.HasExited;
             }
             catch (ArgumentException)

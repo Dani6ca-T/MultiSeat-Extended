@@ -94,7 +94,10 @@ public sealed class SeatPresetStore
         try
         {
             Directory.CreateDirectory(Path.GetDirectoryName(_filePath)!);
-            File.WriteAllText(_filePath, JsonSerializer.Serialize(_presets, _json));
+            // Write-then-rename so a crash mid-write can't truncate the existing file.
+            var tmp = _filePath + ".tmp";
+            File.WriteAllText(tmp, JsonSerializer.Serialize(_presets, _json));
+            File.Move(tmp, _filePath, overwrite: true);
         }
         catch (Exception ex)
         {

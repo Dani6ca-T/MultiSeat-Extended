@@ -127,30 +127,6 @@ public sealed class FirewallManager
     }
 
     /// <summary>
-    /// Remove all MultiSeat firewall rules (service shutdown cleanup).
-    /// </summary>
-    public async Task CleanupAllRulesAsync(CancellationToken ct)
-    {
-        // Delete all rules with our naming prefix
-        await RunNetshAsync(
-            "advfirewall firewall delete rule name=all dir=in " +
-            "| findstr /C:\"MultiSeat-Seat-\"",
-            ct);
-
-        // Also clean up by known seat IDs
-        foreach (var (seatId, ruleName) in _ruleNames)
-        {
-            await RunNetshAsync(
-                $"advfirewall firewall delete rule name=\"{ruleName}-TCP\"", ct);
-            await RunNetshAsync(
-                $"advfirewall firewall delete rule name=\"{ruleName}-UDP\"", ct);
-        }
-        _ruleNames.Clear();
-
-        _logger.LogInformation("All MultiSeat firewall rules cleaned up");
-    }
-
-    /// <summary>
     /// Check if firewall rules exist for a seat.
     /// </summary>
     public async Task<bool> RulesExistAsync(SeatInfo seat, CancellationToken ct)

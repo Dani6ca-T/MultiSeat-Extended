@@ -230,8 +230,11 @@ public sealed class AccountManager
                 return new StoredAccount(kv.Key, Convert.ToBase64String(encrypted), isManaged);
             }).ToList();
 
-            File.WriteAllText(StorePath,
+            // Write-then-rename so a crash mid-write can't corrupt the credential store.
+            var tmp = StorePath + ".tmp";
+            File.WriteAllText(tmp,
                 JsonSerializer.Serialize(entries, new JsonSerializerOptions { WriteIndented = true }));
+            File.Move(tmp, StorePath, overwrite: true);
         }
         catch (Exception ex)
         {

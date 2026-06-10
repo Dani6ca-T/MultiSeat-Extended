@@ -91,7 +91,18 @@ public sealed class MultiSeatWorker : BackgroundService
         // HidHide is a kernel driver — its blacklist and cloak state survive reboots.
         // Without this reset, devices hidden in a previous session stay hidden after reboot.
         _hidHide.ResetOnStartup();
-        _inputRouter.Start();
+
+        // The physical-controller → ViGEm routing (and its ~1ms XInput poll thread) only
+        // matters when EnableViGEmController is on. With it off (default), Apollo forwards
+        // Moonlight controller input natively and there is no virtual pad to forward to, so
+        // skip the poll loop to avoid burning CPU/battery for nothing.
+        if (_options.EnableViGEmController)
+            _inputRouter.Start();
+        else
+            _logger.LogInformation(
+                "InputRouter XInput polling disabled — EnableViGEmController is off " +
+                "(Apollo forwards Moonlight controller input natively)");
+
         _inputHookManager.Start();
         _deviceWatcher.Start();
         _logger.LogInformation("Input subsystems started");

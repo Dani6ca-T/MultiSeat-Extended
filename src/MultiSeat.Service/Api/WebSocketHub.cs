@@ -12,7 +12,24 @@ namespace MultiSeat.Service.Api;
 /// </summary>
 public static class WebSocketHub
 {
-    private static readonly ConcurrentDictionary<string, WebSocket> _clients = new();
+    /// <summary>
+    /// A connected dashboard client. Each holds its own send lock so concurrent broadcasts
+    /// never issue overlapping SendAsync calls on the same socket (which throws
+    /// "outstanding send" and would otherwise drop the client).
+    /// </summary>
+    private sealed class Client(WebSocket socket)
+    {
+        public WebSocket Socket { get; } = socket;
+        public SemaphoreSlim SendLock { get; } = new(1, 1);
+    }
+
+    private static readonly ConcurrentDictionary<string, Client> _clients = new();
+
+    private static readonly JsonSerializerOptions _jsonOptions = new()
+    {
+        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+        Converters = { new JsonStringEnumConverter() }
+    };
 
     public static void Map(WebApplication app)
     {
@@ -26,7 +43,7 @@ public static class WebSocketHub
 
             var ws = await context.WebSockets.AcceptWebSocketAsync();
             var clientId = Guid.NewGuid().ToString("N");
-            _clients.TryAdd(clientId, ws);
+            _clients.TryAdd(clientId, new Client(ws));
 
             try
             {
@@ -54,30 +71,33 @@ public static class WebSocketHub
     /// </summary>
     public static async Task BroadcastSeatUpdateAsync(SeatInfo seat)
     {
-        var json = JsonSerializer.Serialize(seat,
-            new JsonSerializerOptions
-            {
-                PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
-                Converters = { new JsonStringEnumConverter() }
-            });
+        var json = JsonSerializer.Serialize(seat, _jsonOptions);
         var bytes = Encoding.UTF8.GetBytes(json);
 
-        foreach (var (id, ws) in _clients)
+        foreach (var (id, client) in _clients)
         {
-            if (ws.State != WebSocketState.Open)
+            if (client.Socket.State != WebSocketState.Open)
             {
                 _clients.TryRemove(id, out _);
                 continue;
             }
 
+            // Serialize sends per socket: two concurrent broadcasts must not call
+            // SendAsync on the same WebSocket at the same time.
+            await client.SendLock.WaitAsync();
             try
             {
-                await ws.SendAsync(bytes, WebSocketMessageType.Text, endOfMessage: true,
-                    CancellationToken.None);
+                if (client.Socket.State == WebSocketState.Open)
+                    await client.Socket.SendAsync(bytes, WebSocketMessageType.Text,
+                        endOfMessage: true, CancellationToken.None);
             }
             catch
             {
                 _clients.TryRemove(id, out _);
+            }
+            finally
+            {
+                client.SendLock.Release();
             }
         }
     }

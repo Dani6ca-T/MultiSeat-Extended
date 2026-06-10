@@ -139,10 +139,16 @@ public sealed class ProcessInjector
                 "Process launched: '{Exe}' PID {Pid} in session {Sid}",
                 exePath, pi.dwProcessId, sessionId);
 
-            // Step 5: Wait briefly for the process to initialize
-            await WaitForProcessStartAsync(pi, ct);
-
-            Kernel32.CloseHandle(pi.hProcess);
+            try
+            {
+                // Step 5: Wait briefly for the process to initialize
+                await WaitForProcessStartAsync(pi, ct);
+            }
+            finally
+            {
+                // Close the process handle even if the wait is cancelled, so it never leaks.
+                Kernel32.CloseHandle(pi.hProcess);
+            }
             return pi.dwProcessId;
         }
         finally
@@ -245,9 +251,14 @@ public sealed class ProcessInjector
                 "Process '{Exe}' launched in console session {Sid}: PID {Pid}",
                 exePath, consoleSessionId, pi.dwProcessId);
 
-            await WaitForProcessStartAsync(pi, ct);
-
-            Kernel32.CloseHandle(pi.hProcess);
+            try
+            {
+                await WaitForProcessStartAsync(pi, ct);
+            }
+            finally
+            {
+                Kernel32.CloseHandle(pi.hProcess);
+            }
             return pi.dwProcessId;
         }
         finally
@@ -317,24 +328,30 @@ public sealed class ProcessInjector
 
             Kernel32.CloseHandle(pi.hThread);
 
-            // Wait for the process to finish
-            var waitResult = await Task.Run(
-                () => Kernel32.WaitForSingleObject(pi.hProcess, (uint)timeoutMs), ct);
-
-            int exitCode = -1;
-            if (waitResult == Kernel32.WAIT_OBJECT_0)
+            try
             {
-                Kernel32.GetExitCodeProcess(pi.hProcess, out var raw);
-                exitCode = (int)raw;
-            }
-            else
-            {
-                _logger.LogWarning(
-                    "Helper '{Exe}' did not exit within {Ms}ms — killing it", exePath, timeoutMs);
-            }
+                // Wait for the process to finish
+                var waitResult = await Task.Run(
+                    () => Kernel32.WaitForSingleObject(pi.hProcess, (uint)timeoutMs), ct);
 
-            Kernel32.CloseHandle(pi.hProcess);
-            return exitCode;
+                int exitCode = -1;
+                if (waitResult == Kernel32.WAIT_OBJECT_0)
+                {
+                    Kernel32.GetExitCodeProcess(pi.hProcess, out var raw);
+                    exitCode = (int)raw;
+                }
+                else
+                {
+                    _logger.LogWarning(
+                        "Helper '{Exe}' did not exit within {Ms}ms — killing it", exePath, timeoutMs);
+                }
+
+                return exitCode;
+            }
+            finally
+            {
+                Kernel32.CloseHandle(pi.hProcess);
+            }
         }
         finally
         {
@@ -440,9 +457,14 @@ public sealed class ProcessInjector
                 "Apollo launched in console session {Sid}: PID {Pid}",
                 consoleSessionId, pi.dwProcessId);
 
-            await WaitForProcessStartAsync(pi, ct);
-
-            Kernel32.CloseHandle(pi.hProcess);
+            try
+            {
+                await WaitForProcessStartAsync(pi, ct);
+            }
+            finally
+            {
+                Kernel32.CloseHandle(pi.hProcess);
+            }
             return pi.dwProcessId;
         }
         finally

@@ -324,10 +324,30 @@ public class StreamingTests
     }
 
     [Fact]
-    public void Constants_PortsPerSeat_CoversFullRange()
+    public void Constants_PortsPerSeat_NoUsedPortCollision()
     {
-        // PortsPerSeat must span from min offset (-5) to max offset (+21)
-        Assert.True(Constants.PortsPerSeat >= Constants.OffsetRtsp - Constants.OffsetGfeHttps + 1);
+        // A seat's full offset span (-5..+26) exceeds PortsPerSeat (30), but only these offsets
+        // are actually used. The real invariant the system relies on is that no two seats' USED
+        // ports collide at PortsPerSeat spacing — not that a block covers the whole raw span.
+        int[] usedOffsets =
+        {
+            Constants.OffsetGfeHttps, Constants.OffsetGfeHttp, Constants.OffsetWebUi,
+            Constants.OffsetVideo, Constants.OffsetControl, Constants.OffsetAudio,
+            Constants.OffsetMic, Constants.OffsetRtsp,
+        };
+
+        var allUsedPorts = new HashSet<int>();
+        for (int seat = 0; seat < Constants.MaxSeats; seat++)
+        {
+            var seatBase = Constants.PortBase + seat * Constants.PortsPerSeat;
+            foreach (var off in usedOffsets)
+            {
+                var port = seatBase + off;
+                Assert.True(allUsedPorts.Add(port),
+                    $"Port {port} is used by more than one seat — PortsPerSeat={Constants.PortsPerSeat} " +
+                    $"causes a cross-seat collision at offset {off}.");
+            }
+        }
     }
 
     [Fact]

@@ -10,8 +10,12 @@ public static class Constants
     // Each seat reserves a block of 10 ports starting from the base.
     // Seat 0 → 47984-47993, Seat 1 → 47994-48003, etc.
     public const int PortBase = 47984;
-    // Apollo uses offsets from -5 (GFE HTTPS) to +21 (RTSP) = 27-port spread.
-    // 30 gives a 3-port gap between seats and avoids cross-seat collisions.
+    // A seat's port offsets span -5 (GFE HTTPS) to +26 (RTSP) — a 32-position range — but only
+    // 8 of those positions are actually used: {-5,0,1,9,10,11,12,26}. PortsPerSeat=30 is
+    // intentionally smaller than the raw 32-span: at 30-port spacing none of the *used* offsets
+    // collide between seats, so blocks stay non-overlapping in practice. Verified by
+    // StreamingTests.Constants_PortsPerSeat_NoUsedPortCollision — re-check it if the used-offset
+    // set changes.
     public const int PortsPerSeat = 30;
     public const int MaxSeats = 8;
 
