@@ -70,12 +70,13 @@ public sealed class MetricsCollector : IDisposable
         var disks = CollectDisks();
 
         int memPct = totalMb > 0 ? (int)((totalMb - availMb) * 100 / totalMb) : 0;
+        var rdpActive = _rdpWrapper.EnsureMultiSession(); // queried once, reused below
         var health = ComputeHealth(
             cpu?.UtilizationPercent ?? 0,
             memPct,
             gpu?.UtilizationPercent ?? 0,
             seatManager.ActiveSeatCount,
-            _rdpWrapper.EnsureMultiSession());
+            rdpActive);
 
         return new SystemStatus
         {
@@ -87,7 +88,7 @@ public sealed class MetricsCollector : IDisposable
             Disks = disks,
             Health = health,
             WindowsBuild = Environment.OSVersion.VersionString,
-            RdpWrapperActive = _rdpWrapper.EnsureMultiSession(),
+            RdpWrapperActive = rdpActive,
             SystemMemoryMb = totalMb,
             AvailableMemoryMb = availMb
         };
@@ -229,8 +230,11 @@ public sealed class MetricsCollector : IDisposable
                 "SELECT OwningProcess FROM MSFT_NetTCPConnection");
             foreach (ManagementObject obj in searcher.Get())
             {
-                var pid = Convert.ToInt32(obj["OwningProcess"]);
-                result[pid] = result.TryGetValue(pid, out var c) ? c + 1 : 1;
+                using (obj)
+                {
+                    var pid = Convert.ToInt32(obj["OwningProcess"]);
+                    result[pid] = result.TryGetValue(pid, out var c) ? c + 1 : 1;
+                }
             }
         }
         catch { /* WMI may not be available */ }

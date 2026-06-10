@@ -21,12 +21,16 @@ namespace MultiSeat.Service.Streaming;
 ///   - Health is monitored by SessionHealthCheck; crashed instances are auto-restarted
 ///   - On teardown, the entire process tree is killed (Apollo spawns child encoders)
 ///
-/// Apollo (Sunshine) uses these port offsets within a seat's block:
-///   +0  HTTP  (web UI, pairing — the value written to the 'port' config key)
-///   +1  HTTPS (web UI — what the browser actually connects to)
-///   +2  Video (RTP/ENet)
-///   +3  Audio (RTP)
-///   +4  Control (ENet)
+/// Apollo (Sunshine) uses these port offsets within a seat's block
+/// (see Shared/Constants for the authoritative values):
+///   -5  GFE HTTPS (Moonlight serverinfo/pair/launch)
+///    0  GFE HTTP  (same, plaintext — the value written to the 'port' config key)
+///    1  Web UI    (Apollo HTTPS web UI)
+///    9  Video   (RTP)
+///   10  Control (ENet)
+///   11  Audio   (RTP)
+///   12  Mic     (RTP)
+///   26  RTSP    (session setup)
 ///
 /// Requires Apollo (Sunshine fork) installed:
 ///   https://github.com/ClassicOldSong/Apollo

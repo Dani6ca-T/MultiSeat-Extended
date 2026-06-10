@@ -81,18 +81,6 @@ public class InputTests
         Assert.Equal(64, args.SmallMotor);
     }
 
-    // ── DeviceEventArgs tests ───────────────────────────────────────
-
-    [Fact]
-    public void DeviceEventArgs_StoresValues()
-    {
-        var args = new DeviceEventArgs("HID\\VID_045E", "Xbox Controller", true);
-
-        Assert.Equal("HID\\VID_045E", args.DeviceId);
-        Assert.Equal("Xbox Controller", args.DeviceName);
-        Assert.True(args.Connected);
-    }
-
     // ── Vibration scaling test ──────────────────────────────────────
 
     [Fact]
@@ -189,7 +177,7 @@ public class InputTests
     {
         var opts = new MultiSeatOptions();
         Assert.Equal("MultiSeatInputHook.dll", opts.InputHookDllPath);
-        Assert.True(opts.EnableKeyboardMouseIsolation);
+        Assert.False(opts.EnableKeyboardMouseIsolation); // no-op as architected; off by default
         Assert.True(opts.AutoAssignControllers);
     }
 

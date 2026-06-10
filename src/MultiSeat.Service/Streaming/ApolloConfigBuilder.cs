@@ -98,7 +98,7 @@ public sealed class ApolloConfigBuilder
         //   base+10 = ENet control
         //   base+11 = RTP audio
         //   base+12 = RTP mic
-        //   base+21 = RTSP session setup
+        //   base+26 = RTSP session setup
         sb.AppendLine("# Network — unique port range for this seat");
         sb.AppendLine($"port = {seat.PortBase + Constants.OffsetGfeHttp}");
         sb.AppendLine();

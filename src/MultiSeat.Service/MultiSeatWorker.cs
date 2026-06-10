@@ -26,7 +26,6 @@ public sealed class MultiSeatWorker : BackgroundService
     private readonly InputRouter _inputRouter;
     private readonly InputHookManager _inputHookManager;
     private readonly HidHideConfigurator _hidHide;
-    private readonly DeviceWatcher _deviceWatcher;
     private readonly FirewallManager _firewall;
     private readonly SeatPresetStore _presets;
     private readonly IServiceProvider _services;
@@ -42,7 +41,6 @@ public sealed class MultiSeatWorker : BackgroundService
         InputRouter inputRouter,
         InputHookManager inputHookManager,
         HidHideConfigurator hidHide,
-        DeviceWatcher deviceWatcher,
         FirewallManager firewall,
         SeatPresetStore presets,
         IServiceProvider services)
@@ -55,7 +53,6 @@ public sealed class MultiSeatWorker : BackgroundService
         _inputRouter = inputRouter;
         _inputHookManager = inputHookManager;
         _hidHide = hidHide;
-        _deviceWatcher = deviceWatcher;
         _firewall = firewall;
         _presets = presets;
         _services = services;
@@ -104,7 +101,6 @@ public sealed class MultiSeatWorker : BackgroundService
                 "(Apollo forwards Moonlight controller input natively)");
 
         _inputHookManager.Start();
-        _deviceWatcher.Start();
         _logger.LogInformation("Input subsystems started");
 
         // ── Step 3: Ensure API port is open in Windows Firewall ──────
@@ -296,7 +292,6 @@ public sealed class MultiSeatWorker : BackgroundService
         await _seatManager.TeardownAllAsync(cancellationToken);
 
         // Stop input subsystems
-        _deviceWatcher.Stop();
         _inputHookManager.Stop();
         _inputRouter.Stop();
 

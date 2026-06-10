@@ -124,7 +124,6 @@ builder.Services.AddSingleton<AudioRouter>();
 builder.Services.AddSingleton<ControllerManager>();
 builder.Services.AddSingleton<InputRouter>();
 builder.Services.AddSingleton<InputHookManager>();
-builder.Services.AddSingleton<DeviceWatcher>();
 builder.Services.AddSingleton<HidHideConfigurator>();
 builder.Services.AddSingleton<FirewallManager>();
 builder.Services.AddSingleton<SeatPresetStore>();

@@ -31,7 +31,15 @@ public sealed class MultiSeatOptions
 
     // ── Input Isolation ──────────────────────────────────────────────
     public string InputHookDllPath { get; set; } = @"MultiSeatInputHook.dll";
-    public bool EnableKeyboardMouseIsolation { get; set; } = true;
+
+    // Keyboard/mouse session isolation via the InputHook DLL.
+    // Default OFF — it is a no-op as architected: the low-level WH_KEYBOARD_LL/WH_MOUSE_LL
+    // hooks are installed from the service process (Session 0), where GetForegroundWindow()
+    // returns NULL, so ShouldPassThrough() always passes the event. There is also no
+    // cross-session K/M bleed to prevent (physical input goes to the console session; Moonlight
+    // input is SendInput'd inside the seat session). Re-enabling is only meaningful if the hook
+    // is re-architected to run inside the seat session. See CLAUDE.md "Known Constraints".
+    public bool EnableKeyboardMouseIsolation { get; set; } = false;
     public bool AutoAssignControllers { get; set; } = true;
 
     // ── Display ──────────────────────────────────────────────────────

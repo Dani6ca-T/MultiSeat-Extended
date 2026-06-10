@@ -12,7 +12,7 @@ namespace MultiSeat.Service.Display;
 /// <summary>
 /// Tracks SudoVDA (Virtual Display Adapter) state for each seat.
 ///
-/// Apollo manages the virtual display lifecycle directly via always_use_virtual_display=enabled —
+/// Apollo manages the virtual display lifecycle directly via the output_name set in its per-seat config —
 /// each Apollo instance creates and owns one SudoVDA virtual monitor when it starts, and releases
 /// it when it stops. MultiSeat does not need to enumerate or assign displays.
 ///
@@ -77,7 +77,7 @@ public sealed class VirtualDisplayManager
 
     /// <summary>
     /// Prepare display settings for a seat.
-    /// Apollo owns the SudoVDA virtual display lifecycle via always_use_virtual_display=enabled —
+    /// Apollo owns the SudoVDA virtual display lifecycle via the output_name set in its per-seat config —
     /// each Apollo instance creates its own virtual monitor when it starts. MultiSeat only needs
     /// to negotiate the resolution/fps so those values are written correctly into the Apollo config.
     /// </summary>

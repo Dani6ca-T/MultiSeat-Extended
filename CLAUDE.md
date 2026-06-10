@@ -28,8 +28,9 @@ MultiSeat runs multiple simultaneous Moonlight game-streaming sessions on one Wi
 
 ## Port Layout
 
-Each seat reserves 10 ports: `PortBase + (seat_index × 10)`. Default `PortBase = 47984`.
-- Seat 0 → 47984–47993, Seat 1 → 47994–48003, etc.
+Each seat reserves a block of 30 ports: `PortBase + (seat_index × 30)`. Default `PortBase = 47984`.
+- Seat 0 → 47984–48013, Seat 1 → 48014–48043, etc.
+- Apollo's per-seat offsets span `-5` (GFE HTTPS) to `+26` (RTSP) around the base.
 
 ## Audio Device Layout
 
@@ -102,6 +103,7 @@ Apps launch into the seat session via `ProcessInjector.LaunchInSessionAsync`. Th
 - Single GPU only — multi-GPU not tested.
 - Windows 11 build 26100+ / x64 only.
 - VoiceMeeter audio drivers only register after a reboot post-install.
+- Keyboard/mouse session isolation (`InputHookManager` + InputHook DLL) is **disabled by default and currently a no-op**. The low-level `WH_KEYBOARD_LL`/`WH_MOUSE_LL` hooks run in the SYSTEM service (Session 0), where `GetForegroundWindow()` returns NULL, so `ShouldPassThrough()` always passes — the filter never blocks. With the RDP-loopback design there is no cross-session K/M bleed anyway: physical input goes to the console session, and Moonlight input is `SendInput`'d inside the seat session. Re-enabling is only meaningful if the hook is re-architected to run inside the seat session.
 
 ## Required Prerequisites
 

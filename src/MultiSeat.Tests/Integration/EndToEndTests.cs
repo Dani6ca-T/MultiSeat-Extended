@@ -106,7 +106,7 @@ public class EndToEndTests
         Assert.Equal(Constants.DefaultApiPort, opts.ApiPort);
         Assert.Equal(string.Empty, opts.ApiKey);
         Assert.Equal(4, opts.VacCableCount);
-        Assert.True(opts.EnableKeyboardMouseIsolation);
+        Assert.False(opts.EnableKeyboardMouseIsolation); // no-op as architected; off by default
         Assert.True(opts.AutoAssignControllers);
         Assert.Equal(15_000, opts.SessionConnectTimeoutMs);
         Assert.Equal(10_000, opts.ProcessLaunchTimeoutMs);
