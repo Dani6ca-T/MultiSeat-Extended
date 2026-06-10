@@ -23,17 +23,20 @@ public sealed class SessionHealthCheck
     private readonly SessionLauncher _sessionLauncher;
     private readonly ApolloManager _apolloManager;
     private readonly SeatManager _seatManager;
+    private readonly OnConnectAppLauncher _onConnectApps;
 
     public SessionHealthCheck(
         ILogger<SessionHealthCheck> logger,
         SessionLauncher sessionLauncher,
         ApolloManager apolloManager,
-        SeatManager seatManager)
+        SeatManager seatManager,
+        OnConnectAppLauncher onConnectApps)
     {
         _logger = logger;
         _sessionLauncher = sessionLauncher;
         _apolloManager = apolloManager;
         _seatManager = seatManager;
+        _onConnectApps = onConnectApps;
     }
 
     /// <summary>
@@ -185,6 +188,12 @@ public sealed class SessionHealthCheck
             // In the future, we could track the game PID for auto-restart.
         }
 
+        // ── Launch-on-connect: tail Apollo's log for client connect/disconnect ──
+        // and launch (or kill) the configured per-seat apps on the edges. No-op when
+        // MultiSeat:LaunchOnConnect is empty. Cheap: reads only the bytes appended
+        // since the previous tick. Does not change seat state here.
+        _onConnectApps.ProcessSeat(seat, ct);
+
         return false; // no state change
     }
 
@@ -193,7 +202,7 @@ public sealed class SessionHealthCheck
         if (pid <= 0) return false;
         try
         {
-            var proc = Process.GetProcessById(pid);
+            using var proc = Process.GetProcessById(pid);
             return !proc.HasExited;
         }
         catch (ArgumentException)

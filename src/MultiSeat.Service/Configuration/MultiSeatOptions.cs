@@ -48,6 +48,24 @@ public sealed class MultiSeatOptions
     // Apollo's built-in controller forwarding causes duplicate controllers.
     public bool EnableViGEmController { get; set; } = false;
 
+    // ── Launch-on-connect apps ───────────────────────────────────────
+    // Apps launched into a seat's session when a Moonlight client connects.
+    // Empty by default (feature off). Use this INSTEAD of Windows autostart for
+    // game launchers (Steam Big Picture, EmulationStation, RetroBat, …): launching
+    // them after the client connects guarantees Apollo's virtual controller already
+    // exists, so the launcher's startup controller scan detects it. Apps autostarted
+    // at login run before any stream and never see the per-stream virtual pad.
+    public LaunchOnConnectApp[] LaunchOnConnect { get; set; } = [];
+
+    // Delay after the client-connect event before launching the apps, giving Apollo
+    // a moment to create the virtual controller so the apps enumerate it at startup.
+    public int LaunchOnConnectDelayMs { get; set; } = 4_000;
+
+    // Kill the launched apps when the Moonlight client disconnects. When false,
+    // the apps stay running and are reused on the next connect (no relaunch while
+    // still alive). Single-instance launchers like Steam tolerate either setting.
+    public bool KillLaunchOnConnectAppsOnDisconnect { get; set; } = false;
+
     // ── Timeouts ─────────────────────────────────────────────────────
     public int SessionConnectTimeoutMs { get; set; } = 15_000;
     public int ProcessLaunchTimeoutMs { get; set; } = 10_000;
@@ -57,4 +75,20 @@ public sealed class MultiSeatOptions
     // Absolute path to the repo root. Required for the dashboard Rebuild button.
     // Example: C:\MultiSeat-Development
     public string SourceDir { get; set; } = string.Empty;
+}
+
+/// <summary>
+/// One app to launch into a seat session when a Moonlight client connects.
+/// Configured under MultiSeat:LaunchOnConnect in appsettings.json.
+/// </summary>
+public sealed class LaunchOnConnectApp
+{
+    /// <summary>Absolute path to the executable (e.g. Steam.exe).</summary>
+    public string Path { get; set; } = string.Empty;
+
+    /// <summary>Optional command-line arguments (e.g. "-bigpicture").</summary>
+    public string? Arguments { get; set; }
+
+    /// <summary>Optional working directory; null inherits the launcher default.</summary>
+    public string? WorkingDirectory { get; set; }
 }

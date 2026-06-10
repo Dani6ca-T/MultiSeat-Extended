@@ -47,6 +47,7 @@ public sealed class SeatManager
     private readonly InputRouter _inputRouter;
     private readonly InputHookManager _inputHookManager;
     private readonly HidHideConfigurator _hidHide;
+    private readonly OnConnectAppLauncher _onConnectApps;
 
     public SeatManager(
         ILogger<SeatManager> logger,
@@ -63,7 +64,8 @@ public sealed class SeatManager
         ControllerManager controllerManager,
         InputRouter inputRouter,
         InputHookManager inputHookManager,
-        HidHideConfigurator hidHide)
+        HidHideConfigurator hidHide,
+        OnConnectAppLauncher onConnectApps)
     {
         _logger = logger;
         _options = options.Value;
@@ -80,6 +82,7 @@ public sealed class SeatManager
         _inputRouter = inputRouter;
         _inputHookManager = inputHookManager;
         _hidHide = hidHide;
+        _onConnectApps = onConnectApps;
     }
 
     public int ActiveSeatCount => _seats.Count(s => s.Value.Status is not SeatStatus.Idle and not SeatStatus.Error);
@@ -91,7 +94,9 @@ public sealed class SeatManager
     /// </summary>
     public async Task<SeatInfo> ProvisionSeatAsync(SeatRequest request, CancellationToken ct)
     {
-        if (_seats.Count >= _options.MaxSeats)
+        // Count only live seats — Error/Idle entries hold no resources (their ports and
+        // sessions were already released on failure) and must not block new provisioning.
+        if (ActiveSeatCount >= _options.MaxSeats)
             throw new InvalidOperationException($"Maximum seat count ({_options.MaxSeats}) reached.");
 
         if (!_accounts.AccountExists(request.AccountName))
@@ -407,6 +412,7 @@ public sealed class SeatManager
     private async Task TeardownSeatInternalAsync(SeatInfo seat, CancellationToken ct)
     {
         // Reverse order of provisioning — each step is best-effort
+        try { _onConnectApps.Forget(seat.Id); } catch { /* best effort */ }
         try { _inputHookManager.Uninstall(); } catch { /* best effort */ }
         try { _hidHide.UncloakForSession(seat); } catch { /* best effort */ }
         try { UnassignControllersForSeat(seat.Id); } catch { /* best effort */ }

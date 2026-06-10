@@ -75,6 +75,25 @@ Two separate scripts — prereqs and service deploy are intentionally split:
 - Temp RDP files go to `C:\ProgramData\MultiSeat\` (not `%TEMP%`) so the console user's token can read them.
 - `WTSQueryUserToken` returns a filtered (medium-integrity) token for admin accounts — `SessionLauncher` fetches the linked elevated token via `GetTokenLinkedToken` for SudoVDA IPC access.
 
+## Launch-on-connect apps
+
+Apollo creates the virtual Xbox 360 controller (ViGEm) only **while a Moonlight client is streaming**. Game launchers that scan controllers at startup (Steam Big Picture, EmulationStation, RetroBat) will not see a pad that appears afterwards — so if they're autostarted at login (e.g. a `Steam.lnk` in the seat user's Startup folder) they run before any stream and the controller is never detected.
+
+Fix: don't autostart launchers in the seat. Instead let MultiSeat launch them **when a client connects**, after the pad exists. `OnConnectAppLauncher` (wired into `SessionHealthCheck`) tails each seat's `apollo.log` for `CLIENT CONNECTED` / `CLIENT DISCONNECTED` and launches/kills the configured apps on those edges.
+
+Config lives in `appsettings.json` under `MultiSeat` — **empty by default (feature off); no apps are hardcoded**:
+
+```jsonc
+"LaunchOnConnectDelayMs": 4000,                 // wait after connect so the pad exists before launch
+"KillLaunchOnConnectAppsOnDisconnect": false,   // true = kill the apps when the client disconnects
+"LaunchOnConnect": [
+  { "Path": "C:\\Program Files (x86)\\Steam\\steam.exe", "Arguments": "-bigpicture" }
+  // { "Path": "...\\EmulationStation.exe", "WorkingDirectory": "..." }
+]
+```
+
+Apps launch into the seat session via `ProcessInjector.LaunchInSessionAsync`. The list is global (applies to every seat). When the array is empty the watcher returns immediately — zero I/O, no overhead.
+
 ## Known Constraints
 
 - NVIDIA consumer GPUs: 3–5 concurrent NVENC sessions max.

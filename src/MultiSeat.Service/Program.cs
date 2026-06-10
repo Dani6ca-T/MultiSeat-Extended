@@ -117,6 +117,7 @@ builder.Services.AddSingleton<ProcessInjector>();
 builder.Services.AddSingleton<VirtualDisplayManager>();
 builder.Services.AddSingleton<ApolloManager>();
 builder.Services.AddSingleton<ApolloConfigBuilder>();
+builder.Services.AddSingleton<OnConnectAppLauncher>();
 builder.Services.AddSingleton<PortAllocator>();
 builder.Services.AddSingleton<AudioDeviceEnumerator>();
 builder.Services.AddSingleton<AudioRouter>();
@@ -139,13 +140,6 @@ builder.Services.AddHostedService<MultiSeatWorker>();
 ApiServer.ConfigureServices(builder.Services, builder.Configuration);
 
 var host = builder.Build();
-
-// ── Map API endpoints ────────────────────────────────────────────────
-if (host is IApplicationBuilder appHost)
-{
-    // This path is for the WebApplication case; for Worker Service we
-    // start the API server inside MultiSeatWorker instead.
-}
 
 await host.RunAsync();
 return 0;
