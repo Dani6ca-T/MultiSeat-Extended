@@ -1,5 +1,7 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
+using Microsoft.Extensions.Options;
+using MultiSeat.Service.Configuration;
 using MultiSeat.Shared;
 using MultiSeat.Shared.Models;
 
@@ -21,6 +23,7 @@ namespace MultiSeat.Service.Streaming;
 ///   11  Audio     (UDP) — RTP audio stream
 ///   12  Mic       (UDP) — RTP mic stream (stream_mic)
 ///   26  RTSP      (TCP) — Session setup handshake (Sunshine stock 48010)
+///   13  Netplay   (TCP) — RetroArch netplay host port (when EnableEmulatorNetplay)
 ///
 /// Uses netsh advfirewall (available on all Windows 10/11 builds).
 /// Requires running as SYSTEM (Windows Service context).
@@ -28,13 +31,15 @@ namespace MultiSeat.Service.Streaming;
 public sealed class FirewallManager
 {
     private readonly ILogger<FirewallManager> _logger;
+    private readonly MultiSeatOptions _options;
 
     // Track which seats have firewall rules so we can clean up
     private readonly ConcurrentDictionary<Guid, string> _ruleNames = new();
 
-    public FirewallManager(ILogger<FirewallManager> logger)
+    public FirewallManager(ILogger<FirewallManager> logger, IOptions<MultiSeatOptions> options)
     {
         _logger = logger;
+        _options = options.Value;
     }
 
     /// <summary>
@@ -74,12 +79,20 @@ public sealed class FirewallManager
         var ruleName = $"MultiSeat-Seat-{seat.Id:N}";
         var portBase = seat.PortBase;
 
-        // TCP: GFE HTTPS (pairing/launch), GFE HTTP (fallback), web UI, RTSP setup
-        var tcpPorts = string.Join(',',
-            portBase + Constants.OffsetGfeHttps,
-            portBase + Constants.OffsetGfeHttp,
-            portBase + Constants.OffsetWebUi,
-            portBase + Constants.OffsetRtsp);
+        // TCP: GFE HTTPS (pairing/launch), GFE HTTP (fallback), web UI, RTSP setup,
+        // plus the RetroArch netplay host port when emulator netplay is enabled (so external
+        // LAN players can also join a seat's game; seat-to-seat over loopback is firewall-exempt).
+        var tcpOffsets = new List<int>
+        {
+            Constants.OffsetGfeHttps,
+            Constants.OffsetGfeHttp,
+            Constants.OffsetWebUi,
+            Constants.OffsetRtsp,
+        };
+        if (_options.EnableEmulatorNetplay)
+            tcpOffsets.Add(Constants.OffsetRetroArchNetplay);
+
+        var tcpPorts = string.Join(',', tcpOffsets.Select(o => portBase + o));
         await RunNetshAsync(
             $"advfirewall firewall add rule name=\"{ruleName}-TCP\" " +
             $"dir=in action=allow protocol=TCP localport={tcpPorts} " +

@@ -4,9 +4,11 @@ using MultiSeat.Service.Api;
 using MultiSeat.Service.Audio;
 using MultiSeat.Service.Configuration;
 using MultiSeat.Service.Display;
+using MultiSeat.Service.Emulators;
 using MultiSeat.Service.Input;
 using MultiSeat.Service.Monitoring;
 using MultiSeat.Service.Sessions;
+using MultiSeat.Service.Storage;
 using MultiSeat.Service.Streaming;
 
 // ── Click-dialog-by-PID helper mode ──────────────────────────────────
@@ -130,6 +132,12 @@ builder.Services.AddSingleton<SeatPresetStore>();
 builder.Services.AddSingleton<GpuMonitor>();
 builder.Services.AddSingleton<MetricsCollector>();
 builder.Services.AddSingleton<SessionHealthCheck>();
+
+// Shared game library + emulator config seeders (register each seeder as IEmulatorConfigSeeder
+// so SeatManager picks them up; add Dolphin/PCSX2 seeders here later with no other changes).
+builder.Services.AddSingleton<SharedLibraryProvisioner>();
+builder.Services.AddSingleton<IEmulatorConfigSeeder, RetroArchConfigSeeder>();
+
 builder.Services.AddSingleton<SeatManager>();
 
 // ── Background workers ──────────────────────────────────────────────

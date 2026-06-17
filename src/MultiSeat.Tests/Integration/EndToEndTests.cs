@@ -111,6 +111,13 @@ public class EndToEndTests
         Assert.Equal(15_000, opts.SessionConnectTimeoutMs);
         Assert.Equal(10_000, opts.ProcessLaunchTimeoutMs);
         Assert.Equal(5_000, opts.HealthCheckIntervalMs);
+
+        // Shared game library + emulator netplay defaults
+        Assert.True(opts.EnableSharedGameLibrary);
+        Assert.Equal(@"C:\MultiSeatGames", opts.SharedGameLibraryDir);
+        Assert.True(opts.EnableEmulatorNetplay);
+        Assert.False(opts.SeedRetroArchNetplayConfig); // opt-in (writes a user file)
+        Assert.Equal(string.Empty, opts.RetroArchConfigPath);
     }
 
     // ── Port allocation capacity tests ────────────────────────────────

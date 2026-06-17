@@ -28,6 +28,10 @@ public sealed class SeatInfo
     public int PortBase { get; set; }
     public int ApolloProcessId { get; set; }
 
+    // Emulator netplay — RetroArch host port for this seat (PortBase + offset; 0 = disabled).
+    // Seats connect to each other over loopback at 127.0.0.1:<this port>.
+    public int RetroArchNetplayPort { get; set; }
+
     // Audio — game output (audiomode:i:1 makes host devices visible in RDP session)
     public string? AudioGameRenderDeviceId { get; set; }     // session default render → Apollo loopback-captures for audio_sink
     public string? AudioGameRenderFriendlyName { get; set; } // friendly name → Apollo audio_sink

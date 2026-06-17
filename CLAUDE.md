@@ -77,6 +77,14 @@ MultiSeat is self-contained and **non-destructive**: it works out of the box whe
 2. **Own port range.** Default `PortBase = 48100`, above a stock Apollo's block — no runtime port conflict.
 3. **Never kills a non-MultiSeat Apollo.** On startup `MultiSeatWorker.KillOrphanedApolloProcesses` reaps **only** Apollo processes MultiSeat launched, identified via WMI (`GetManagedApolloPids`) by executable path (under the ApolloVibe dir) or a MultiSeat per-seat config path on the command line. It no longer stops/disables `ApolloService`, and `install-service.ps1` leaves that service alone. (WMI failure → empty set → cleanup is skipped rather than risk killing an unrelated Apollo.)
 
+## Shared game library & emulator netplay
+
+Because each seat is its own Windows account, games/ROMs would otherwise be siloed per account and seats couldn't easily netplay. Two provisioning helpers address this (config in `MultiSeatOptions` / `appsettings.json`):
+
+- **Shared game library** (`EnableSharedGameLibrary`, default on; `SharedGameLibraryDir`, default `C:\MultiSeatGames`). `SharedLibraryProvisioner.EnsureSharedLibraryAsync` runs once at startup: creates `…\SteamLibrary` + `…\ROMs` and grants `BUILTIN\Users` Modify via `icacls` (well-known SID `S-1-5-32-545`). Point each seat's Steam at the `SteamLibrary` folder (Settings → Storage) so a game an owning account already installed there isn't re-downloaded. ROMs go in `…\ROMs`.
+- **Emulator netplay** (`EnableEmulatorNetplay`, default on). Each seat gets a deterministic, collision-free RetroArch host port from its own block: `seat.PortBase + Constants.OffsetRetroArchNetplay` (offset 13 → seat 0 = 48113, seat 1 = 48143…), surfaced as `SeatInfo.RetroArchNetplayPort` and opened in the firewall. Seats netplay each other over **loopback**: in one seat "Host", in another "Connect to Netplay Host" → `127.0.0.1:<host-seat-port>`. Netplay requires identical core **and** content — the shared ROM dir keeps file CRCs matching.
+- **RetroArch auto-config** (`SeedRetroArchNetplayConfig`, default **off** — it writes a user file). When on, `RetroArchConfigSeeder` (an `IEmulatorConfigSeeder`) upserts `netplay_ip_port`, `netplay_public_announce=false`, `netplay_nat_traversal=false`, and `rgui_browser_directory` into each seat's `retroarch.cfg` during provisioning (mirrors the RustDesk seed in `SeatManager` step 2.5). Add Dolphin/PCSX2 by registering another `IEmulatorConfigSeeder` — no `SeatManager` change.
+
 ## Architecture Notes
 
 - Service runs as **SYSTEM** — all process creation uses `CreateProcessAsUser` with appropriate session tokens.

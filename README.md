@@ -172,7 +172,11 @@ Edit `appsettings.json` in `C:\Program Files\MultiSeat\` (restart the service af
 | `ApiPort` | `9550` | Dashboard port |
 | `ApiKey` | *(auto-generated)* | API key required to access the dashboard. Auto-generated on first start and saved to `C:\ProgramData\MultiSeat\api-key.txt`. Set a fixed value here to override. Set to `disabled` to turn off authentication entirely (only safe on a fully trusted private network). |
 | `VacCableCount` | `4` | Number of installed VB-CABLE devices |
-| `EnableKeyboardMouseIsolation` | `true` | Route keyboard/mouse to the active seat |
+| `EnableKeyboardMouseIsolation` | `false` | Keyboard/mouse session isolation (no-op as architected — see Known Constraints in CLAUDE.md) |
+| `EnableSharedGameLibrary` | `true` | Create a shared games/ROMs folder all seats can use |
+| `SharedGameLibraryDir` | `C:\MultiSeatGames` | Root of the shared library (`\SteamLibrary` + `\ROMs`) |
+| `EnableEmulatorNetplay` | `true` | Assign + open a per-seat RetroArch netplay port (seats connect over `127.0.0.1`) |
+| `SeedRetroArchNetplayConfig` | `false` | Auto-write each seat's `retroarch.cfg` (netplay port + shared ROM dir) |
 
 ---
 

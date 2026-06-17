@@ -206,6 +206,15 @@ For each concurrent streaming seat:
 | Virtual audio device | One per seat: VB-CABLE (seat 0) or VoiceMeeter virtual input (seats 1–3) |
 | TCP/UDP ports | 30-port block per seat (default: 48100–48129, 48130–48159, ...) |
 | Apollo config directory | Created automatically under `C:\ProgramData\MultiSeat\apollo\` |
+| Emulator netplay port | One per seat: `PortBase + 13` (48113, 48143, ...); seats netplay over `127.0.0.1` |
+
+### Shared game library
+
+MultiSeat creates a shared library at `C:\MultiSeatGames` (configurable) at first start, with
+`SteamLibrary` + `ROMs` subfolders granted to `BUILTIN\Users`. Add the `SteamLibrary` folder in
+each seat's Steam (Settings → Storage) so a game an owning account already installed isn't
+re-downloaded; put ROMs in `ROMs`. Disable via `EnableSharedGameLibrary` / point at a data drive
+via `SharedGameLibraryDir`.
 
 ---
 

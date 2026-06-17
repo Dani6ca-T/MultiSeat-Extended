@@ -6,6 +6,7 @@ using MultiSeat.Service.Api;
 using MultiSeat.Service.Audio;
 using MultiSeat.Service.Configuration;
 using MultiSeat.Service.Display;
+using MultiSeat.Service.Emulators;
 using MultiSeat.Service.Input;
 using MultiSeat.Service.Streaming;
 using MultiSeat.Shared.Models;
@@ -48,6 +49,7 @@ public sealed class SeatManager
     private readonly InputHookManager _inputHookManager;
     private readonly HidHideConfigurator _hidHide;
     private readonly OnConnectAppLauncher _onConnectApps;
+    private readonly IEnumerable<IEmulatorConfigSeeder> _emulatorSeeders;
 
     public SeatManager(
         ILogger<SeatManager> logger,
@@ -65,7 +67,8 @@ public sealed class SeatManager
         InputRouter inputRouter,
         InputHookManager inputHookManager,
         HidHideConfigurator hidHide,
-        OnConnectAppLauncher onConnectApps)
+        OnConnectAppLauncher onConnectApps,
+        IEnumerable<IEmulatorConfigSeeder> emulatorSeeders)
     {
         _logger = logger;
         _options = options.Value;
@@ -83,6 +86,7 @@ public sealed class SeatManager
         _inputHookManager = inputHookManager;
         _hidHide = hidHide;
         _onConnectApps = onConnectApps;
+        _emulatorSeeders = emulatorSeeders;
     }
 
     public int ActiveSeatCount => _seats.Count(s => s.Value.Status is not SeatStatus.Idle and not SeatStatus.Error);
@@ -123,6 +127,16 @@ public sealed class SeatManager
             seat.PortBase = _portAllocator.Allocate();
             _logger.LogInformation("Seat {Id}: ports {Base}-{End}",
                 seat.Id, seat.PortBase, seat.PortBase + Shared.Constants.PortsPerSeat - 1);
+
+            // ── 1.5. Assign emulator netplay port from this seat's block ──
+            // A free offset in the 30-port block gives each seat a unique, collision-free netplay
+            // host port. Seats netplay each other over loopback (127.0.0.1:<this port>).
+            if (_options.EnableEmulatorNetplay)
+            {
+                seat.RetroArchNetplayPort = seat.PortBase + Shared.Constants.OffsetRetroArchNetplay;
+                _logger.LogInformation(
+                    "Seat {Id}: RetroArch netplay host port {Port}", seat.Id, seat.RetroArchNetplayPort);
+            }
 
             // ── 2. Launch background session ──────────────────────────
             seat.SessionId = await _sessionLauncher.LaunchSessionAsync(
@@ -243,6 +257,25 @@ public sealed class SeatManager
                 {
                     _logger.LogWarning(ex,
                         "Seat {Id}: could not set session render device (non-critical)", seat.Id);
+                }
+            }
+
+            // ── 5.7. Seed emulator configs (opt-in, best-effort) ──────────
+            // Write each enabled emulator's per-seat netplay config into the seat user's profile
+            // (e.g. RetroArch netplay port + shared ROM dir). Mirrors the RustDesk seed above:
+            // best-effort, never fails provisioning.
+            foreach (var seeder in _emulatorSeeders)
+            {
+                if (!seeder.IsEnabled) continue;
+                try
+                {
+                    await seeder.SeedAsync(seat, ct);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex,
+                        "Seat {Id}: {Emulator} config seed failed (non-critical)",
+                        seat.Id, seeder.EmulatorName);
                 }
             }
 

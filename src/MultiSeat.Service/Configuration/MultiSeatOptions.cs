@@ -79,6 +79,28 @@ public sealed class MultiSeatOptions
     public int ProcessLaunchTimeoutMs { get; set; } = 10_000;
     public int HealthCheckIntervalMs { get; set; } = 5_000;
 
+    // ── Shared game library ──────────────────────────────────────────
+    // Create a shared games/ROMs location all seat accounts can read/write, so a Steam game
+    // installed by one seat's account is not re-downloaded by another owning account, and ROMs
+    // live in one place. Creates {SharedGameLibraryDir}\SteamLibrary and \ROMs at startup and
+    // grants BUILTIN\Users Modify. Point each seat's Steam at the SteamLibrary folder manually.
+    public bool EnableSharedGameLibrary { get; set; } = true;
+    public string SharedGameLibraryDir { get; set; } = @"C:\MultiSeatGames";
+
+    // ── Emulator netplay ─────────────────────────────────────────────
+    // Assign each seat a deterministic, collision-free netplay port from its own port block
+    // (seat.PortBase + Constants.OffsetRetroArchNetplay) and open it in the firewall. Seats
+    // netplay each other over loopback (127.0.0.1:<host-seat-port>).
+    public bool EnableEmulatorNetplay { get; set; } = true;
+
+    // Opt-in: seed each seat user's retroarch.cfg with its netplay port + the shared ROM dir.
+    // Off by default because it writes into a user-profile / emulator config file.
+    public bool SeedRetroArchNetplayConfig { get; set; } = false;
+
+    // Override for the seat's RetroArch config path. Empty → auto-detect
+    // C:\Users\{AccountName}\AppData\Roaming\RetroArch\retroarch.cfg.
+    public string RetroArchConfigPath { get; set; } = string.Empty;
+
     // ── Rebuild ───────────────────────────────────────────────────────
     // Absolute path to the repo root. Required for the dashboard Rebuild button.
     // Example: C:\MultiSeat-Development

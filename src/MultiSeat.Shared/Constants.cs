@@ -35,6 +35,10 @@ public static class Constants
     public const int OffsetMic       = 12;  // RTP mic stream (stream_mic)
     public const int OffsetRtsp      = 26;  // RTSP session setup (TCP) — Sunshine stock RTSP port (48010 with PortBase=47984)
 
+    // Emulator netplay (not an Apollo offset). Uses a free slot in the seat's 30-port block so
+    // each seat gets a unique, collision-free netplay port (seat 0 = 48113, seat 1 = 48143, …).
+    public const int OffsetRetroArchNetplay = 13;  // RetroArch netplay host port (TCP)
+
     // Legacy aliases kept for the ApolloConfigBuilder "port =" line (value is OffsetGfeHttp = 0)
     // and for FirewallManager until those callers are updated.
     public const int OffsetHttps = OffsetGfeHttp;   // = 0; "port =" key in sunshine.conf

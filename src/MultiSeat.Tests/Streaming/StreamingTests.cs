@@ -333,7 +333,7 @@ public class StreamingTests
         {
             Constants.OffsetGfeHttps, Constants.OffsetGfeHttp, Constants.OffsetWebUi,
             Constants.OffsetVideo, Constants.OffsetControl, Constants.OffsetAudio,
-            Constants.OffsetMic, Constants.OffsetRtsp,
+            Constants.OffsetMic, Constants.OffsetRtsp, Constants.OffsetRetroArchNetplay,
         };
 
         var allUsedPorts = new HashSet<int>();

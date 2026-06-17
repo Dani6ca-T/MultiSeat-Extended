@@ -7,6 +7,7 @@ using MultiSeat.Service.Configuration;
 using MultiSeat.Service.Input;
 using MultiSeat.Service.Monitoring;
 using MultiSeat.Service.Sessions;
+using MultiSeat.Service.Storage;
 using MultiSeat.Service.Streaming;
 using MultiSeat.Shared.Models;
 
@@ -28,6 +29,7 @@ public sealed class MultiSeatWorker : BackgroundService
     private readonly HidHideConfigurator _hidHide;
     private readonly FirewallManager _firewall;
     private readonly SeatPresetStore _presets;
+    private readonly SharedLibraryProvisioner _sharedLibrary;
     private readonly IServiceProvider _services;
 
     private WebApplication? _apiApp;
@@ -43,6 +45,7 @@ public sealed class MultiSeatWorker : BackgroundService
         HidHideConfigurator hidHide,
         FirewallManager firewall,
         SeatPresetStore presets,
+        SharedLibraryProvisioner sharedLibrary,
         IServiceProvider services)
     {
         _logger = logger;
@@ -55,6 +58,7 @@ public sealed class MultiSeatWorker : BackgroundService
         _hidHide = hidHide;
         _firewall = firewall;
         _presets = presets;
+        _sharedLibrary = sharedLibrary;
         _services = services;
     }
 
@@ -110,6 +114,11 @@ public sealed class MultiSeatWorker : BackgroundService
         // Windows Firewall blocks inbound connections by default; no install
         // script adds this rule, so we ensure it exists on every startup.
         await _firewall.EnsureApiPortOpenAsync(_options.ApiPort, stoppingToken);
+
+        // ── Step 3b: Provision the shared game library ───────────────
+        // Create the shared Steam library + ROM folders (once, idempotent) and grant seat
+        // accounts access, so games/ROMs aren't siloed per Windows account. No-op when disabled.
+        await _sharedLibrary.EnsureSharedLibraryAsync(stoppingToken);
 
         // ── Step 4: Start embedded API server ────────────────────────
         _apiApp = ApiServer.Build(_services, _options);
