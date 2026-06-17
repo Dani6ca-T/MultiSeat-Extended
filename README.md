@@ -15,9 +15,9 @@ MultiSeat lets you run multiple simultaneous Moonlight game-streaming sessions o
 
 ```
 Host Machine
-├── Seat 0 (MultiSeat01)  →  Apollo :47984  →  Moonlight Client A
-├── Seat 1 (MultiSeat02)  →  Apollo :47994  →  Moonlight Client B
-└── Seat 2 (MultiSeat03)  →  Apollo :48004  →  Moonlight Client C
+├── Seat 0 (MultiSeat01)  →  Apollo :48100  →  Moonlight Client A
+├── Seat 1 (MultiSeat02)  →  Apollo :48130  →  Moonlight Client B
+└── Seat 2 (MultiSeat03)  →  Apollo :48160  →  Moonlight Client C
 ```
 
 ---
@@ -153,9 +153,9 @@ The port for each seat is shown in the dashboard. Default ports:
 
 | Seat | Port |
 |------|------|
-| Seat 0 | 47984 |
-| Seat 1 | 47994 |
-| Seat 2 | 48004 |
+| Seat 0 | 48100 |
+| Seat 1 | 48130 |
+| Seat 2 | 48160 |
 
 ---
 
@@ -166,8 +166,8 @@ Edit `appsettings.json` in `C:\Program Files\MultiSeat\` (restart the service af
 | Key | Default | Description |
 |-----|---------|-------------|
 | `MaxSeats` | `4` | Maximum concurrent seats |
-| `PortBase` | `47984` | First Apollo HTTPS port |
-| `ApolloExePath` | `C:\Program Files\Apollo\sunshine.exe` | Path to Apollo executable |
+| `PortBase` | `48100` | First Apollo HTTPS port (above a stock Apollo's block, so MultiSeat coexists with a standalone Apollo) |
+| `ApolloExePath` | `C:\Program Files\ApolloVibe\sunshine.exe` | Path to MultiSeat's own Apollo (separate from any standalone `C:\Program Files\Apollo`) |
 | `ApolloConfigDir` | `C:\ProgramData\MultiSeat\apollo` | Per-seat config directory |
 | `ApiPort` | `9550` | Dashboard port |
 | `ApiKey` | *(auto-generated)* | API key required to access the dashboard. Auto-generated on first start and saved to `C:\ProgramData\MultiSeat\api-key.txt`. Set a fixed value here to override. Set to `disabled` to turn off authentication entirely (only safe on a fully trusted private network). |
@@ -271,7 +271,7 @@ Each seat reserves a block of 10 ports starting at `PortBase + (seat_index × 10
 | +3 | TCP/UDP | RTP audio |
 | +4 | TCP/UDP | Control channel |
 
-Default `PortBase` = 47984. Seat 0 = 47984, Seat 1 = 47994, Seat 2 = 48004, etc.
+Default `PortBase` = 48100 (each seat reserves a 30-port block). Seat 0 = 48100, Seat 1 = 48130, Seat 2 = 48160, etc. The base sits above a stock Apollo's port block so MultiSeat coexists with a standalone Apollo.
 
 ---
 

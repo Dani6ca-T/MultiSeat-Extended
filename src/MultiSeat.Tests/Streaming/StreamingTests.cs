@@ -351,10 +351,11 @@ public class StreamingTests
     }
 
     [Fact]
-    public void Constants_PortBase_Is47984()
+    public void Constants_PortBase_Is48100()
     {
-        // Sunshine/Moonlight default HTTPS port
-        Assert.Equal(47984, Constants.PortBase);
+        // Sits above a stock Apollo's port block (centered on the Sunshine/Moonlight
+        // default 47984) so MultiSeat seats coexist with a standalone Apollo.
+        Assert.Equal(48100, Constants.PortBase);
     }
 
     [Fact]

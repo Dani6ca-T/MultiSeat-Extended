@@ -28,9 +28,10 @@ MultiSeat runs multiple simultaneous Moonlight game-streaming sessions on one Wi
 
 ## Port Layout
 
-Each seat reserves a block of 30 ports: `PortBase + (seat_index × 30)`. Default `PortBase = 47984`.
-- Seat 0 → 47984–48013, Seat 1 → 48014–48043, etc.
+Each seat reserves a block of 30 ports: `PortBase + (seat_index × 30)`. Default `PortBase = 48100`.
+- Seat 0 → 48100–48129, Seat 1 → 48130–48159, etc.
 - Apollo's per-seat offsets span `-5` (GFE HTTPS) to `+26` (RTSP) around the base.
+- The base sits **above** a stock Apollo's block (~47979–48010, centered on the Moonlight default 47984) so MultiSeat coexists with a standalone Apollo — see "Coexistence with a standalone Apollo" below.
 
 ## Audio Device Layout
 
@@ -63,9 +64,18 @@ Two separate scripts — prereqs and service deploy are intentionally split:
 | Path | Purpose |
 |---|---|
 | `C:\Program Files\MultiSeat\` | Service install dir |
+| `C:\Program Files\ApolloVibe\` | MultiSeat's own Apollo install (separate from any standalone `C:\Program Files\Apollo\`) |
 | `C:\ProgramData\MultiSeat\` | Runtime data, Apollo configs, logs |
 | `C:\ProgramData\MultiSeat\logs\` | Service logs |
 | `C:\ProgramData\MultiSeat\apollo\` | Per-seat Apollo config dirs |
+
+## Coexistence with a standalone Apollo
+
+MultiSeat is self-contained and **non-destructive**: it works out of the box whether or not the host already runs a standalone Apollo (e.g. for the main console account). Three guarantees keep the two from colliding:
+
+1. **Own Apollo binary.** The prereq script installs ApolloVibe to `C:\Program Files\ApolloVibe\` (`Constants.DefaultApolloPath` / `MultiSeat:ApolloExePath`); an existing `C:\Program Files\Apollo\` is never touched.
+2. **Own port range.** Default `PortBase = 48100`, above a stock Apollo's block — no runtime port conflict.
+3. **Never kills a non-MultiSeat Apollo.** On startup `MultiSeatWorker.KillOrphanedApolloProcesses` reaps **only** Apollo processes MultiSeat launched, identified via WMI (`GetManagedApolloPids`) by executable path (under the ApolloVibe dir) or a MultiSeat per-seat config path on the command line. It no longer stops/disables `ApolloService`, and `install-service.ps1` leaves that service alone. (WMI failure → empty set → cleanup is skipped rather than risk killing an unrelated Apollo.)
 
 ## Architecture Notes
 

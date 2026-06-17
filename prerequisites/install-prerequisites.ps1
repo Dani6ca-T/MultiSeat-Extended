@@ -630,7 +630,10 @@ if ($existingDll) {
 # ----------------------------------------------------------------
 Write-Step "Apollo (game streaming server)"
 
-$apolloInstallDir = "C:\Program Files\Apollo"
+# MultiSeat installs its OWN Apollo (ApolloVibe) in a dedicated directory so it never
+# touches a standalone Apollo a user may already run at C:\Program Files\Apollo. The two
+# installs stay independent and MultiSeat coexists with the user's Apollo out of the box.
+$apolloInstallDir = "C:\Program Files\ApolloVibe"
 $apolloPath = "$apolloInstallDir\sunshine.exe"
 # Apollo seeds config\apps.json from assets\apps.json on first run; without it Apollo
 # exits at startup. A complete install needs BOTH files. Some earlier release zips

@@ -7,9 +7,14 @@ namespace MultiSeat.Shared;
 public static class Constants
 {
     // ── Port allocation ──────────────────────────────────────────────
-    // Each seat reserves a block of 10 ports starting from the base.
-    // Seat 0 → 47984-47993, Seat 1 → 47994-48003, etc.
-    public const int PortBase = 47984;
+    // Each seat reserves a block of PortsPerSeat ports starting from the base.
+    // Seat 0 → 48100-48129, Seat 1 → 48130-48159, etc.
+    // The base intentionally sits ABOVE a stock Apollo's port block (~47979-48010,
+    // centered on the Sunshine/Moonlight default 47984) so MultiSeat seats never
+    // collide with a standalone Apollo running on the same host. This lets MultiSeat
+    // coexist with a user's existing Apollo out of the box. Configurable via
+    // MultiSeat:PortBase in appsettings.json.
+    public const int PortBase = 48100;
     // A seat's port offsets span -5 (GFE HTTPS) to +26 (RTSP) — a 32-position range — but only
     // 8 of those positions are actually used: {-5,0,1,9,10,11,12,26}. PortsPerSeat=30 is
     // intentionally smaller than the raw 32-span: at 30-port spacing none of the *used* offsets
@@ -36,7 +41,11 @@ public static class Constants
     public const int OffsetHttp  = OffsetWebUi;     // = 1; web UI port
 
     // ── Default paths ────────────────────────────────────────────────
-    public const string DefaultApolloPath = @"C:\Program Files\Apollo\sunshine.exe";
+    // MultiSeat installs and manages its OWN Apollo (ApolloVibe) in a dedicated
+    // directory, separate from any standalone Apollo a user may run at
+    // C:\Program Files\Apollo. This keeps the two installs independent (versions,
+    // process isolation) and lets MultiSeat coexist without touching the user's Apollo.
+    public const string DefaultApolloPath = @"C:\Program Files\ApolloVibe\sunshine.exe";
     public const string DefaultApolloConfigDir = @"C:\ProgramData\MultiSeat\apollo";
     public const string DefaultMultiSeatConfigPath = @"C:\ProgramData\MultiSeat\multiseat-host.json";
 

@@ -43,6 +43,7 @@ public sealed class HidHideConfigurator
 {
     private readonly ILogger<HidHideConfigurator> _logger;
     private readonly string _cliPath;
+    private readonly string _apolloExePath;
     private bool _driverAvailable;
 
     // Track what we've configured so we can clean up on teardown
@@ -52,6 +53,7 @@ public sealed class HidHideConfigurator
     {
         _logger = logger;
         _cliPath = options.Value.HidHideCliPath;
+        _apolloExePath = options.Value.ApolloExePath;
         _driverAvailable = File.Exists(_cliPath);
 
         if (!_driverAvailable)
@@ -319,8 +321,9 @@ public sealed class HidHideConfigurator
 
     private string? GetApolloExePath()
     {
-        var path = Shared.Constants.DefaultApolloPath;
-        return File.Exists(path) ? path : null;
+        // Use the configured Apollo path (MultiSeat's own ApolloVibe install) so
+        // cloaking whitelists the same binary MultiSeat launches for seats.
+        return File.Exists(_apolloExePath) ? _apolloExePath : null;
     }
 
     /// <summary>

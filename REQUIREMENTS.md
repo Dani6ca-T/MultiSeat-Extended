@@ -47,8 +47,8 @@ Apollo is a fork of Sunshine with support for running multiple instances simulta
 | Requirement | Details |
 |-------------|---------|
 | **Apollo** | v0.4.6+ |
-| **Install path** | `C:\Program Files\Apollo\sunshine.exe` (configurable) |
-| **Notes** | Do NOT use upstream Sunshine — it does not support multi-instance |
+| **Install path** | `C:\Program Files\ApolloVibe\sunshine.exe` (configurable; separate from any standalone `C:\Program Files\Apollo`) |
+| **Notes** | Do NOT use upstream Sunshine — it does not support multi-instance. MultiSeat installs and manages its own Apollo, so it coexists with a standalone Apollo on the same host. |
 
 Download: https://github.com/ClassicOldSong/Apollo/releases
 
@@ -204,7 +204,7 @@ For each concurrent streaming seat:
 | Windows local account | One per seat (created/managed by MultiSeat, or link an existing account) |
 | Virtual display | One SudoVDA display per seat |
 | Virtual audio device | One per seat: VB-CABLE (seat 0) or VoiceMeeter virtual input (seats 1–3) |
-| TCP/UDP ports | 10 ports per seat (default: 47984–47993, 47994–48003, ...) |
+| TCP/UDP ports | 30-port block per seat (default: 48100–48129, 48130–48159, ...) |
 | Apollo config directory | Created automatically under `C:\ProgramData\MultiSeat\apollo\` |
 
 ---
@@ -222,7 +222,7 @@ MultiSeat automatically creates Windows Firewall rules for each seat's ports. If
 | PortBase + 4 | TCP/UDP | Control channel |
 | 9550 | TCP | MultiSeat dashboard (local only recommended) |
 
-Default `PortBase` = 47984. Each additional seat adds 10 to the base (Seat 1 = 47994, Seat 2 = 48004, etc.).
+Default `PortBase` = 48100. Each additional seat adds 30 to the base (Seat 1 = 48130, Seat 2 = 48160, etc.). The base sits above a stock Apollo's block so MultiSeat coexists with a standalone Apollo.
 
 ---
 

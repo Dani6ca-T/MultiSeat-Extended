@@ -227,22 +227,12 @@ if ($vmExe) {
     Write-Host "  NOTE: VoiceMeeter not found - audio isolation unavailable. Run prerequisites\install-prerequisites.ps1." -ForegroundColor Yellow
 }
 
-# -- Disable default ApolloService (prevents port 47984 conflicts) ------------
-# Apollo ships as an auto-start Windows service that runs sunshine.exe on port 47984.
-# MultiSeat manages its own per-seat Apollo instances; the default service must be
-# stopped and set to Manual start so it does not compete after reboot.
-$apolloSvc = Get-Service -Name "ApolloService" -ErrorAction SilentlyContinue
-if ($apolloSvc) {
-    if ($apolloSvc.Status -eq 'Running') {
-        Write-Step "Stopping default ApolloService (port 47984 conflict with MultiSeat)..."
-        Stop-Service "ApolloService" -Force
-        Write-Host "  OK: ApolloService stopped" -ForegroundColor Green
-    }
-    Set-Service "ApolloService" -StartupType Manual
-    Write-Host "  OK: ApolloService set to Manual start (MultiSeat manages all Apollo instances)" -ForegroundColor Green
-} else {
-    Write-Host "  OK: ApolloService not found" -ForegroundColor DarkGray
-}
+# -- Standalone Apollo coexistence --------------------------------------------
+# MultiSeat installs and manages its OWN Apollo (ApolloVibe at C:\Program Files\ApolloVibe)
+# on a non-overlapping port block (PortBase 48100+), so it coexists with a standalone Apollo
+# the user may run for their main console. We intentionally leave any default ApolloService
+# alone — it is NOT stopped or disabled.
+Write-Host "  OK: leaving any standalone ApolloService untouched (MultiSeat uses its own Apollo + ports)" -ForegroundColor DarkGray
 
 # -- Stop service before publish so its DLLs are not locked ----------
 $svcBeforePublish = Get-Service $ServiceName -ErrorAction SilentlyContinue

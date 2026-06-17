@@ -1,5 +1,5 @@
 using System.Diagnostics;
-using System.ServiceProcess;
+using System.Management;
 using Microsoft.Extensions.Options;
 using Microsoft.Win32;
 using MultiSeat.Service.Api;
@@ -63,10 +63,12 @@ public sealed class MultiSeatWorker : BackgroundService
         _logger.LogInformation("MultiSeat Service starting — Windows {Build}",
             Environment.OSVersion.VersionString);
 
-        // ── Step 0: Kill orphaned Apollo processes from previous run ──
-        // On restart, in-memory seat state is lost. Any Apollo instances still
-        // running from the previous run hold their ports, causing port conflicts
-        // when new seats are provisioned. Kill them before starting.
+        // ── Step 0: Kill orphaned MultiSeat Apollo processes from previous run ──
+        // On restart, in-memory seat state is lost. Any Apollo instances MultiSeat
+        // started in a previous run hold their ports, causing conflicts when new
+        // seats are provisioned. Kill ONLY MultiSeat-managed instances — a standalone
+        // Apollo the user runs separately (different install dir, no per-seat config)
+        // and its ApolloService are left untouched, so MultiSeat coexists with it.
         KillOrphanedApolloProcesses();
 
         // ── Step 0b: Set DWM frame interval for RDP sessions ────────
@@ -169,59 +171,35 @@ public sealed class MultiSeatWorker : BackgroundService
         }
     }
 
-    private void StopApolloWindowsService()
-    {
-        const string apolloServiceName = "ApolloService";
-        try
-        {
-            using var svc = new ServiceController(apolloServiceName);
-            var status = svc.Status;
-            if (status is ServiceControllerStatus.Running or ServiceControllerStatus.StartPending)
-            {
-                _logger.LogInformation(
-                    "Stopping default ApolloService — it uses port 47984 and conflicts " +
-                    "with MultiSeat seat allocation. Use install-service.ps1 to disable it permanently.");
-                svc.Stop();
-                svc.WaitForStatus(ServiceControllerStatus.Stopped, TimeSpan.FromSeconds(10));
-                _logger.LogInformation("ApolloService stopped");
-            }
-        }
-        catch (InvalidOperationException)
-        {
-            // Service does not exist — nothing to do
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(ex,
-                "Could not stop ApolloService — port 47984 conflicts may occur. " +
-                "Run install-service.ps1 to disable it.");
-        }
-    }
-
     private void KillOrphanedApolloProcesses()
     {
-        // Stop the ApolloService Windows service before killing processes.
-        // Apollo ships as an auto-start service; killing the process alone lets the
-        // service restart it immediately, causing port 47984 conflicts with MultiSeat seats.
-        StopApolloWindowsService();
-
         var exeName = Path.GetFileNameWithoutExtension(_options.ApolloExePath); // "sunshine"
         try
         {
             var procs = Process.GetProcessesByName(exeName);
             if (procs.Length == 0) return;
 
-            _logger.LogInformation(
-                "Killing {Count} orphaned Apollo process(es) from previous run",
-                procs.Length);
+            // Only reap Apollo instances MultiSeat itself launched. A standalone Apollo
+            // the user runs (e.g. for their main console) shares the same exe name, so we
+            // must NOT kill every "sunshine" process. MultiSeat-managed instances are
+            // identified by their install dir or per-seat config path on the command line.
+            var managed = GetManagedApolloPids(exeName);
 
             foreach (var proc in procs)
             {
                 try
                 {
+                    if (!managed.Contains(proc.Id))
+                    {
+                        _logger.LogInformation(
+                            "Skipping non-MultiSeat Apollo PID {Pid} — leaving standalone Apollo running",
+                            proc.Id);
+                        continue;
+                    }
+
                     proc.Kill(entireProcessTree: true);
                     proc.WaitForExit(3000);
-                    _logger.LogDebug("Killed orphaned Apollo PID {Pid}", proc.Id);
+                    _logger.LogInformation("Killed orphaned MultiSeat Apollo PID {Pid}", proc.Id);
                 }
                 catch (Exception ex)
                 {
@@ -237,6 +215,52 @@ public sealed class MultiSeatWorker : BackgroundService
         {
             _logger.LogWarning(ex, "Error during orphaned Apollo cleanup");
         }
+    }
+
+    /// <summary>
+    /// Returns the PIDs of Apollo processes that MultiSeat launched, identified via WMI by
+    /// either their executable path (under MultiSeat's own Apollo install dir) or a per-seat
+    /// MultiSeat config path on their command line. Used so cleanup never touches a standalone
+    /// Apollo running on the same host. On any WMI failure, returns an empty set (fail-safe:
+    /// we would rather skip cleanup than kill an unrelated Apollo).
+    /// </summary>
+    private HashSet<int> GetManagedApolloPids(string exeName)
+    {
+        var managed = new HashSet<int>();
+        var managedExeDir = Path.GetDirectoryName(_options.ApolloExePath);   // C:\Program Files\ApolloVibe
+        var managedConfigDir = _options.ApolloConfigDir;                     // C:\ProgramData\MultiSeat\apollo
+
+        try
+        {
+            using var searcher = new ManagementObjectSearcher(
+                $"SELECT ProcessId, ExecutablePath, CommandLine FROM Win32_Process WHERE Name = '{exeName}.exe'");
+
+            foreach (ManagementObject obj in searcher.Get())
+            {
+                using (obj)
+                {
+                    var exePath = obj["ExecutablePath"] as string;
+                    var cmdLine = obj["CommandLine"] as string;
+
+                    var isOurs =
+                        (!string.IsNullOrEmpty(managedExeDir) && exePath is not null &&
+                         exePath.StartsWith(managedExeDir, StringComparison.OrdinalIgnoreCase)) ||
+                        (cmdLine is not null &&
+                         cmdLine.Contains(managedConfigDir, StringComparison.OrdinalIgnoreCase));
+
+                    if (isOurs)
+                        managed.Add(Convert.ToInt32(obj["ProcessId"]));
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex,
+                "WMI query for managed Apollo processes failed — skipping orphan cleanup " +
+                "to avoid killing a standalone Apollo");
+        }
+
+        return managed;
     }
 
     /// <summary>

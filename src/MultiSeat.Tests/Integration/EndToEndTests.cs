@@ -118,10 +118,10 @@ public class EndToEndTests
     [Fact]
     public void PortAllocation_MaxSeats_FitsInPortRange()
     {
-        // MaxSeats (8) × PortsPerSeat (30) ports, starting at PortBase (47984) → last port 48223.
+        // MaxSeats (8) × PortsPerSeat (30) ports, starting at PortBase (48100) → last port 48339.
         // Must stay below the ephemeral port range (49152+).
         var lastPort = Constants.PortBase + (Constants.MaxSeats * Constants.PortsPerSeat) - 1;
-        Assert.Equal(48223, lastPort);
+        Assert.Equal(48339, lastPort);
         Assert.True(lastPort < 49152, "Port range should not overlap with ephemeral ports");
     }
 
