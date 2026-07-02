@@ -195,9 +195,11 @@ if (-not $vigemOk) {
         if ($f) { $exe = Get-Item $f }
     }
     if ($exe) {
-        Write-Host "  Installing $($exe.Name) (NSIS silent)..."
-        # ViGEmBus v1.22.0 uses an NSIS installer — /S is the correct NSIS silent flag.
-        $p = Start-Process $exe.FullName -ArgumentList "/S" -Wait -PassThru
+        Write-Host "  Installing $($exe.Name) (WiX Burn silent)..."
+        # ViGEmBus v1.22.0 ships a WiX Burn bootstrapper, NOT an NSIS installer.
+        # Its silent switches are /quiet /norestart; the NSIS /S flag is rejected with an
+        # "Invalid command line" dialog that blocks the run (see GitHub issue #6).
+        $p = Start-Process $exe.FullName -ArgumentList "/quiet","/norestart" -Wait -PassThru
         Write-Host "  [DIAG] Installer exit code: $($p.ExitCode)" -ForegroundColor DarkGray
     }
 
