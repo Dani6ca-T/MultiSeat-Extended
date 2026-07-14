@@ -40,6 +40,17 @@ if (args.Length == 2 && args[0] == "--mute-audio" && int.TryParse(args[1], out v
     return AudioMuteHelper.MuteByPid(pidToMute) ? 0 : 1;
 }
 
+// ── Hide-windows helper mode ──────────────────────────────────────────
+// Invoked by the service via CreateProcessAsUser in the console session so that
+// EnumWindows sees the console user's windows (window enumeration is per-desktop;
+// Session 0 cannot see the console session's mstsc window). Hides the mstsc
+// window that holds a seat's RDP session Active (GitHub issue #8).
+// Usage: MultiSeat.Service.exe --hide-windows <pid>
+if (args.Length == 2 && args[0] == "--hide-windows" && int.TryParse(args[1], out var pidToHide))
+{
+    return WindowHideHelper.HideByPid(pidToHide) ? 0 : 1;
+}
+
 // ── Enum-displays helper mode ─────────────────────────────────────────
 // Launched inside the console session via CreateProcessAsUser so that
 // QueryDisplayConfig sees the real display topology (Session 0 has no displays).

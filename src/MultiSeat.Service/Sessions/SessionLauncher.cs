@@ -523,7 +523,7 @@ public sealed class SessionLauncher
             // Hide the mstsc window — a minimized mstsc causes Windows to throttle
             // the RDP session which freezes Moonlight. Hidden = no throttling.
             await Task.Delay(500, ct); // brief wait for mstsc to create its window
-            HideProcessWindows(mstscProcess);
+            HideProcessWindows(primaryConsoleToken, consoleSessionId, mstscProcess.Id);
             MuteMstscAudio(primaryConsoleToken, consoleSessionId, mstscProcess.Id);
 
             _pendingMstsc[sessionId] = mstscProcess;
@@ -609,7 +609,7 @@ public sealed class SessionLauncher
                     "Session {Sid} is ACTIVE after reconnect", sessionId);
 
             await Task.Delay(500, ct);
-            HideProcessWindows(mstscProcess);
+            HideProcessWindows(primaryToken, consoleSessionId, mstscProcess.Id);
             MuteMstscAudio(primaryToken, consoleSessionId, mstscProcess.Id);
 
             _pendingMstsc[sessionId] = mstscProcess;
@@ -1499,27 +1499,29 @@ public sealed class SessionLauncher
     }
 
     /// <summary>
-    /// Hide all top-level windows belonging to a process.
-    /// Prevents mstsc from being minimized (which throttles the RDP session and freezes Moonlight).
-    /// The process keeps running — the session stays Active — but the window is invisible.
+    /// Hide all top-level windows belonging to the mstsc process so it isn't visible
+    /// to whoever is using the host account. The process keeps running — the session
+    /// stays Active — but the window is invisible.
+    ///
+    /// Runs a helper (<c>--hide-windows</c>) INSIDE the console session via
+    /// CreateProcessAsUser. EnumWindows only enumerates windows on the caller's
+    /// window station/desktop, so a SYSTEM service in Session 0 cannot see (or hide)
+    /// the console user's mstsc window — doing it in-process was a silent no-op that
+    /// left the RDP window on the host's screen (GitHub issue #8).
     /// </summary>
-    private void HideProcessWindows(Process process)
+    private void HideProcessWindows(SafeTokenHandle consoleToken, uint consoleSessionId, int mstscPid)
     {
         try
         {
-            var targetPid = (uint)process.Id;
-            User32.EnumWindows((hWnd, _) =>
-            {
-                User32.GetWindowThreadProcessId(hWnd, out var pid);
-                if (pid == targetPid)
-                    User32.ShowWindow(hWnd, Kernel32.SW_HIDE);
-                return true; // continue enumeration
-            }, IntPtr.Zero);
-            _logger.LogInformation("Hid mstsc windows for PID {Pid}", process.Id);
+            var exePath = Path.Combine(AppContext.BaseDirectory, "MultiSeat.Service.exe");
+            RunInConsoleSession(consoleToken, consoleSessionId,
+                $"\"{exePath}\" --hide-windows {mstscPid}",
+                waitForExit: true);
+            _logger.LogInformation("Hid mstsc windows for PID {Pid} (console-session helper)", mstscPid);
         }
         catch (Exception ex)
         {
-            _logger.LogWarning(ex, "Failed to hide mstsc windows for PID {Pid} (non-critical)", process.Id);
+            _logger.LogWarning(ex, "Failed to hide mstsc windows for PID {Pid} (non-critical)", mstscPid);
         }
     }
 
