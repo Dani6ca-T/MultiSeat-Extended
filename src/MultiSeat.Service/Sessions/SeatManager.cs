@@ -238,27 +238,11 @@ public sealed class SeatManager
                 }
             }
 
-            // Set game audio render device as the session's default output so games
-            // automatically route audio there. Apollo loopback-captures this device
-            // for audio_sink. Requires audiomode:i:1 in Default.rdp (set by SessionLauncher).
-            if (!string.IsNullOrEmpty(seat.AudioGameRenderDeviceId))
-            {
-                try
-                {
-                    var helperExe = Path.Combine(AppContext.BaseDirectory, "MultiSeat.Service.exe");
-                    _sessionLauncher.RunHelperInSeatSession(
-                        seat.SessionId, seat.AccountName,
-                        $"\"{helperExe}\" --set-default-render \"{seat.AudioGameRenderDeviceId}\"");
-                    _logger.LogInformation(
-                        "Seat {Id}: session render default set to {DeviceId} (game audio)",
-                        seat.Id, seat.AudioGameRenderDeviceId);
-                }
-                catch (Exception ex)
-                {
-                    _logger.LogWarning(ex,
-                        "Seat {Id}: could not set session render device (non-critical)", seat.Id);
-                }
-            }
+            // NOTE: MultiSeat intentionally does NOT set the seat's game-audio device as the
+            // session default render. The Windows default output device is machine-wide (shared
+            // by the console and every seat), so doing so hijacked the host's audio (issue #10).
+            // Apollo points the game at the seat's device itself via virtual_sink in sunshine.conf
+            // (for the duration of the stream, restored afterwards) — see ApolloConfigBuilder.
 
             // ── 5.7. Seed emulator configs (opt-in, best-effort) ──────────
             // Write each enabled emulator's per-seat netplay config into the seat user's profile
@@ -632,9 +616,10 @@ public sealed class SeatManager
     }
 
     /// <summary>
-    /// Re-run the --set-default-render and --set-default-capture helpers in the seat's session
-    /// without reassigning devices. Call this to fix audio when the initial helper invocation
-    /// during provisioning failed or ran in the wrong session.
+    /// Re-run the --set-default-capture helper in the seat's session without reassigning devices.
+    /// Call this to fix mic routing when the initial helper invocation during provisioning failed
+    /// or ran in the wrong session. Does NOT touch the default render device — that is machine-wide
+    /// and would hijack the host's audio (issue #10); Apollo manages the game-audio sink itself.
     /// </summary>
     public void ApplyAudioDefaults(Guid seatId)
     {
@@ -647,24 +632,8 @@ public sealed class SeatManager
     {
         var helperExe = Path.Combine(AppContext.BaseDirectory, "MultiSeat.Service.exe");
 
-        if (!string.IsNullOrEmpty(seat.AudioGameRenderDeviceId))
-        {
-            try
-            {
-                _sessionLauncher.RunHelperInSeatSession(
-                    seat.SessionId, seat.AccountName,
-                    $"\"{helperExe}\" --set-default-render \"{seat.AudioGameRenderDeviceId}\"");
-                _logger.LogInformation(
-                    "Seat {Id}: applied render default {Dev} in session {Sid}",
-                    seat.Id, seat.AudioGameRenderDeviceId, seat.SessionId);
-            }
-            catch (Exception ex)
-            {
-                _logger.LogWarning(ex,
-                    "Seat {Id}: could not apply render default (non-critical)", seat.Id);
-            }
-        }
-
+        // Only the capture (mic) default is set here. The render default is intentionally left
+        // alone — see the note in ProvisionSeatAsync and ApolloConfigBuilder (issue #10).
         if (!string.IsNullOrEmpty(seat.AudioCaptureDeviceId))
         {
             try

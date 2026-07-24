@@ -158,20 +158,33 @@ public sealed class ApolloConfigBuilder
         sb.AppendLine();
 
         // ── Audio output (game audio → Moonlight) ─────────────────────
-        // audio_sink: Apollo WASAPI loopback-captures from this render device to stream game
-        // audio to Moonlight. Requires audiomode:i:1 in the RDP session (set in Default.rdp)
-        // so host audio devices (VB-CABLE, VoiceMeeter) are visible via WASAPI inside the
-        // RDP session. SeatManager sets this device as the session's default render so games
-        // automatically output to it without any manual device selection.
+        // Route game audio to the seat's dedicated virtual device via Apollo's virtual_sink —
+        // the sink Apollo uses when the client does NOT play audio on the host (the normal seat
+        // case). Apollo captures this named device (WASAPI loopback) and streams it to Moonlight.
+        // Requires audiomode:i:1 in the RDP session (set in Default.rdp) so host audio devices
+        // (VB-CABLE, VoiceMeeter) are visible via WASAPI inside the session.
+        //
+        // We deliberately use virtual_sink (not audio_sink) and set keep_sink_default = disabled
+        // to avoid hijacking the console/host audio (issue #10). Windows has a single machine-wide
+        // default output device shared by the console session and every seat. Apollo's set_sink()
+        // changes that default globally at stream start; with keep_sink_default enabled (Apollo's
+        // default) it would also *re-assert* the seat's device as the global default whenever
+        // anything else changes it — fighting the console and other seats and leaving the host with
+        // no sound. With it disabled, Apollo still points the game at the sink for the duration of
+        // the stream and restores the previous default afterwards, without holding it. MultiSeat no
+        // longer sets the global default itself (see SeatManager — the --set-default-render step was
+        // removed for the same reason).
         if (!string.IsNullOrEmpty(seat.AudioGameRenderFriendlyName))
         {
-            sb.AppendLine("# Audio output — Apollo loopback-captures session default render for game audio");
-            sb.AppendLine($"audio_sink = {seat.AudioGameRenderFriendlyName}");
+            sb.AppendLine("# Audio output — capture the seat's virtual device without holding the global default");
+            sb.AppendLine($"virtual_sink = {seat.AudioGameRenderFriendlyName}");
         }
         else
         {
-            sb.AppendLine("# audio_sink = (no game audio device assigned)");
+            sb.AppendLine("# virtual_sink = (no game audio device assigned)");
         }
+        sb.AppendLine("keep_sink_default = disabled");
+        sb.AppendLine("auto_capture_sink = disabled");
         sb.AppendLine();
 
         // ── Audio input (mic from Moonlight → game) ────────────────────

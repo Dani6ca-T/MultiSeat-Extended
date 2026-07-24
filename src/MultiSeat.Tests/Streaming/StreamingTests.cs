@@ -136,6 +136,7 @@ public class StreamingTests
                 Width = 1920,
                 Height = 1080,
                 Fps = 60,
+                AudioGameRenderFriendlyName = "CABLE In 16ch (VB-Audio Virtual Cable)",
             };
 
             var configPath = builder.BuildConfig(seat, tempDir);
@@ -158,6 +159,14 @@ public class StreamingTests
             Assert.Contains("controller = enabled", content);
             Assert.Contains("stream_mic = enabled", content);
             Assert.Contains("min_log_level = info", content);
+            // Audio: route the game to the seat's virtual device WITHOUT holding the machine-wide
+            // default output, so seats don't hijack the console/host audio (issue #10).
+            Assert.Contains("virtual_sink = CABLE In 16ch (VB-Audio Virtual Cable)", content);
+            Assert.Contains("keep_sink_default = disabled", content);
+            Assert.Contains("auto_capture_sink = disabled", content);
+            // audio_sink (the "play on host too" device) must NOT be set — it would make Apollo
+            // grab the global default at stream start.
+            Assert.DoesNotContain("audio_sink =", content);
         }
         finally
         {
