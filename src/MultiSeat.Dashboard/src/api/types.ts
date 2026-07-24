@@ -152,6 +152,13 @@ export interface HookStatus {
   enabled: boolean;
 }
 
+export interface InputMode {
+  // False (default): Apollo forwards the Moonlight client's controller natively,
+  // so the XInput→seat assignment UI is inert. True: MultiSeat routes physical
+  // XInput controllers into seats via ViGEm.
+  viGEmControllerEnabled: boolean;
+}
+
 // ── API Auth ──────────────────────────────────────────────────────
 
 export interface ApiAuthStatus {
@@ -166,6 +173,10 @@ export interface SeatServices {
   display: boolean;
   audio: boolean;
   controller: boolean;
+  // True when MultiSeat manages a ViGEm pad for this seat. When false (default),
+  // Apollo forwards the client's controller natively — the UI shows "Native" instead
+  // of a down light.
+  controllerManaged: boolean;
   inputHooks: boolean;
   firewall: boolean;
   session: boolean;

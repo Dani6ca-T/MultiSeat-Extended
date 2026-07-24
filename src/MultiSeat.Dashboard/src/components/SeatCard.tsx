@@ -375,20 +375,31 @@ export function SeatCard({ seat, onUpdate }: Props) {
                     </button>
                   }
                 />
-                <ServiceRow
-                  name="Controller"
-                  active={services.controller}
-                  detail={seat.viGEmControllerIndex >= 0 ? `ViGEm #${seat.viGEmControllerIndex}` : undefined}
-                  actions={
-                    <button
-                      className="btn-sm"
-                      disabled={actionLoading !== null}
-                      onClick={() => serviceAction("controller-reset", () => seatsApi.resetController(seat.id))}
-                    >
-                      {actionLoading === "controller-reset" ? "..." : "Reset"}
-                    </button>
-                  }
-                />
+                {services.controllerManaged ? (
+                  <ServiceRow
+                    name="Controller"
+                    active={services.controller}
+                    detail={seat.viGEmControllerIndex >= 0 ? `ViGEm #${seat.viGEmControllerIndex}` : undefined}
+                    actions={
+                      <button
+                        className="btn-sm"
+                        disabled={actionLoading !== null}
+                        onClick={() => serviceAction("controller-reset", () => seatsApi.resetController(seat.id))}
+                      >
+                        {actionLoading === "controller-reset" ? "..." : "Reset"}
+                      </button>
+                    }
+                  />
+                ) : (
+                  // Default mode: no MultiSeat-managed pad — Apollo forwards the Moonlight
+                  // client's controller natively. Show it as working ("Native"), not a
+                  // down/grey light, and offer no Reset (there's nothing to reset).
+                  <ServiceRow
+                    name="Controller"
+                    active
+                    detail="Native — Apollo forwards client input"
+                  />
+                )}
                 <ServiceRow
                   name="Session"
                   active={seat.sessionId > 0}

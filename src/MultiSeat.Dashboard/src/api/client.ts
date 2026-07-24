@@ -10,6 +10,7 @@ import type {
   ControllerInfo,
   ControllerAssignments,
   HookStatus,
+  InputMode,
   SeatServices,
   NvencQualityPreset,
 } from "./types";
@@ -183,4 +184,6 @@ export const input = {
     ),
 
   hookStatus: () => request<HookStatus>("/input/hooks/status"),
+
+  mode: () => request<InputMode>("/input/mode"),
 };

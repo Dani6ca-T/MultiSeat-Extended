@@ -7,6 +7,7 @@ import type { ControllerInfo } from "../api/types";
 export function InputPage() {
   const controllerFetcher = useCallback(() => input.controllers(), []);
   const hookFetcher = useCallback(() => input.hookStatus(), []);
+  const modeFetcher = useCallback(() => input.mode(), []);
 
   const {
     data: controllers,
@@ -14,6 +15,9 @@ export function InputPage() {
     refresh: refreshControllers,
   } = usePolling(controllerFetcher, 2000);
   const { data: hookStatus } = usePolling(hookFetcher, 3000);
+  // Rarely changes (it's a service config flag) — poll slowly.
+  const { data: mode } = usePolling(modeFetcher, 10000);
+  const controllerRoutingOff = mode ? !mode.viGEmControllerEnabled : false;
   const { seats } = useSeats();
   const [assigning, setAssigning] = useState(false);
 
@@ -95,6 +99,22 @@ export function InputPage() {
 
       {/* Controllers */}
       <h3 style={{ marginBottom: 12 }}>XInput Controllers</h3>
+
+      {controllerRoutingOff && (
+        <div className="card" style={{ marginBottom: 12 }}>
+          <div className="card-body">
+            <p style={{ margin: 0, fontSize: 13 }}>
+              MultiSeat-managed controller routing is <strong>off</strong> (the default).
+              Apollo forwards each Moonlight client's controller into its seat natively, so
+              assigning a physical controller to a seat here has no effect.
+            </p>
+            <p className="text-muted" style={{ fontSize: 12, marginTop: 8, marginBottom: 0 }}>
+              Enable <code>EnableViGEmController</code> in appsettings.json only if you want to
+              route a controller physically connected to the host into a seat.
+            </p>
+          </div>
+        </div>
+      )}
 
       {controllersLoading ? (
         <div className="text-muted">Scanning controllers...</div>

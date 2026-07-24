@@ -481,6 +481,7 @@ public sealed class SeatManager
             Display = !string.IsNullOrEmpty(seat.DisplayDevicePath),
             Audio = seat.VacCableIndex >= 0,
             Controller = seat.ViGEmControllerIndex >= 0,
+            ControllerManaged = _options.EnableViGEmController,
             InputHooks = _inputHookManager.IsInstalled,
             Firewall = seat.PortBase > 0,
             Session = seat.SessionId >= 0
@@ -765,6 +766,14 @@ public sealed class SeatManager
         _ = BroadcastState(seat);
         _logger.LogInformation("Seat {Id}: controller reset", seatId);
     }
+
+    /// <summary>
+    /// True when MultiSeat manages ViGEm virtual controllers + physical-XInput routing
+    /// (EnableViGEmController). When false (default), Apollo forwards the Moonlight client's
+    /// controller natively and the Input-tab assignment UI has no effect. Read from the
+    /// bound options here (the API's inner DI container doesn't bind MultiSeatOptions).
+    /// </summary>
+    public bool ControllerRoutingEnabled => _options.EnableViGEmController;
 
     /// <summary>Get the InputRouter for API access to controller assignments.</summary>
     public InputRouter InputRouter => _inputRouter;

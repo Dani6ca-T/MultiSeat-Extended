@@ -9,6 +9,14 @@ public static class InputEndpoints
     {
         var group = app.MapGroup("/api/input").WithTags("Input");
 
+        // ── Controller routing mode ──────────────────────────────────
+        // Lets the dashboard tell whether MultiSeat-managed controller routing is on.
+        // When off (default), Apollo forwards the Moonlight client's controller natively,
+        // so the XInput→seat assignment UI below is inert — the dashboard shows a note
+        // instead of pretending the assignment does something.
+        group.MapGet("/mode", (SeatManager mgr) =>
+            Results.Ok(new { viGEmControllerEnabled = mgr.ControllerRoutingEnabled }));
+
         // ── Controller status ────────────────────────────────────────
         group.MapGet("/controllers", (SeatManager mgr) =>
         {
