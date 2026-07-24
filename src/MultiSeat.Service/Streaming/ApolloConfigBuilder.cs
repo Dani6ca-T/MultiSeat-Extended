@@ -121,6 +121,24 @@ public sealed class ApolloConfigBuilder
         sb.AppendLine($"fps = [{fpsList}]");
         sb.AppendLine();
 
+        // ── Display-device auto-configuration ─────────────────────────
+        // Make Apollo actively set the SudoVDA display mode when a client connects.
+        // Without these keys, dd_configuration_option defaults to "disabled" and Apollo
+        // never reconfigures SudoVDA — the virtual display stays at its creation default
+        // (the host/RDP surface size), so the stream ignores the client's requested
+        // resolution/fps entirely (GitHub issue #11).
+        //   ensure_active — activate + configure the SudoVDA output. It does NOT force the
+        //                   display primary or disable others, so it won't fight MultiSeat's
+        //                   own display isolation (which already sets SudoVDA primary).
+        //   auto          — follow the resolution/refresh the Moonlight client requests.
+        // NOTE: Apollo only applies these when the Moonlight client has "Optimize game
+        // settings" (SOPS) enabled — otherwise it logs a warning and leaves the mode as-is.
+        sb.AppendLine("# Display device — match the Moonlight client's requested resolution/fps");
+        sb.AppendLine("dd_configuration_option = ensure_active");
+        sb.AppendLine("dd_resolution_option = auto");
+        sb.AppendLine("dd_refresh_rate_option = auto");
+        sb.AppendLine();
+
         // ── Encoder ───────────────────────────────────────────────────
         // Prefer NVENC for hardware-accelerated low-latency encoding.
         // Apollo will fall back to AMF → software if NVENC is unavailable.

@@ -149,6 +149,11 @@ public class StreamingTests
             Assert.Contains($"port = {47984 + Constants.OffsetHttps}", content);
             Assert.Contains("resolutions = [1920x1080]", content);
             Assert.Contains("fps = [30, 60]", content);
+            // Display-device auto-config so Apollo matches the client's requested mode (issue #11).
+            // Without dd_configuration_option != disabled, Apollo never resizes SudoVDA.
+            Assert.Contains("dd_configuration_option = ensure_active", content);
+            Assert.Contains("dd_resolution_option = auto", content);
+            Assert.Contains("dd_refresh_rate_option = auto", content);
             Assert.Contains("encoder = nvenc", content);
             Assert.Contains("controller = enabled", content);
             Assert.Contains("stream_mic = enabled", content);
