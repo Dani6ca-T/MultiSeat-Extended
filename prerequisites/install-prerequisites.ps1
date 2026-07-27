@@ -164,16 +164,41 @@ Write-Step "ViGEm Bus Driver (virtual Xbox 360 controllers)"
 # Check for the ViGEmBus PnP device node — this is what Apollo actually connects to.
 # A running service without a device node means the installation is broken (common after
 # a failed upgrade or sc delete without reboot). Service-only check is insufficient.
-$vigemDevice = Get-PnpDevice -PresentOnly:$false -ErrorAction SilentlyContinue |
-    Where-Object { $_.FriendlyName -like '*ViGEm*' -or $_.FriendlyName -like '*Gamepad Emulation*' } |
-    Select-Object -First 1
+#
+# Match nodes by InstanceId (ROOT\VIGEMBUS\*) as well as FriendlyName. A node created by the
+# SetupAPI fallback below has NO FriendlyName until its driver loads (which needs a reboot), so a
+# FriendlyName-only check fails to see it on the next run and creates ANOTHER node — a user
+# reported 20 accumulated "Nefarius Virtual Gamepad Emulation Bus" nodes from repeated re-runs
+# without rebooting (issue #9). InstanceId is present the moment the node is registered.
+function Get-ViGEmNodes {
+    Get-PnpDevice -PresentOnly:$false -ErrorAction SilentlyContinue | Where-Object {
+        $_.InstanceId -like 'ROOT\VIGEMBUS\*' -or
+        $_.FriendlyName -like '*ViGEm*' -or
+        $_.FriendlyName -like '*Gamepad Emulation*'
+    }
+}
+
+$vigemNodes = @(Get-ViGEmNodes)
+
+# Remove duplicate root nodes left by earlier re-runs — keep one, remove the rest. Removing the
+# extras lets the remaining node bind the driver cleanly (20 conflicting nodes never report OK).
+if ($vigemNodes.Count -gt 1) {
+    Write-Host "  Found $($vigemNodes.Count) ViGEmBus device nodes — removing duplicates (keeping one)..." -ForegroundColor Yellow
+    foreach ($dup in ($vigemNodes | Select-Object -Skip 1)) {
+        & pnputil /remove-device $dup.InstanceId 2>&1 | Out-Null
+        Write-Host "  [DIAG] Removed duplicate node: $($dup.InstanceId)" -ForegroundColor DarkGray
+    }
+    $vigemNodes = @(Get-ViGEmNodes)
+}
+
+$vigemDevice = $vigemNodes | Select-Object -First 1
 
 $vigem = Get-Service -Name "ViGEmBus" -ErrorAction SilentlyContinue
 if ($vigem) {
     Write-Host "  [DIAG] ViGEmBus service status: $($vigem.Status)" -ForegroundColor DarkGray
 }
 if ($vigemDevice) {
-    Write-Host "  [DIAG] ViGEmBus PnP device: $($vigemDevice.FriendlyName) [$($vigemDevice.Status)]" -ForegroundColor DarkGray
+    Write-Host "  [DIAG] ViGEmBus PnP device: $($vigemDevice.FriendlyName) [$($vigemDevice.Status)] $($vigemDevice.InstanceId)" -ForegroundColor DarkGray
 }
 
 $vigemOk = $false
@@ -204,11 +229,11 @@ if (-not $vigemOk) {
     }
 
     # Re-check device after installer attempt (or if no installer was found).
-    # On some machines the NSIS installer crashes before creating the device node.
-    # Fall back to creating the device node directly via SetupAPI if needed.
-    $vigemDevice = Get-PnpDevice -PresentOnly:$false -ErrorAction SilentlyContinue |
-        Where-Object { $_.FriendlyName -like '*ViGEm*' -or $_.FriendlyName -like '*Gamepad Emulation*' } |
-        Select-Object -First 1
+    # On some machines the WiX installer doesn't create the device node.
+    # Fall back to creating the device node directly via SetupAPI ONLY if none exists.
+    # Detection is by InstanceId (Get-ViGEmNodes) so a just-created node whose driver hasn't
+    # loaded yet is recognised and we don't stack up duplicate nodes on re-runs (issue #9).
+    $vigemDevice = @(Get-ViGEmNodes) | Select-Object -First 1
 
     if (-not $vigemDevice) {
         # Find a staged ViGEmBus INF in the DriverStore to use for device node creation.
@@ -273,8 +298,7 @@ public class ViGEmInstaller {
 
             Write-Host "  [DIAG] UpdateDriver result: $ok, reboot: $reboot, error: $([System.Runtime.InteropServices.Marshal]::GetLastWin32Error())" -ForegroundColor DarkGray
             Start-Sleep -Seconds 2
-            $vigemDevice = Get-PnpDevice -PresentOnly:$false -ErrorAction SilentlyContinue |
-                Where-Object { $_.FriendlyName -like '*ViGEm*' } | Select-Object -First 1
+            $vigemDevice = @(Get-ViGEmNodes) | Select-Object -First 1
         } else {
             Write-Host "  WARNING: No staged ViGEmBus INF found — cannot create device node." -ForegroundColor Yellow
             Write-Host "  Download ViGEmBus from https://github.com/nefarius/ViGEmBus/releases and re-run." -ForegroundColor Yellow

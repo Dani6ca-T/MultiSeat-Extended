@@ -47,7 +47,12 @@ if ($Uninstall) {
 Write-Step "Checking prerequisites..."
 $missing = @()
 if (!(Get-Command dotnet -ErrorAction SilentlyContinue)) { $missing += ".NET SDK" }
-if (!(Test-Path "HKLM:\SOFTWARE\Nefarius Software Solutions\HidHide")) {
+# Detect HidHide the same way the service does — via its driver service or the CLI on disk.
+# The old check keyed off an "HKLM:\SOFTWARE\Nefarius Software Solutions\HidHide" registry key
+# that HidHide 1.5.x doesn't reliably create, so it warned "not detected" even when HidHide was
+# fully installed (issue #9).
+$hidHideCli = "C:\Program Files\Nefarius Software Solutions\HidHide\x64\HidHideCLI.exe"
+if (!(Get-Service -Name "HidHide" -ErrorAction SilentlyContinue) -and !(Test-Path $hidHideCli)) {
     Write-Warning "HidHide not detected -- controller hiding will be unavailable"
 }
 if ($missing.Count -gt 0) {
