@@ -27,6 +27,33 @@ $Skipped     = @()
 $NeedsReboot = $false
 
 # ----------------------------------------------------------------
+# Re-launch natively on a 64-bit OS
+# ----------------------------------------------------------------
+# Windows' PnP and DriverStore surfaces are not WOW64-friendly. Under a 32-bit PowerShell
+# on a 64-bit OS the ViGEmBus step breaks in two ways at once (issue #9):
+#   1. Get-PnpDevice does not enumerate kernel-created root device nodes, so
+#      ROOT\VIGEMBUS\* comes back empty even immediately after the node is created.
+#   2. C:\Windows\System32\DriverStore is file-system-redirected to SysWOW64, hiding
+#      every staged driver INF, so the SetupAPI fallback has nothing to bind.
+# Re-launching natively fixes both at the source instead of working around each symptom.
+# SysNative is a virtual alias visible only to 32-bit processes; the child inherits this
+# process's elevated token, so there is no second UAC prompt.
+if (-not [Environment]::Is64BitProcess -and [Environment]::Is64BitOperatingSystem) {
+    $NativeHost = Join-Path $env:WINDIR 'SysNative\WindowsPowerShell\v1.0\powershell.exe'
+    if (Test-Path $NativeHost) {
+        Write-Host "[MultiSeat] Running under 32-bit PowerShell -- re-launching in 64-bit..." -ForegroundColor Yellow
+        $Fwd = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $PSCommandPath)
+        if ($SkipReboot)   { $Fwd += '-SkipReboot' }
+        if ($SkipDownload) { $Fwd += '-SkipDownload' }
+        $Fwd += @('-Seats', $Seats)
+        & $NativeHost @Fwd
+        if ($null -eq $LASTEXITCODE) { exit 0 } else { exit $LASTEXITCODE }
+    }
+    Write-Host "[MultiSeat] WARNING: 32-bit PowerShell and no 64-bit host found --" -ForegroundColor Yellow
+    Write-Host "  driver detection and installation may fail. Re-run from a 64-bit PowerShell." -ForegroundColor Yellow
+}
+
+# ----------------------------------------------------------------
 # Logging  --  transcript goes to prerequisites\prereq.log
 # ----------------------------------------------------------------
 $LogFile = Join-Path $ScriptDir "prereq.log"
@@ -170,11 +197,64 @@ Write-Step "ViGEm Bus Driver (virtual Xbox 360 controllers)"
 # FriendlyName-only check fails to see it on the next run and creates ANOTHER node — a user
 # reported 20 accumulated "Nefarius Virtual Gamepad Emulation Bus" nodes from repeated re-runs
 # without rebooting (issue #9). InstanceId is present the moment the node is registered.
+#
+# Query three sources and merge, because no single one is reliable everywhere: Get-PnpDevice
+# returns nothing for root-enumerated nodes under a 32-bit host (see the re-launch guard above,
+# and it still misses them on some builds), so WMI and the device Enum registry key act as
+# backstops. Every source is normalised to InstanceId / FriendlyName / Status.
 function Get-ViGEmNodes {
-    Get-PnpDevice -PresentOnly:$false -ErrorAction SilentlyContinue | Where-Object {
-        $_.InstanceId -like 'ROOT\VIGEMBUS\*' -or
-        $_.FriendlyName -like '*ViGEm*' -or
-        $_.FriendlyName -like '*Gamepad Emulation*'
+    $candidates = New-Object System.Collections.Generic.List[object]
+
+    # Source 1: PnP cmdlets — richest data (real driver Status), least reliable availability.
+    foreach ($d in @(Get-PnpDevice -PresentOnly:$false -ErrorAction SilentlyContinue)) {
+        if ($d.InstanceId -like 'ROOT\VIGEMBUS\*' -or
+            $d.FriendlyName -like '*ViGEm*' -or
+            $d.FriendlyName -like '*Gamepad Emulation*') {
+            $candidates.Add([PSCustomObject]@{
+                InstanceId   = $d.InstanceId
+                FriendlyName = $d.FriendlyName
+                Status       = $d.Status
+            })
+        }
+    }
+
+    # Source 2: WMI — bitness-independent. Note Win32_PnPEntity names its fields PNPDeviceID
+    # and Name (it has no InstanceId/FriendlyName), and reports health through
+    # ConfigManagerErrorCode, where 0 means "working properly".
+    foreach ($d in @(Get-CimInstance -ClassName Win32_PnPEntity -ErrorAction SilentlyContinue)) {
+        if ($d.PNPDeviceID -like 'ROOT\VIGEMBUS\*' -or
+            $d.Name -like '*ViGEm*' -or
+            $d.Name -like '*Gamepad Emulation*') {
+            $status = 'Unknown'
+            if ($d.ConfigManagerErrorCode -eq 0) { $status = 'OK' }
+            $candidates.Add([PSCustomObject]@{
+                InstanceId   = $d.PNPDeviceID
+                FriendlyName = $d.Name
+                Status       = $status
+            })
+        }
+    }
+
+    # Source 3: the device Enum registry key — the node is written here the moment it is
+    # registered, before any driver loads, and it is readable at any process bitness. This is
+    # the backstop that stops a re-run from stacking up another duplicate node.
+    foreach ($k in @(Get-ChildItem 'HKLM:\SYSTEM\CurrentControlSet\Enum\ROOT\VIGEMBUS' -ErrorAction SilentlyContinue)) {
+        $candidates.Add([PSCustomObject]@{
+            InstanceId   = "ROOT\VIGEMBUS\$($k.PSChildName)"
+            FriendlyName = (Get-ItemProperty $k.PSPath -Name 'FriendlyName' -ErrorAction SilentlyContinue).FriendlyName
+            Status       = 'Unknown'
+        })
+    }
+
+    # Richer sources were added first, so the first entry seen for an InstanceId wins.
+    $seen = @{}
+    foreach ($c in $candidates) {
+        if (-not $c.InstanceId) { continue }
+        $key = $c.InstanceId.ToUpperInvariant()
+        if (-not $seen.ContainsKey($key)) {
+            $seen[$key] = $true
+            $c
+        }
     }
 }
 
