@@ -271,6 +271,11 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 # -- Build InputHook DLL ----------------------------------------------
+# OPTIONAL component. MSYS2 is a developer dependency, not a MultiSeat prerequisite, and
+# EnableKeyboardMouseIsolation is OFF by default (the hook is a no-op as architected — see
+# MultiSeatOptions.EnableKeyboardMouseIsolation). A missing DLL changes nothing about how
+# MultiSeat runs, so these are informational notes, NOT warnings: emitting WARNING here made
+# a normal install look broken and got reported as a bug (issue #14).
 $InputHookSrc = Join-Path $PSScriptRoot "..\src\MultiSeat.InputHook"
 $Bash = "C:\msys64\usr\bin\bash.exe"
 if (Test-Path $Bash) {
@@ -279,10 +284,10 @@ if (Test-Path $Bash) {
     $buildScript = "export PATH='/ucrt64/bin:`$PATH'; cmake -B '$srcUnix/build/Release' -S '$srcUnix' -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_COMPILER=/ucrt64/bin/g++.exe -DCMAKE_MAKE_PROGRAM=/ucrt64/bin/ninja.exe && cmake --build '$srcUnix/build/Release'"
     & $Bash -lc $buildScript 2>&1 | Out-Null
     if ($LASTEXITCODE -ne 0) {
-        Write-Warning "InputHook build failed -- keyboard/mouse isolation unavailable"
+        Write-Host "  Note: InputHook build failed -- skipping (optional, off by default)" -ForegroundColor DarkGray
     }
 } else {
-    Write-Warning "MSYS2 not found at C:\msys64 -- skipping InputHook build"
+    Write-Host "  Note: MSYS2 not present at C:\msys64 -- skipping optional InputHook build" -ForegroundColor DarkGray
 }
 
 # -- Copy InputHook DLL -----------------------------------------------
@@ -290,7 +295,8 @@ if (Test-Path $InputHookBuild) {
     Copy-Item $InputHookBuild "$InstallDir\MultiSeatInputHook.dll" -Force
     Write-Step "Copied MultiSeatInputHook.dll"
 } else {
-    Write-Warning "MultiSeatInputHook.dll not found at $InputHookBuild -- keyboard/mouse isolation unavailable"
+    Write-Host "  Note: MultiSeatInputHook.dll not built -- keyboard/mouse isolation stays unavailable." -ForegroundColor DarkGray
+    Write-Host "        This is expected and safe: the feature is off by default and currently inert." -ForegroundColor DarkGray
 }
 
 # -- Build and deploy Dashboard ---------------------------------------

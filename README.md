@@ -201,7 +201,7 @@ Remove-Item "C:\ProgramData\MultiSeat"   -Recurse -Force
 
 - [.NET 9 SDK](https://dotnet.microsoft.com/download/dotnet/9.0)
 - [Node.js 20+](https://nodejs.org/)
-- [CMake 3.20+](https://cmake.org/) and [MSYS2 UCRT64](https://www.msys2.org/) with `mingw-w64-ucrt-x86_64-gcc` and `ninja` (only needed for the InputHook DLL — `install-service.ps1` builds it automatically if MSYS2 is present at `C:\msys64`)
+- **Optional:** [CMake 3.20+](https://cmake.org/) and [MSYS2 UCRT64](https://www.msys2.org/) with `mingw-w64-ucrt-x86_64-gcc` and `ninja` — only for the InputHook DLL, which is off by default and currently inert. Skip these unless you're working on that component; `install-service.ps1` builds it automatically if MSYS2 happens to be present at `C:\msys64`.
 
 > If you ran `prerequisites\install-prerequisites.ps1`, .NET SDK and Node.js are already installed.
 
@@ -228,8 +228,9 @@ node install.cjs   # installs npm packages
 node build.cjs     # compiles TypeScript + bundles with Vite
 cd ..\..
 
-# (Optional) Build the InputHook DLL — required for keyboard/mouse isolation
-# install-service.ps1 builds this automatically when MSYS2 is present at C:\msys64.
+# (Optional) Build the InputHook DLL. Not needed for a normal install: the feature is
+# off by default and currently inert (see Troubleshooting), so skipping this is safe.
+# install-service.ps1 builds it automatically when MSYS2 is present at C:\msys64.
 # To build manually, open an MSYS2 UCRT64 terminal and run:
 #   cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release && cmake --build build
 ```
@@ -288,7 +289,10 @@ The seat's RDP session became Disconnected. The health check will recover it aut
 Check the service log in `C:\ProgramData\MultiSeat\logs\`. Common causes: SudoVDA not installed, Apollo path wrong in `appsettings.json`, or insufficient virtual displays.
 
 **Controller input not isolated between seats**
-Ensure `EnableKeyboardMouseIsolation: true` in `appsettings.json` and that `MultiSeatInputHook.dll` is present in the install directory. HidHide must be installed and the service restarted after install.
+Controller isolation is handled by HidHide, not the InputHook DLL. Ensure HidHide is installed and the service has been restarted since. Note that by default Apollo forwards the Moonlight client's controller into the seat natively (`EnableViGEmController` is off), so the dashboard shows the seat's Controller service as **Native** — XInput→seat assignment only applies when `EnableViGEmController` is on.
+
+**Keyboard/mouse not isolated between seats**
+`EnableKeyboardMouseIsolation` is off by default, and turning it on currently does nothing: the low-level hooks are installed from the service process in Session 0, where `GetForegroundWindow()` returns NULL, so the filter always passes the event through. There is also no cross-session bleed to prevent in the RDP-loopback design — physical input goes to the console session, and Moonlight input is injected inside the seat session. Making this meaningful requires re-architecting the hook to run inside the seat session; a missing `MultiSeatInputHook.dll` is therefore harmless.
 
 **RDPWrap shows "Not supported" after a Windows update**
 Re-run `prerequisites\install-prerequisites.ps1` — it will fetch the latest `rdpwrap.ini` automatically.
