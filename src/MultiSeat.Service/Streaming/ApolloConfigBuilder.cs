@@ -56,6 +56,9 @@ public sealed class ApolloConfigBuilder
         Directory.CreateDirectory(seatDir);
 
         var configPath = Path.Combine(seatDir, "sunshine.conf");
+        // Requested, not guaranteed: some builds ignore log_path (Vibepollo writes timestamped
+        // files under <seatDir>\logs\ regardless). Never assume the log is here — read it back
+        // through ApolloManager.ResolveLogPath.
         var logPath = Path.Combine(seatDir, "apollo.log").Replace('\\', '/');
         var statePath = Path.Combine(seatDir, "config", "sunshine_state.json").Replace('\\', '/');
         // All seats share one credentials file so web UI login persists across re-provisioning.

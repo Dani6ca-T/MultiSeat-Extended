@@ -400,6 +400,101 @@ public class StreamingTests
     {
         // Tests real netsh firewall rule management
     }
+
+    // ── ApolloManager.ResolveLogPath ─────────────────────────────────────
+    // The streaming binary does not necessarily honour the log_path we request:
+    // Vibepollo writes <seatDir>\logs\apollo-<stamp>.log instead. Reading the
+    // requested name silently disabled SudoVDA display detection and
+    // launch-on-connect, so resolution is by inspection.
+
+    private static string NewSeatDir()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "ms-logpath-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        return dir;
+    }
+
+    [Fact]
+    public void ResolveLogPath_FindsTimestampedLogInLogsSubdir()
+    {
+        var seatDir = NewSeatDir();
+        try
+        {
+            var logsDir = Path.Combine(seatDir, "logs");
+            Directory.CreateDirectory(logsDir);
+            var actual = Path.Combine(logsDir, "apollo-20260805-163944-038.log");
+            File.WriteAllText(actual, "Info: started");
+
+            Assert.Equal(actual, ApolloManager.ResolveLogPath(seatDir));
+        }
+        finally { DeleteTestDir(seatDir); }
+    }
+
+    [Fact]
+    public void ResolveLogPath_SkipsTheZeroByteDecoyInSeatRoot()
+    {
+        // Vibepollo leaves an empty file in the seat root and writes the real log under logs\.
+        var seatDir = NewSeatDir();
+        try
+        {
+            File.WriteAllText(Path.Combine(seatDir, "apollo-20260805-163944-038.log"), "");
+            var logsDir = Path.Combine(seatDir, "logs");
+            Directory.CreateDirectory(logsDir);
+            var real = Path.Combine(logsDir, "apollo-20260805-163944-038.log");
+            File.WriteAllText(real, "Info: started");
+
+            Assert.Equal(real, ApolloManager.ResolveLogPath(seatDir));
+        }
+        finally { DeleteTestDir(seatDir); }
+    }
+
+    [Fact]
+    public void ResolveLogPath_HonoursPlainApolloLogWhenTheBinaryRespectsLogPath()
+    {
+        var seatDir = NewSeatDir();
+        try
+        {
+            var plain = Path.Combine(seatDir, "apollo.log");
+            File.WriteAllText(plain, "Info: started");
+
+            Assert.Equal(plain, ApolloManager.ResolveLogPath(seatDir));
+        }
+        finally { DeleteTestDir(seatDir); }
+    }
+
+    [Fact]
+    public void ResolveLogPath_PrefersNewestAcrossBothLayouts()
+    {
+        var seatDir = NewSeatDir();
+        try
+        {
+            var plain = Path.Combine(seatDir, "apollo.log");
+            File.WriteAllText(plain, "old");
+            File.SetLastWriteTimeUtc(plain, DateTime.UtcNow.AddHours(-2));
+
+            var logsDir = Path.Combine(seatDir, "logs");
+            Directory.CreateDirectory(logsDir);
+            var newer = Path.Combine(logsDir, "apollo-20260805-163944-038.log");
+            File.WriteAllText(newer, "new");
+            File.SetLastWriteTimeUtc(newer, DateTime.UtcNow);
+
+            Assert.Equal(newer, ApolloManager.ResolveLogPath(seatDir));
+        }
+        finally { DeleteTestDir(seatDir); }
+    }
+
+    [Fact]
+    public void ResolveLogPath_FallsBackToRequestedPathWhenNothingExists()
+    {
+        var seatDir = NewSeatDir();
+        try
+        {
+            Assert.Equal(
+                Path.Combine(seatDir, "apollo.log"),
+                ApolloManager.ResolveLogPath(seatDir));
+        }
+        finally { DeleteTestDir(seatDir); }
+    }
 }
 
 /// <summary>

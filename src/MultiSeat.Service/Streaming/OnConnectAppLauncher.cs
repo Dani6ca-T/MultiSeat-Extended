@@ -70,6 +70,21 @@ public sealed class OnConnectAppLauncher
 
         var state = _states.GetOrAdd(seat.Id, _ => SeedState(logPath));
 
+        // The resolved log can change under us — Apollo restarting produces a new timestamped
+        // file (see ApolloManager.ResolveLogPath). A byte offset into the old file means
+        // nothing in the new one, so re-seed against the new file rather than reading from a
+        // stale position. ReadLatestState's rotation guard only catches shrinkage, and a new
+        // log is usually longer than the old offset, so it would not fire here.
+        if (!string.Equals(state.LogPath, logPath, StringComparison.OrdinalIgnoreCase))
+        {
+            lock (state.Gate)
+            {
+                state.LogPath = logPath;
+                state.Offset  = 0;
+                state.Carry   = string.Empty;
+            }
+        }
+
         bool? connectedNow = ReadLatestState(logPath, state);
         if (connectedNow is null) return; // no new connect/disconnect lines since last tick
 
@@ -189,7 +204,7 @@ public sealed class OnConnectAppLauncher
     /// </summary>
     private SeatConnState SeedState(string logPath)
     {
-        var state = new SeatConnState();
+        var state = new SeatConnState { LogPath = logPath };
         try
         {
             using var fs = new FileStream(logPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
@@ -270,6 +285,8 @@ public sealed class OnConnectAppLauncher
         public long Offset;
         public bool Connected;
         public bool Launching;
+        // The log file Offset refers to. Reset the offset when this changes.
+        public string LogPath = string.Empty;
         // Tail of the previous read, retained so a marker split across a tick boundary is
         // still detected when the next chunk arrives.
         public string Carry = string.Empty;

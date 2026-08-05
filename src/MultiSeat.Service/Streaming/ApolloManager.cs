@@ -212,7 +212,7 @@ public sealed class ApolloManager
                 "Seat {Id}: Apollo has crashed {Count} times — giving up. " +
                 "Check {LogPath} for errors.",
                 seat.Id, prev.RestartCount,
-                Path.Combine(Path.GetDirectoryName(prev.ConfigPath)!, "apollo.log"));
+                ResolveLogPath(Path.GetDirectoryName(prev.ConfigPath)!));
             return -1;
         }
 
@@ -306,7 +306,53 @@ public sealed class ApolloManager
     public string GetLogPath(string accountName, string configDir)
     {
         var seatDir = Path.Combine(configDir, accountName);
-        return Path.Combine(seatDir, "apollo.log");
+        return ResolveLogPath(seatDir);
+    }
+
+    /// <summary>
+    /// Resolve the log file a seat's streaming binary is actually writing.
+    ///
+    /// We ask for <c>&lt;seatDir&gt;/apollo.log</c> via the <c>log_path</c> config key
+    /// (see ApolloConfigBuilder), but not every build honours it: Vibepollo ignores
+    /// <c>log_path</c> and writes timestamped files to <c>&lt;seatDir&gt;\logs\apollo-&lt;stamp&gt;.log</c>
+    /// instead. Hardcoding the requested name meant we read a file that never existed —
+    /// which silently disabled SudoVDA display detection (so display isolation was always
+    /// skipped) and launch-on-connect.
+    ///
+    /// So resolve by inspection rather than by assumption: take the newest non-empty
+    /// <c>apollo*.log</c> from the seat root or its <c>logs\</c> subdirectory. That covers
+    /// both layouts, and follows the current file across restarts and log rotation.
+    /// Empty files are skipped deliberately — Vibepollo leaves a 0-byte file in the seat
+    /// root while writing the real log under <c>logs\</c>.
+    ///
+    /// Falls back to the requested path when nothing matches, so callers keep their
+    /// existing "log not there yet" behaviour.
+    /// </summary>
+    public static string ResolveLogPath(string seatDir)
+    {
+        var requested = Path.Combine(seatDir, "apollo.log");
+
+        try
+        {
+            FileInfo? newest = null;
+            foreach (var dir in new[] { seatDir, Path.Combine(seatDir, "logs") })
+            {
+                if (!Directory.Exists(dir)) continue;
+
+                foreach (var candidate in new DirectoryInfo(dir).EnumerateFiles("apollo*.log"))
+                {
+                    if (candidate.Length == 0) continue;
+                    if (newest is null || candidate.LastWriteTimeUtc > newest.LastWriteTimeUtc)
+                        newest = candidate;
+                }
+            }
+
+            if (newest is not null) return newest.FullName;
+        }
+        catch (IOException) { /* fall through to the requested path */ }
+        catch (UnauthorizedAccessException) { /* fall through to the requested path */ }
+
+        return requested;
     }
 
     /// <summary>
