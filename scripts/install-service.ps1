@@ -370,5 +370,5 @@ Start-Service $ServiceName
 $svc = Get-Service $ServiceName
 Write-Host "`n[MultiSeat] Service installed and $($svc.Status)!" -ForegroundColor Green
 Write-Host "  Dashboard: http://localhost:9550"
-Write-Host "  Logs:      $DataDir\logs"
+Write-Host "  Logs:      Windows Event Log (Application / MultiSeat.Service) -- run scripts\show-logs.ps1"
 Write-Host "  Config:    $InstallDir\appsettings.json"

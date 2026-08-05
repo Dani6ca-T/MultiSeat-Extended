@@ -18,7 +18,7 @@ That plan only works if **Apollo can record from that private device.** On some 
 
 ## ⚠️ Read before starting
 
-**This test opens a second Windows session.** On this machine that works because RDPWrap is installed. If RDPWrap is broken (it breaks after Windows updates to `termsrv.dll`), connecting will **disconnect your console session instead of adding one**.
+**This test opens a second Windows session**, which only works if RDPWrap is installed and current. RDPWrap breaks whenever a Windows update replaces `termsrv.dll` — and when it's broken, connecting **disconnects your console session instead of adding one**.
 
 If you're connected remotely (RustDesk), that could drop your access. **Do this test sitting at the machine, not remotely.** Step 0.3 checks this before anything risky happens.
 
@@ -46,7 +46,32 @@ winget install Audacity.Audacity
 
 No winget? Download from <https://www.audacityteam.org/download/windows/>.
 
-### 0.3 Record your session state (the safety check)
+### 0.3 ⚠️ Verify RDPWrap is installed — DO THIS BEFORE CONNECTING
+
+**This is the step that protects your console session.** Without RDPWrap, connecting in Part 1 will *disconnect* you instead of opening a second session. Checking afterwards is too late — the damage is already done.
+
+```powershell
+(Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Services\TermService\Parameters' -Name ServiceDll).ServiceDll
+Test-Path 'C:\Windows\System32\rdpwrap.dll'
+```
+
+**Required to continue:**
+- `ServiceDll` must point at **`rdpwrap.dll`** — not `termsrv.dll`
+- `Test-Path` must return **`True`**
+
+> ❌ **If `ServiceDll` says `termsrv.dll`, or `Test-Path` is `False`, RDPWrap is not installed. STOP.**
+> Connecting will kick you off your own desktop. Re-run `prerequisites\install-prerequisites.ps1`,
+> reboot, and re-check before going any further.
+
+You can also confirm via the service's own view, which checks the same thing at every startup:
+
+```powershell
+.\scripts\show-logs.ps1 -Hours 168
+```
+
+An `RDP Wrapper multi-session patch not detected` error there means the same thing: stop.
+
+### 0.4 Record your session state
 
 ```powershell
 qwinsta
@@ -54,7 +79,7 @@ qwinsta
 
 Write down what you see. Your console session should show as `Active`. You'll re-run this in Part 1 to confirm you **gained** a session rather than **replaced** one.
 
-### 0.4 Create a throwaway test account
+### 0.5 Create a throwaway test account
 
 Using a real seat account works too if you know its password, but a scratch account keeps seat state untouched. Cleanup is Part 6.
 
@@ -64,7 +89,7 @@ New-LocalUser -Name "audiotest" -Password $pw -AccountNeverExpires
 Add-LocalGroupMember -Group "Remote Desktop Users" -Member "audiotest"
 ```
 
-### 0.5 Create the test connection file
+### 0.6 Create the test connection file
 
 This is MultiSeat's real `Default.rdp` with **one line changed** — `audiomode:i:1` → `audiomode:i:0` — and the CPU-saving lines dropped so you can see the desktop.
 
@@ -79,7 +104,7 @@ audiomode:i:0
 
 > Editing `C:\ProgramData\MultiSeat\Default.rdp` by hand does nothing — `EnsureDefaultRdp` rewrites it on every seat launch. That's why this test uses its own file.
 
-### 0.6 Note your console's default playback device
+### 0.7 Note your console's default playback device
 
 Open `mmsys.cpl` → **Playback** tab. Note which device has the green check. Leave this window open — you'll use its **level meters** (the green bars) as your measuring instrument throughout.
 
@@ -278,7 +303,7 @@ Notes / anything unexpected:
 
 **No sound from `PlayLooping()`** — confirm "Remote Audio" is the session default in `mmsys.cpl` inside the session; set it as default and retry.
 
-**Session logs straight back out** — the account needs to be in **Remote Desktop Users** (Step 0.4).
+**Session logs straight back out** — the account needs to be in **Remote Desktop Users** (Step 0.5).
 
 ## Worth posting either way
 

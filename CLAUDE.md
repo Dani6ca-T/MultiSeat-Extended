@@ -74,8 +74,23 @@ Two separate scripts — prereqs and service deploy are intentionally split:
 | `C:\Program Files\MultiSeat\` | Service install dir |
 | `C:\Program Files\ApolloVibe\` | MultiSeat's own Apollo install (separate from any standalone `C:\Program Files\Apollo\`) |
 | `C:\ProgramData\MultiSeat\` | Runtime data, Apollo configs, logs |
-| `C:\ProgramData\MultiSeat\logs\` | Service logs |
-| `C:\ProgramData\MultiSeat\apollo\` | Per-seat Apollo config dirs |
+| `C:\ProgramData\MultiSeat\logs\` | `audio-helper.log` only — **not** the service log (see below) |
+| `C:\ProgramData\MultiSeat\apollo\` | Per-seat Apollo config dirs (incl. per-seat `apollo.log`) |
+
+## Where the service logs actually go
+
+**The service writes no log files.** It's hosted via `AddWindowsService()`, whose default logging provider is the **Windows Event Log** — so service logs are in the Application log under two sources:
+
+- `MultiSeat.Service` — application logging (`ILogger` categories; the detailed output)
+- `MultiSeatService` — service lifecycle (started / stopped)
+
+`scripts\show-logs.ps1` reads both, plus the helper and per-seat Apollo logs. Or directly:
+
+```powershell
+Get-WinEvent -FilterHashtable @{LogName='Application'; ProviderName='MultiSeat.Service'} -MaxEvents 50
+```
+
+`C:\ProgramData\MultiSeat\logs\` receives exactly one file, `audio-helper.log`, written by `AudioCaptureHelper` inside a seat session — so it stays **empty until a seat has run**. An empty folder there is normal and not a fault. (Two external reporters have gone looking for service logs there; the docs used to point them at it.)
 
 ## Coexistence with a standalone Apollo
 

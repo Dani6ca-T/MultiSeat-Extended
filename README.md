@@ -286,7 +286,22 @@ Default `PortBase` = 48100 (each seat reserves a 30-port block). Seat 0 = 48100,
 The seat's RDP session became Disconnected. The health check will recover it automatically within ~5 seconds. If it persists, check the Apollo log under `C:\ProgramData\MultiSeat\apollo\`.
 
 **Seat stuck at Provisioning**
-Check the service log in `C:\ProgramData\MultiSeat\logs\`. Common causes: SudoVDA not installed, Apollo path wrong in `appsettings.json`, or insufficient virtual displays.
+Check the service log (see **Where the logs are** below). Common causes: SudoVDA not installed, Apollo path wrong in `appsettings.json`, or insufficient virtual displays.
+
+**Where the logs are**
+The service writes no log files — it logs to the **Windows Event Log**. Easiest way to read everything:
+
+```powershell
+.\scripts\show-logs.ps1
+```
+
+Or directly:
+
+```powershell
+Get-WinEvent -FilterHashtable @{LogName='Application'; ProviderName='MultiSeat.Service'} -MaxEvents 50
+```
+
+`C:\ProgramData\MultiSeat\logs\` is **not** the service log. It receives only `audio-helper.log`, and only after a seat has run — an empty folder there is normal. Per-seat Apollo logs are under `C:\ProgramData\MultiSeat\apollo\<account>\apollo.log`.
 
 **Controller input not isolated between seats**
 Controller isolation is handled by HidHide, not the InputHook DLL. Ensure HidHide is installed and the service has been restarted since. Note that by default Apollo forwards the Moonlight client's controller into the seat natively (`EnableViGEmController` is off), so the dashboard shows the seat's Controller service as **Native** — XInput→seat assignment only applies when `EnableViGEmController` is on.
