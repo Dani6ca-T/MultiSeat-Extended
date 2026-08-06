@@ -161,10 +161,33 @@ if ((Get-ItemProperty $mstscClientKey -Name "LocalDevices" -ErrorAction Silently
 # Without it, Apollo captures the primary physical display and all seats
 # share the same view. Warn loudly here; the prereq script installs it.
 Write-Step "Checking SudoVDA (virtual display driver)..."
-$sudovdaDevice = Get-PnpDevice -ErrorAction SilentlyContinue |
-    Where-Object { $_.FriendlyName -match "VDD|Virtual Display|SudoVDA|MTT" }
+
+# Detect SudoVDA the same way the running service does
+# (VirtualDisplayManager.IsSudoVdaAdapterPresent): a ROOT\DISPLAY device whose
+# DeviceDesc or HardwareID actually names SudoMaker/SudoVDA.
+#
+# The previous check matched FriendlyName against "VDD|Virtual Display|SudoVDA|MTT",
+# which matches ANY virtual display driver -- "USB Mobile Monitor Virtual Display",
+# the MTT "Virtual Display Driver", etc. It therefore reported "SudoVDA detected"
+# on machines with no SudoVDA at all, naming whichever unrelated adapter it hit,
+# and contradicted the check immediately below it (issue #14).
+function Test-SudoVdaPresent {
+    $root = 'HKLM:\SYSTEM\CurrentControlSet\Enum\ROOT\DISPLAY'
+    if (-not (Test-Path $root)) { return $null }
+    foreach ($k in (Get-ChildItem $root -ErrorAction SilentlyContinue)) {
+        $props = Get-ItemProperty $k.PSPath -ErrorAction SilentlyContinue
+        $desc  = [string]$props.DeviceDesc
+        $hwIds = (@($props.HardwareID) -join ';')
+        if ($desc -match 'SudoMaker|SudoVDA' -or $hwIds -match 'SudoMaker|SudoVDA') {
+            return [PSCustomObject]@{ Key = $k.PSChildName; Desc = $desc }
+        }
+    }
+    return $null
+}
+
+$sudovdaDevice = Test-SudoVdaPresent
 if ($sudovdaDevice) {
-    Write-Host "  OK: SudoVDA detected ($($sudovdaDevice.FriendlyName | Select-Object -First 1))" -ForegroundColor DarkGray
+    Write-Host "  OK: SudoVDA detected (ROOT\DISPLAY\$($sudovdaDevice.Key))" -ForegroundColor DarkGray
 } else {
     Write-Host ""
     Write-Host "  *** WARNING: SudoVDA virtual display driver is NOT installed. ***" -ForegroundColor Yellow
@@ -174,11 +197,16 @@ if ($sudovdaDevice) {
     Write-Host ""
 }
 
-# -- VirtualDisplayDriver service start ----------------------------------------
-# The SudoVDA kernel driver registers a "VirtualDisplayDriver" service that must
-# be running for virtual displays to appear. It is set to auto-start at boot, but
-# after driver installation (before first reboot) or on fresh deploys it may be
-# stopped. Start it here so the service can enumerate displays immediately.
+# -- Persistent VDD service start (OPTIONAL, not SudoVDA) -----------------------
+# "VirtualDisplayDriver" is the service belonging to the OPTIONAL MttVDD persistent
+# virtual display driver (VirtualDrivers/Virtual-Display-Driver), used only so a
+# headless machine has a console-session display at boot. SudoVDA does NOT register
+# this service, so its absence says nothing about SudoVDA.
+#
+# The old message here told the user to install SudoVDA when this service was
+# missing, which directly contradicted the SudoVDA result printed above and sent
+# people chasing a driver that was already fine (issue #14). Start it if present;
+# otherwise say what it actually is.
 $vddSvc = Get-Service -Name "VirtualDisplayDriver" -ErrorAction SilentlyContinue
 if ($vddSvc) {
     if ($vddSvc.Status -eq 'Running') {
@@ -194,8 +222,8 @@ if ($vddSvc) {
         }
     }
 } else {
-    Write-Host "  NOTE: VirtualDisplayDriver service not found — " `
-        "run prerequisites\install-prerequisites.ps1 to install SudoVDA" -ForegroundColor Yellow
+    Write-Host "  Note: optional persistent VDD (MttVDD) not installed — only needed so a" -ForegroundColor DarkGray
+    Write-Host "        headless machine has a display at boot. Unrelated to SudoVDA." -ForegroundColor DarkGray
 }
 
 # -- VoiceMeeter start ---------------------------------------------------------
