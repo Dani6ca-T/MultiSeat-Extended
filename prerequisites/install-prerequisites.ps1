@@ -431,12 +431,16 @@ if ($hidhide) {
             return ($null -ne $svc -or (Test-Path $cli))
         }
 
-        # HidHide uses an Inno Setup installer.  Try silent first; if the service/CLI
-        # is not detected afterwards (Inno Setup silent mode can fail on some machines
-        # without surfacing an error), fall back to an interactive install so the user
-        # can click through any driver-signing or UAC prompts.
+        # HidHide 1.5.x is NOT an Inno Setup installer -- it is a custom native installer
+        # (no .wixburn section, no Inno/NSIS markers) whose silent switches are
+        # /quiet /norestart. The Inno switches this used to pass
+        # (/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /SP-) are rejected: the process dies
+        # immediately with 0xE0000001 (-536870911) before it writes even a /LOG file, and
+        # nothing is installed. Verified on 2026-08-06 -- /quiet /norestart installs cleanly
+        # (exit 0, driver Running, no reboot needed) on the same machine that failed.
+        # Same class of bug as ViGEmBus in issue #6: right installer, wrong switch dialect.
         Write-Host "  Trying silent install of $($exe.Name)..." -ForegroundColor White
-        $p = Start-Process $exe.FullName -ArgumentList "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/SP-" -Wait -PassThru
+        $p = Start-Process $exe.FullName -ArgumentList "/quiet", "/norestart" -Wait -PassThru
         Write-Host "  [DIAG] Silent installer exit code: $($p.ExitCode)" -ForegroundColor DarkGray
 
         if (Test-HidHideInstalled) {
