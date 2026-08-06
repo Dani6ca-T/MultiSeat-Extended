@@ -448,6 +448,117 @@ public class StreamingTests
         finally { DeleteTestDir(seatDir); }
     }
 
+    // ── ApolloManager.ParseSudoVdaDisplayIdFromLogText ───────────────────
+    // Inside an RDP-loopback seat the Microsoft RDP indirect display reports 1000Hz with
+    // edid=null and friendly_name="" — identical to SudoVDA on those fields. The old
+    // "first 1000Hz display" fallback therefore returned the RDP surface as output_name,
+    // so seats streamed the host desktop at its own size while reporting success.
+
+    private static string DisplayLogJson(params string[] entries) =>
+        "Info: Currently available display devices:\n[\n" +
+        string.Join(",\n", entries) + "\n]\n";
+
+    private static string DisplayEntry(
+        string deviceId, string friendlyName, bool primary, int refreshNumerator,
+        int width, int height) =>
+        $$"""
+            {
+              "device_id": "{{deviceId}}",
+              "display_name": "\\\\.\\DISPLAY1",
+              "edid": null,
+              "friendly_name": "{{friendlyName}}",
+              "info": {
+                "hdr_state": "Disabled",
+                "origin_point": { "x": 0, "y": 0 },
+                "primary": {{(primary ? "true" : "false")}},
+                "refresh_rate": {
+                  "type": "rational",
+                  "value": { "denominator": 1, "numerator": {{refreshNumerator}} }
+                },
+                "resolution": { "height": {{height}}, "width": {{width}} },
+                "resolution_scale": {
+                  "type": "rational",
+                  "value": { "denominator": 100, "numerator": 100 }
+                }
+              }
+            }
+        """;
+
+    [Fact]
+    public void ParseSudoVda_DoesNotMistakeTheLoneRdpSurfaceForSudoVda()
+    {
+        // Real shape from GitHub issue #14: a seat with NO virtual display at all. The only
+        // display is the RDP surface — primary, 1000Hz, empty friendly_name, 3440x1440.
+        // The old fallback returned this device_id and the seat streamed 3440x1440.
+        var log = DisplayLogJson(DisplayEntry(
+            "{f96a9834-1d18-5ee4-83e0-0964152a1577}", "", primary: true,
+            refreshNumerator: 1000, width: 3440, height: 1440));
+
+        var result = ApolloManager.ParseSudoVdaDisplayIdFromLogText(log);
+
+        Assert.Null(result.DeviceId);
+        Assert.Equal(1, result.DisplayCount);
+        Assert.True(result.RejectedPrimaryOnly);
+    }
+
+    [Fact]
+    public void ParseSudoVda_PicksTheNonPrimary1000HzDisplayAlongsideTheRdpSurface()
+    {
+        // The case the fallback exists for: SudoVDA attached alongside the RDP desktop,
+        // friendly_name empty because SetupDi descriptions aren't available in-session.
+        var log = DisplayLogJson(
+            DisplayEntry("{rdp-surface}", "", primary: true,
+                refreshNumerator: 1000, width: 3440, height: 1440),
+            DisplayEntry("{sudovda}", "", primary: false,
+                refreshNumerator: 1000, width: 1920, height: 1080));
+
+        var result = ApolloManager.ParseSudoVdaDisplayIdFromLogText(log);
+
+        Assert.Equal("{sudovda}", result.DeviceId);
+        Assert.Equal(2, result.DisplayCount);
+    }
+
+    [Fact]
+    public void ParseSudoVda_PrefersAnExplicitFriendlyNameOverTheFallback()
+    {
+        var log = DisplayLogJson(
+            DisplayEntry("{rdp-surface}", "", primary: true,
+                refreshNumerator: 1000, width: 3440, height: 1440),
+            DisplayEntry("{sudovda}", "VDD by MTT", primary: false,
+                refreshNumerator: 60, width: 1920, height: 1080));
+
+        var result = ApolloManager.ParseSudoVdaDisplayIdFromLogText(log);
+
+        Assert.Equal("{sudovda}", result.DeviceId);
+        Assert.Equal("VDD by MTT", result.FriendlyName);
+    }
+
+    [Fact]
+    public void ParseSudoVda_IgnoresTheResolutionScaleNumerator()
+    {
+        // resolution_scale also carries a "numerator"; only refresh_rate's counts.
+        // A 100-scale display at 60Hz must not be read as a 1000Hz match.
+        var log = DisplayLogJson(
+            DisplayEntry("{a}", "", primary: true,
+                refreshNumerator: 60, width: 1920, height: 1080),
+            DisplayEntry("{b}", "", primary: false,
+                refreshNumerator: 60, width: 1920, height: 1080));
+
+        var result = ApolloManager.ParseSudoVdaDisplayIdFromLogText(log);
+
+        Assert.Null(result.DeviceId);
+        Assert.False(result.RejectedPrimaryOnly);
+    }
+
+    [Fact]
+    public void ParseSudoVda_ReturnsNothingWhenTheLogHasNoDisplayBlock()
+    {
+        var result = ApolloManager.ParseSudoVdaDisplayIdFromLogText("Info: started\n");
+
+        Assert.Null(result.DeviceId);
+        Assert.Equal(0, result.DisplayCount);
+    }
+
     [Fact]
     public void ResolveLogPath_HonoursPlainApolloLogWhenTheBinaryRespectsLogPath()
     {

@@ -370,6 +370,21 @@ public sealed class ApolloManager
     /// to the primary monitor when given a GDI path as output_name.
     ///
     /// Returns the UUID (e.g. "{f0cfefd7-be89-5733-a759-8fe046803517}") or null if not found.
+    ///
+    /// The 1000Hz fallback below is deliberately narrow. Inside an RDP-loopback seat the
+    /// Microsoft RDP indirect display (RdpIdd) ALSO reports 1000Hz with edid=null and
+    /// friendly_name="" — it is indistinguishable from SudoVDA on those fields alone. A
+    /// naive "first 1000Hz display" match therefore returns the RDP surface and we hand it
+    /// to Apollo as output_name, so the seat streams the host/RDP desktop at its own size
+    /// (e.g. 3440x1440) while reporting success. Worse, on a host with no SudoVDA at all
+    /// the fallback still "finds" something, masking the real fault.
+    ///
+    /// What separates them: SudoVDA is an ADDITIONAL display attached alongside the
+    /// session's existing desktop, so at parse time it is never the only display and never
+    /// the primary one (MultiSeat's display isolation makes it primary later, after this
+    /// runs). The RDP surface is the session's primary. So the fallback requires a
+    /// non-primary 1000Hz display AND more than one display present; otherwise we return
+    /// null and let the caller's "no virtual display" path report the truth.
     /// </summary>
     public string? ParseSudoVdaDisplayId(string logPath)
     {
@@ -382,45 +397,118 @@ public sealed class ApolloManager
             using (var sr = new StreamReader(fs))
                 text = sr.ReadToEnd();
 
+            var result = ParseSudoVdaDisplayIdFromLogText(text);
+
+            if (result.DeviceId != null)
+            {
+                if (result.FriendlyName != null)
+                    _logger.LogInformation(
+                        "Found SudoVDA display in Apollo log: {DeviceId} ({Name})",
+                        result.DeviceId, result.FriendlyName);
+                else
+                    _logger.LogInformation(
+                        "Found SudoVDA display by 1000Hz refresh rate (friendly_name was empty): {DeviceId}",
+                        result.DeviceId);
+                return result.DeviceId;
+            }
+
+            if (result.RejectedPrimaryOnly)
+                _logger.LogWarning(
+                    "No SudoVDA display in Apollo log: {Count} display(s) enumerated and the only " +
+                    "1000Hz match was the session's primary display — that is the RDP surface, not " +
+                    "a virtual display. Apollo created no virtual display for this seat.",
+                    result.DisplayCount);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Error parsing Apollo log for SudoVDA display at {Path}", logPath);
+        }
+
+        return null;
+    }
+
+    /// <summary>Outcome of parsing Apollo's display-list JSON.</summary>
+    /// <param name="DeviceId">The SudoVDA device UUID, or null when none was identified.</param>
+    /// <param name="FriendlyName">Set when matched by name; null when matched by the 1000Hz fallback.</param>
+    /// <param name="DisplayCount">How many displays Apollo enumerated.</param>
+    /// <param name="RejectedPrimaryOnly">
+    /// True when the only 1000Hz display was the session primary (the RDP surface) or was the
+    /// lone display — i.e. we deliberately declined a match the old code would have accepted.
+    /// </param>
+    public readonly record struct SudoVdaParseResult(
+        string? DeviceId,
+        string? FriendlyName,
+        int DisplayCount,
+        bool RejectedPrimaryOnly);
+
+    /// <summary>
+    /// Pure parse of Apollo's "Currently available display devices:" JSON block.
+    /// Public and static so the RdpIdd-vs-SudoVDA discrimination can be tested directly —
+    /// same rationale as <see cref="ResolveLogPath"/>.
+    /// </summary>
+    public static SudoVdaParseResult ParseSudoVdaDisplayIdFromLogText(string text)
+    {
+        var none = new SudoVdaParseResult(null, null, 0, false);
+        {
             var marker = "Currently available display devices:";
             var start = text.IndexOf(marker, StringComparison.Ordinal);
-            if (start < 0) return null;
+            if (start < 0) return none;
 
             var jsonStart = text.IndexOf('[', start);
-            if (jsonStart < 0) return null;
+            if (jsonStart < 0) return none;
 
             // Apollo writes the closing "]" on its own line
             var jsonEnd = text.IndexOf("\n]", jsonStart);
-            if (jsonEnd < 0) return null;
+            if (jsonEnd < 0) return none;
 
             var json = text[jsonStart..(jsonEnd + 2)];
 
             // Walk through each display entry and find the SudoVDA one.
-            // JSON field order: device_id → display_name → edid → friendly_name → info (numerator)
+            // JSON field order: device_id → display_name → edid → friendly_name →
+            //                   info { hdr_state, origin_point, primary, refresh_rate,
+            //                          resolution, resolution_scale }
             //
             // Primary match: friendly_name contains "VDD", "SudoVDA", or "SudoMaker".
-            // Fallback: SudoVDA registers at 1000Hz by default. When running inside an RDP
-            // session, libdisplaydevice returns friendly_name="" for the virtual display
-            // (no EDID, no SetupDi description available in the session context). In that
-            // case we fall back to the first display whose refresh rate numerator is 1000.
+            // Fallback (see the remarks above): a NON-PRIMARY display at 1000Hz, and only
+            // when more than one display is present.
             string? currentDeviceId = null;
-            int currentNumerator = 0;
+            int currentRefreshNumerator = 0;
+            bool currentIsPrimary = false;
+            // "numerator" appears under both refresh_rate and resolution_scale; only the
+            // one immediately following a "refresh_rate" key is the refresh rate.
+            bool expectRefreshNumerator = false;
+
+            var displayCount = 0;
             string? hz1000Candidate = null;
+            var sawPrimaryHz1000 = false;
+
+            // Close out the display entry we just finished parsing.
+            void FinalizeEntry()
+            {
+                if (currentDeviceId == null) return;
+                displayCount++;
+                if (currentRefreshNumerator != 1000) return;
+                if (currentIsPrimary)
+                    sawPrimaryHz1000 = true;      // the RDP surface — never SudoVDA
+                else
+                    hz1000Candidate ??= currentDeviceId;
+            }
 
             foreach (var line in json.Split('\n'))
             {
                 var trimmed = line.Trim().TrimEnd(',');
 
-                // New display object — finalize previous 1000Hz candidate if applicable
+                // New display object — finalize the previous entry first
                 var deviceIdMatch = Regex.Match(trimmed,
                     @"""device_id""\s*:\s*""([^""]+)""");
                 if (deviceIdMatch.Success)
                 {
-                    if (currentDeviceId != null && currentNumerator == 1000)
-                        hz1000Candidate ??= currentDeviceId;
+                    FinalizeEntry();
 
                     currentDeviceId = deviceIdMatch.Groups[1].Value;
-                    currentNumerator = 0;
+                    currentRefreshNumerator = 0;
+                    currentIsPrimary = false;
+                    expectRefreshNumerator = false;
                     continue;
                 }
 
@@ -433,42 +521,45 @@ public sealed class ApolloManager
                 {
                     var friendlyName = nameMatch.Groups[1].Value;
                     if (IsSudoVdaFriendlyName(friendlyName))
-                    {
-                        _logger.LogInformation(
-                            "Found SudoVDA display in Apollo log: {DeviceId} ({Name})",
-                            currentDeviceId, friendlyName);
-                        return currentDeviceId;
-                    }
+                        return new SudoVdaParseResult(
+                            currentDeviceId, friendlyName, displayCount + 1, false);
                     continue;
                 }
 
-                // Track refresh-rate numerator for 1000Hz fallback
+                if (Regex.IsMatch(trimmed, @"""primary""\s*:\s*true"))
+                {
+                    currentIsPrimary = true;
+                    continue;
+                }
+
+                if (trimmed.Contains("\"refresh_rate\"", StringComparison.Ordinal))
+                {
+                    expectRefreshNumerator = true;
+                    continue;
+                }
+
                 var numeratorMatch = Regex.Match(trimmed, @"""numerator""\s*:\s*(\d+)");
-                if (numeratorMatch.Success &&
+                if (numeratorMatch.Success && expectRefreshNumerator &&
                     int.TryParse(numeratorMatch.Groups[1].Value, out var num))
                 {
-                    currentNumerator = Math.Max(currentNumerator, num);
+                    currentRefreshNumerator = num;
+                    expectRefreshNumerator = false;
                 }
             }
 
-            // Finalize last display entry
-            if (currentDeviceId != null && currentNumerator == 1000)
-                hz1000Candidate ??= currentDeviceId;
+            FinalizeEntry();
 
-            if (hz1000Candidate != null)
-            {
-                _logger.LogInformation(
-                    "Found SudoVDA display by 1000Hz refresh rate (friendly_name was empty): {DeviceId}",
-                    hz1000Candidate);
-                return hz1000Candidate;
-            }
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(ex, "Error parsing Apollo log for SudoVDA display at {Path}", logPath);
-        }
+            // Require a second display: SudoVDA is attached ALONGSIDE the session desktop,
+            // so a lone display can only be that desktop.
+            if (hz1000Candidate != null && displayCount > 1)
+                return new SudoVdaParseResult(hz1000Candidate, null, displayCount, false);
 
-        return null;
+            // Nothing usable. Flag the case where the old code would have returned the
+            // RDP surface, so the caller can say so instead of silently finding nothing.
+            return new SudoVdaParseResult(
+                null, null, displayCount,
+                RejectedPrimaryOnly: sawPrimaryHz1000 || hz1000Candidate != null);
+        }
     }
 
     private static bool IsSudoVdaFriendlyName(string name) =>
