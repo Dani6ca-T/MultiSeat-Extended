@@ -144,17 +144,39 @@ if ((Get-ItemProperty $rdpClientKey -Name "fDisableAudioCapture" -ErrorAction Si
     Write-Host "  OK: audio capture redirection allowed" -ForegroundColor DarkGray
 }
 
-# Pre-authorize all mstsc device redirections for the current user.
-# LocalDevices bitmask 0x7FFFFFFF covers all device types (audio, drives, printers, etc.)
-# so mstsc never prompts the user at connection time — required for headless operation.
-$mstscClientKey = "HKCU:\Software\Microsoft\Terminal Server Client"
-if (-not (Test-Path $mstscClientKey)) { New-Item $mstscClientKey -Force | Out-Null }
-if ((Get-ItemProperty $mstscClientKey -Name "LocalDevices" -ErrorAction SilentlyContinue).LocalDevices -ne 0x7FFFFFFF) {
-    Set-ItemProperty $mstscClientKey -Name "LocalDevices" -Value 0x7FFFFFFF -Type DWord
-    Write-Host "  Applied: mstsc device redirection pre-authorized (no consent prompts)" -ForegroundColor Green
+# Pre-authorize mstsc's device-redirection consent for 127.0.0.2.
+#
+# LocalDevices is a SUBKEY holding one REG_DWORD per server name — not a value on the
+# parent key. This used to write "LocalDevices" as a DWORD directly under Terminal Server
+# Client, which Windows never reads, so the pre-authorization this step reports as applied
+# had no effect at all; the consent list appeared on every connection regardless.
+#
+# The bitmask 0x7FFFFFFF covers every redirection class (audio, drives, printers, smart
+# cards, clipboard, ...).
+$mstscLocalDevices = "HKCU:\Software\Microsoft\Terminal Server Client\LocalDevices"
+if (-not (Test-Path $mstscLocalDevices)) { New-Item $mstscLocalDevices -Force | Out-Null }
+if ((Get-ItemProperty $mstscLocalDevices -Name "127.0.0.2" -ErrorAction SilentlyContinue)."127.0.0.2" -ne 0x7FFFFFFF) {
+    Set-ItemProperty $mstscLocalDevices -Name "127.0.0.2" -Value 0x7FFFFFFF -Type DWord
+    Write-Host "  Applied: mstsc device redirection pre-authorized for 127.0.0.2" -ForegroundColor Green
 } else {
-    Write-Host "  OK: mstsc device redirection pre-authorized" -ForegroundColor DarkGray
+    Write-Host "  OK: mstsc device redirection pre-authorized for 127.0.0.2" -ForegroundColor DarkGray
 }
+
+# Remove the ineffective value the old code wrote, so it stops looking like protection
+# that is in place. Nothing reads it.
+$mstscClientKey = "HKCU:\Software\Microsoft\Terminal Server Client"
+if ($null -ne (Get-ItemProperty $mstscClientKey -Name "LocalDevices" -ErrorAction SilentlyContinue)) {
+    Remove-ItemProperty $mstscClientKey -Name "LocalDevices" -ErrorAction SilentlyContinue
+    Write-Host "  Cleaned: removed the old no-op LocalDevices value" -ForegroundColor DarkGray
+}
+
+# NOTE: none of the settings above suppress mstsc's "Unknown remote connection / we could
+# not verify the publisher" security warning, which is a separate dialog. AllowUnsignedFiles
+# above does not stop it on Windows 11 either — verified 2026-08-07, the warning still
+# appeared with that policy set to 1. That is why SessionLauncher falls back to dismissing
+# the dialog with SendKeys, and why it still reaches the user when the dismisser mistimes it.
+# The real fix is signing the generated .rdp with rdpsign.exe and trusting the thumbprint
+# via the TrustedCertThumbprints policy. Not done yet.
 
 # -- SudoVDA check ---------------------------------------------------
 # SudoVDA is required for per-seat virtual display isolation.
