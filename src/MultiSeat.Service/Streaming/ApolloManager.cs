@@ -325,6 +325,10 @@ public sealed class ApolloManager
     /// Empty files are skipped deliberately — Vibepollo leaves a 0-byte file in the seat
     /// root while writing the real log under <c>logs\</c>.
     ///
+    /// "Non-empty" is decided by <see cref="HasContent"/>, not by the directory entry —
+    /// see there for why. Ordering still uses the entry's timestamp, which is safe: a log
+    /// created later always sorts above one a previous run finished writing.
+    ///
     /// Falls back to the requested path when nothing matches, so callers keep their
     /// existing "log not there yet" behaviour.
     /// </summary>
@@ -341,7 +345,7 @@ public sealed class ApolloManager
 
                 foreach (var candidate in new DirectoryInfo(dir).EnumerateFiles("apollo*.log"))
                 {
-                    if (candidate.Length == 0) continue;
+                    if (!HasContent(candidate)) continue;
                     if (newest is null || candidate.LastWriteTimeUtc > newest.LastWriteTimeUtc)
                         newest = candidate;
                 }
@@ -353,6 +357,35 @@ public sealed class ApolloManager
         catch (UnauthorizedAccessException) { /* fall through to the requested path */ }
 
         return requested;
+    }
+
+    /// <summary>
+    /// True when a file genuinely holds bytes.
+    ///
+    /// <see cref="FileInfo.Length"/> reports the cached directory entry, and Windows does
+    /// not refresh that on every write to an open file — a log being actively written can
+    /// read 0 while holding thousands of bytes. Seen on the host: a live seat log read 0 at
+    /// the exact moment the seat was provisioned and 21,144 two minutes later. Trusting it
+    /// made <see cref="ResolveLogPath"/> skip the live log and hand callers a stale one from
+    /// a previous run, so display detection and launch-on-connect read the wrong file.
+    ///
+    /// Ask the handle instead — it reports the true size. Share ReadWrite (and Delete)
+    /// because the streaming binary holds the log open for writing the whole time.
+    /// A file we cannot open is one we could not read later either, so it counts as empty.
+    /// </summary>
+    private static bool HasContent(FileInfo file)
+    {
+        try
+        {
+            using var fs = new FileStream(
+                file.FullName,
+                FileMode.Open,
+                FileAccess.Read,
+                FileShare.ReadWrite | FileShare.Delete);
+            return fs.Length > 0;
+        }
+        catch (IOException) { return false; }
+        catch (UnauthorizedAccessException) { return false; }
     }
 
     /// <summary>

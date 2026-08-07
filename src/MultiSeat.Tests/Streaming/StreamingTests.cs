@@ -1,3 +1,4 @@
+using System.Text;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using MultiSeat.Service.Configuration;
@@ -444,6 +445,41 @@ public class StreamingTests
             File.WriteAllText(real, "Info: started");
 
             Assert.Equal(real, ApolloManager.ResolveLogPath(seatDir));
+        }
+        finally { DeleteTestDir(seatDir); }
+    }
+
+    [Fact]
+    public void ResolveLogPath_PicksTheLiveLogWhileItsWriterStillHoldsItOpen()
+    {
+        // Production shape: the streaming binary holds the current log open for the whole
+        // run, and Windows does not refresh the cached directory entry on every write — so
+        // FileInfo.Length can read 0 on a file that already holds thousands of bytes. That
+        // made the resolver skip the live log and return the previous run's stale one, which
+        // is what display detection and launch-on-connect then read.
+        //
+        // We cannot force the cache to go stale on demand, so this pins the requirement
+        // rather than the timing: with a writer still holding the newest log open, that log
+        // must win over an older closed one regardless of what the directory entry says.
+        var seatDir = NewSeatDir();
+        try
+        {
+            var stale = Path.Combine(seatDir, "apollo-20260806-210336-237.log");
+            File.WriteAllText(stale, "Info: previous run");
+            File.SetLastWriteTimeUtc(stale, DateTime.UtcNow.AddHours(-2));
+
+            var logsDir = Path.Combine(seatDir, "logs");
+            Directory.CreateDirectory(logsDir);
+            var live = Path.Combine(logsDir, "apollo-20260807-082449-555.log");
+
+            using (var writer = new FileStream(
+                live, FileMode.Create, FileAccess.Write, FileShare.ReadWrite | FileShare.Delete))
+            {
+                writer.Write(Encoding.UTF8.GetBytes("Info: current run"));
+                writer.Flush();
+
+                Assert.Equal(live, ApolloManager.ResolveLogPath(seatDir));
+            }
         }
         finally { DeleteTestDir(seatDir); }
     }
