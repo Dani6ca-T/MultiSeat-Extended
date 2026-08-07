@@ -56,6 +56,27 @@ if (args.Length >= 1 && args[0] == "--audio-peaks")
     return AudioPeakHelper.ReportPeaks(window) ? 0 : 1;
 }
 
+// ── Loopback-capture helper mode ──────────────────────────────────────
+// Records what is being played TO an output endpoint and reports the peak amplitude
+// captured. --audio-peaks proves audio is FLOWING to an endpoint; this proves it can be
+// CAPTURED FROM one, which is a different claim and the go/no-go gate for per-session
+// audio (#10/#12): each seat would render to the private "Remote Audio" endpoint RDP
+// creates in its session, with Apollo loopback-capturing that. On some Windows builds
+// capture from it silently yields nothing.
+//
+// Session-scoped like --audio-peaks — "Remote Audio" exists only inside its own session.
+// <device> is a friendly-name substring, a full endpoint id, or "default".
+// Usage: MultiSeat.Service.exe --capture-loopback <device> [seconds] [out.wav]
+if (args.Length >= 2 && args[0] == "--capture-loopback")
+{
+    var captureSeconds = args.Length >= 3 && double.TryParse(args[2], out var cs) ? cs : 10.0;
+    var outPath = args.Length >= 4
+        ? args[3]
+        : Path.Combine(Path.GetTempPath(), "loopback-capture.wav");
+
+    return AudioLoopbackCaptureHelper.CaptureLoopback(args[1], captureSeconds, outPath) ? 0 : 1;
+}
+
 // ── Hide-windows helper mode ──────────────────────────────────────────
 // Invoked by the service via CreateProcessAsUser in the console session so that
 // EnumWindows sees the console user's windows (window enumeration is per-desktop;

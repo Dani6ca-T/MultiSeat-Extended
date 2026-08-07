@@ -2,7 +2,22 @@
 
 Companion to [per-session-audio.md](per-session-audio.md). This is the go/no-go gate for the #10 / #12 fix.
 
-**Time:** ~20 minutes · **Code changes:** none (uses the `--audio-peaks` helper already in the service)
+**Time:** ~15 minutes · **Code changes:** none (uses the `--audio-peaks` and `--capture-loopback` helpers already in the service)
+
+---
+
+## ✅ RESULT — run 2026-08-07, Windows 11 build 26200: ALL FOUR TESTS PASS
+
+| Test | Result | Evidence |
+|---|:---:|---|
+| 1 Remote Audio endpoint exists | **PASS** | session saw **exactly one** endpoint, `Remote Audio [DEFAULT]`, id `{3.0.0.00000004}…`; none of the host's 14 were visible |
+| 2 Console keeps its audio | **PASS** | console app peak **0.356361** while the session was Active |
+| 3 Loopback capture ⭐ | **PASS** | `packets=600 (silent=0)`, peak **0.356324**, 44100 Hz 2ch float |
+| 4 Mute works, capture survives | **PASS** | console mstsc `0.351863 → 0.000000`; in-session capture still `packets=500 (silent=0)` |
+
+**→ Green light: build it behind the `AudioMode` flag.** Apollo *can* loopback-capture the RDP session's private endpoint, and muting the console-side mstsc stops host leakage without killing that capture.
+
+Re-run this on another host by following the steps below — it is now unattended apart from one mstsc trust dialog.
 
 ---
 
@@ -20,15 +35,16 @@ That plan only works if **Apollo can record from that private device.** On some 
 
 **The host is headless and nobody is ever physically at it.** Every readout here is therefore a number, not a sound. Do not substitute listening: the machine is reached over RustDesk, which *forwards host audio to the operator*, so "can I hear it?" measures RustDesk's re-routed stream rather than the endpoint under test. When the thing being diagnosed is audio routing, that confound is fatal.
 
-The instrument is:
+There are two instruments, and they answer **different** questions:
 
 ```powershell
-MultiSeat.Service.exe --audio-peaks [seconds]     # default 5
+MultiSeat.Service.exe --audio-peaks [seconds]                        # is audio FLOWING to an endpoint
+MultiSeat.Service.exe --capture-loopback <device> [secs] [out.wav]   # can audio be CAPTURED FROM one
 ```
 
-It polls every active render endpoint — and every application session on it — and reports the peak each reached.
+The first polls every active render endpoint — and every application session on it — and reports the peak each reached. The second opens a WASAPI loopback stream, writes a 16-bit PCM WAV, and prints the peak amplitude it actually recorded. Test 3 needs the second one; a healthy reading from the first does **not** imply it.
 
-Three properties of it that change how you read the output:
+Three properties of the peak meter that change how you read its output:
 
 1. **Run it inside the session you are measuring.** `IAudioSessionManager2::GetSessionEnumerator` is session-scoped, so it only sees the Windows session it runs in. Console session for host audio; the RDP session for that session's audio.
 2. **⚠️ Read the per-`APP` lines, not the endpoint line.** On virtual devices (VB-CABLE, VoiceMeeter) the endpoint meter does not reflect the session mix. This is measured, not theoretical:
@@ -39,7 +55,12 @@ Three properties of it that change how you read the output:
    The device reads its noise floor while an app on it is plainly loud. **Never conclude "this device has no audio" from the endpoint number.**
 3. **Peaks prove audio is *flowing to* an endpoint. They do not prove it can be *captured from* it.** Those are different claims, and the gate (Test 3) is specifically about capture. Don't let a healthy peak talk you into passing Test 3.
 
-The sound source must be a **real application started interactively**. `System.Media.SoundPlayer` invoked from a non-interactive/automation context renders nothing and reads 0 on every device — that has produced two wrong conclusions on this project already.
+And two that matter for the capture tool:
+
+4. **An idle endpoint yields NO packets at all**, not packets of silence. So `packets=0` means "nothing was playing" just as much as "capture is broken" — the tool says so in its verdict line. Always confirm the source with `--audio-peaks` first; that is why 4.2 exists. This fired for real during the 2026-08-07 run: a Test 4 attempt read `packets=0` purely because the source loop had ended before capture started.
+5. **⚠️ VB-CABLE returns SILENCE to loopback.** Measured: an app rendering to `CABLE In 16ch` at peak 0.356 produced `packets=598, silent=598`, and a raw read that ignores the SILENT flag was also 0.000000 — so it is the platform, not a bug in the tool. Plausible for a virtual cable whose driver already loops render→capture internally. **Never use a VB-CABLE endpoint as your positive control**; you will conclude the design is dead. `Remote Audio` behaves normally (`silent=0`).
+
+The sound source must be a **real application in a real session**. `System.Media.SoundPlayer` works fine when launched as its **own process** (`Start-Process powershell … PlayLooping()`) — measured at peak 0.356361 — but renders nothing when called *inline* from a non-interactive automation context, which has produced two wrong conclusions on this project already. Launch it, don't inline it.
 
 ---
 
@@ -64,15 +85,24 @@ qwinsta
 
 **Expected:** no `mstsc`, and no seat sessions in `qwinsta`. If a seat is up, tear it down from the dashboard first.
 
-### 0.2 Install Audacity on the console
+### 0.2 Nothing to install
 
-Needed for Test 3 only. Installing it on the console makes it available inside the test session too.
+Test 3 used to need Audacity driven by hand. It doesn't any more — `--capture-loopback` does it. Skip straight to 0.3.
+
+**Running a command *inside* the RDP session, from the console.** Several steps below need this. A scheduled task with an Interactive principal lands in the user's session:
 
 ```powershell
-winget install Audacity.Audacity
+$act  = New-ScheduledTaskAction -Execute 'cmd.exe' -Argument '/c <command> > C:\Users\Public\spike\out\x.txt 2>&1'
+$prin = New-ScheduledTaskPrincipal -UserId 'audiotest' -LogonType Interactive -RunLevel Highest
+Register-ScheduledTask -TaskName 'spike' -Action $act -Principal $prin -Force
+Start-ScheduledTask -TaskName 'spike'
 ```
 
-No winget? Download from <https://www.audacityteam.org/download/windows/>.
+Two traps, both hit on the first run:
+- Wrap in **`cmd.exe /c`** if you want output redirected. `powershell.exe -File x.ps1 > out.txt` passes `>` as an argument to PowerShell and silently writes nothing.
+- `schtasks /it` fails with **"Element not found"**; the PowerShell API above works.
+
+Stage the binaries somewhere the test account can read — `C:\Program Files\MultiSeat\` is fine, or copy the build output to `C:\Users\Public\spike\bin` and grant `BUILTIN\Users` modify.
 
 ### 0.3 ⚠️ Verify RDPWrap is installed — DO THIS BEFORE CONNECTING
 
@@ -212,64 +242,46 @@ Find the **`APP |`** line for the player you started.
 
 ## Part 4 — TEST 3: can it be recorded? ⭐ THE GATE
 
-Everything depends on this one. **This is the only step that still needs a human**, because it tests *capture*, which peak metering cannot answer.
+Everything depends on this one. Peak metering cannot answer it — flow and capture are different claims.
 
-### 4.1 Start continuous audio inside the session
+Source and capture must run in the **same** task. Splitting them across two tool calls is how the first run recorded `packets=0` from a source that had already stopped.
 
-**Inside the RDP session**, run this and leave the window open:
-
-```powershell
-$player = New-Object System.Media.SoundPlayer "C:\Windows\Media\Alarm01.wav"
-$player.PlayLooping()
-```
-
-This works here because you are running it interactively in a real session.
-
-### 4.2 Confirm the sound is actually flowing before trying to record it
-
-Still **inside the RDP session**, in a second window:
+Save this as `C:\Users\Public\spike\run-test3.ps1`:
 
 ```powershell
-& "C:\Program Files\MultiSeat\MultiSeat.Service.exe" --audio-peaks 5
+$p = New-Object System.Media.SoundPlayer "C:\Windows\Media\Alarm01.wav"
+$p.PlayLooping()
+Start-Sleep -Seconds 2
+
+"===== 4.2 confirm the source is actually flowing ====="
+& "C:\Program Files\MultiSeat\MultiSeat.Service.exe" --audio-peaks 4
+
+"===== 4.3 THE GATE: loopback capture from Remote Audio ====="
+& "C:\Program Files\MultiSeat\MultiSeat.Service.exe" `
+    --capture-loopback "Remote Audio" 6 "C:\Users\Public\spike\out\remote-audio.wav"
+
+$p.Stop()
 ```
 
-You should see a non-zero `APP |` peak for `powershell` on "Remote Audio". If you don't, the source isn't playing — fix that before blaming capture, or you'll record silence and wrongly fail the gate.
+Run it **inside the RDP session** with the scheduled-task recipe from 0.2, then read the output file.
 
-### 4.3 Try to record it
+**4.2 must show a non-zero `APP |` peak for `powershell` on "Remote Audio" first.** If it doesn't, the source isn't playing — fix that before blaming capture, or you will record silence and wrongly fail the gate.
 
-**Inside the RDP session**, open Audacity and set:
+Then read 4.3's verdict, which the tool prints for you:
 
-- **Audio Host:** `Windows WASAPI`
-- **Recording Device:** `Remote Audio (loopback)`
+- ✅ **PASS** — `peak amplitude` well above 0.01 with `silent=0` → **loopback works. The design is viable. Build it.**
+- ❌ **FAIL** — packets arrive but `silent=` equals the packet count and peak is 0 → loopback yields silence on this endpoint. **R1 fails, the gate closes.**
+- ⚠️ **`packets=0`** — inconclusive, not a failure. Nothing was playing, or loopback is unsupported. Re-run; do not record a FAIL from this.
 
-Press **Record** for about 10 seconds, then Stop.
+The WAV it writes is ordinary 16-bit PCM, so you can open or measure it independently if you want a second opinion.
 
-> If no `(loopback)` entry appears in the device list at all, that itself is a FAIL — note it.
-
-### 4.4 Read the result objectively
-
-Don't judge by listening. **File → Export → Export as WAV**, then measure it:
-
-```powershell
-# Reports peak amplitude of a 16-bit PCM WAV. >0.01 means real audio was captured.
-$bytes = [IO.File]::ReadAllBytes("C:\path\to\export.wav")
-$max = 0
-for ($i = 44; $i -lt $bytes.Length - 1; $i += 2) {
-    $s = [BitConverter]::ToInt16($bytes, $i)
-    $a = [Math]::Abs([int]$s) / 32768.0
-    if ($a -gt $max) { $max = $a }
-}
-"peak amplitude: $max"
-```
-
-- ✅ **PASS** — peak well above 0.01 → **loopback works. The design is viable. Build it.**
-- ❌ **FAIL** — peak ~0 (flat) → **R1 fails, the gate closes.** Save the exact device list and any error.
+**Observed 2026-08-07:** `packets=600 (silent=0)`, peak **0.356324**, 44100 Hz 2ch float, file 1,058,444 bytes — exactly `6s × 44100 × 2ch × 2 bytes + 44` header. **PASS.**
 
 **Record:** Test 3 = PASS / FAIL, and the peak amplitude.
 
-### 4.5 Confirm with Apollo (only if 4.4 passed)
+### 4.5 Confirm with Apollo (only if 4.3 passed)
 
-Audacity passing is a strong signal, but Apollo is the real consumer. Run a scratch ApolloVibe instance **inside the RDP session** with a throwaway config containing:
+`--capture-loopback` passing is a strong signal, but Apollo is the real consumer and it uses its own capture path. Run a scratch ApolloVibe instance **inside the RDP session** with a throwaway config containing:
 
 ```
 audio_sink = Remote Audio
@@ -277,7 +289,9 @@ audio_sink = Remote Audio
 
 Connect Moonlight from a phone or another PC and confirm you get the session's audio.
 
-If Audacity passed but Apollo doesn't, the problem is in Apollo's capture path specifically — important to know before designing around it.
+If our capture passed but Apollo's doesn't, the problem is specific to Apollo's implementation — important to know before designing around it.
+
+**Not yet run as of 2026-08-07** (Tests 1–4 passed; this one needs a Moonlight client). It is the one remaining unknown between "the platform supports this" and "MultiSeat can ship it".
 
 **Record:** Test 3b = PASS / FAIL / skipped
 
@@ -310,10 +324,12 @@ Re-measure on the console — the `mstsc` peak should fall to the noise floor.
 
 ### 5.3 The step that actually matters
 
-**Go back to Audacity inside the RDP session and record again — while `mstsc` is still muted.** Export and measure as in 4.4.
+**Re-run `run-test3.ps1` inside the session while `mstsc` is still muted**, writing to a different file (`muted.wav`). Same task, same order — source and capture together.
 
-- ✅ **PASS** — host `mstsc` peak is at the noise floor **and** the new recording still has real amplitude → muting is a safe mechanism; `MuteMstscAudio` just needs to be made reliable.
-- ❌ **FAIL** — muting also killed the recording → mute isn't viable and we need another way to stop host leakage. Design change required.
+- ✅ **PASS** — host `mstsc` peak is at the noise floor **and** the new capture still has real amplitude → muting is a safe mechanism; `MuteMstscAudio` just needs to be made reliable.
+- ❌ **FAIL** — muting also killed the capture → mute isn't viable and we need another way to stop host leakage. Design change required.
+
+**Observed 2026-08-07:** console `mstsc` went `0.351863 → 0.000000` while the in-session capture still returned `packets=500 (silent=0)`, peak **0.356324**. **PASS** — mute stops the leak without touching capture.
 
 **Record:** Test 4 = PASS / FAIL
 
@@ -321,13 +337,15 @@ Re-measure on the console — the `mstsc` peak should fall to the noise floor.
 
 ## Part 6 — Cleanup
 
-1. Close Audacity and the looping PowerShell window.
-2. Log off the RDP session (Start → user icon → Sign out). Don't just close the window.
-3. Remove the test account and file:
+1. Unregister any leftover scheduled tasks: `Get-ScheduledTask -TaskName 'spike*' | Unregister-ScheduledTask -Confirm:$false`
+2. Log the session off properly — `logoff <id>` — then close mstsc. Don't just close the window.
+3. Remove the test account, files, and stored credential:
 
 ```powershell
 Remove-LocalUser -Name "audiotest"
 Remove-Item "C:\ProgramData\MultiSeat\spike-test.rdp"
+Remove-Item "C:\Users\Public\spike" -Recurse -Force
+cmdkey /delete:TERMSRV/127.0.0.2
 ```
 
 4. Confirm the console's default endpoint is unchanged:
@@ -341,6 +359,27 @@ Compare the `[DEFAULT]` marker against your 0.7 baseline. Nothing else was modif
 ---
 
 ## Results sheet
+
+```
+Date:                     2026-08-07
+Windows build:            26200
+
+Test 1  Remote Audio endpoint exists    PASS
+Test 2  Console keeps its audio         PASS      peak: 0.356361
+Test 3  Loopback recording works  ⭐    PASS      peak: 0.356324  (packets=600, silent=0)
+Test 3b Apollo captures it              skipped   (needs a Moonlight client)
+Test 4  Mute works, capture survives    PASS      mstsc 0.351863 -> 0.000000, capture 0.356324
+
+Notes / anything unexpected:
+  - VB-CABLE returns SILENCE to loopback (598/598 silent packets while an app rendered
+    at 0.356). Platform behaviour, not a tool bug — confirmed by reading the buffer
+    ignoring the SILENT flag. Do not use it as a control.
+  - Test 2's comparison against audiomode:i:1 was NOT measured head-to-head; it rests
+    on issue #12's reporter evidence. Worth closing that gap on a future run.
+  - mstsc's "Unknown remote connection" dialog still needs one manual click.
+```
+
+Blank sheet for re-runs:
 
 ```
 Date:
@@ -371,7 +410,11 @@ Notes / anything unexpected:
 
 **Certificate / "can't verify identity" warning** — expected for loopback RDP; accept it.
 
-**No `(loopback)` devices in Audacity** — confirm Audio Host is `Windows WASAPI`, not MME or DirectSound. If it's set correctly and they're still absent, that's a genuine Test 3 FAIL.
+**`--capture-loopback` reports `packets=0`** — nothing was playing to that endpoint. Confirm with `--audio-peaks` in the same session; do not read it as a Test 3 FAIL.
+
+**Capture returns all-silent packets** — if the endpoint is a VB-CABLE one, that is expected and tells you nothing (see "How this is measured"). On `Remote Audio` it is a genuine FAIL.
+
+**Scheduled task runs but writes no output** — you used `powershell.exe -File … > out.txt`. The `>` needs a shell; wrap the whole thing in `cmd.exe /c`.
 
 **`--audio-peaks` shows everything at 0.000031** — that's the VB-CABLE/VoiceMeeter noise floor, i.e. silence. Confirm your sound source is actually playing.
 
@@ -385,6 +428,8 @@ Notes / anything unexpected:
 
 Test 2's result is worth posting to #12 whichever way it goes — it either confirms the fix direction to two waiting reporters, or saves everyone a wrong turn. Both have been patient and are actively testing.
 
-## Possible follow-up: make Test 3 scriptable too
+## Follow-up: Test 3 is scriptable now — BUILT
 
-Test 3 is the only step still needing a human, because it tests capture rather than flow. A `--capture-loopback <device> <seconds> <out.wav>` verb (`IAudioClient` with `AUDCLNT_STREAMFLAGS_LOOPBACK` + `IAudioCaptureClient`) would close that gap and make the entire spike runnable unattended — worth building if this spike needs re-running on other hosts, or if external reporters are asked to run it.
+`--capture-loopback <device> [seconds] [out.wav]` (`IAudioClient` with `AUDCLNT_STREAMFLAGS_LOOPBACK` + `IAudioCaptureClient`) closed the last manual gap. The whole spike now runs unattended apart from one mstsc trust dialog, which makes it reasonable to ask an external reporter to run it on their own host — the original motivation for building it.
+
+Remaining manual step: mstsc's "Unknown remote connection" security warning still needs one click. `AllowUnsignedFiles=1` does **not** suppress it on Windows 11; signing `Default.rdp` with `rdpsign.exe` and trusting the thumbprint is the real fix, and would also retire the `SendKeys` dismisser MultiSeat currently relies on for seats.

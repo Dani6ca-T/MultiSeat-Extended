@@ -354,6 +354,111 @@ public static class ComInterfaces
     }
 
     // ═══════════════════════════════════════════════════════════════════
+    //  COM Interfaces — WASAPI loopback capture (documented, audioclient.h)
+    //
+    //  Peak metering answers "is audio FLOWING to this endpoint". It cannot
+    //  answer "can audio be CAPTURED FROM it" — different claim, and that is
+    //  precisely the go/no-go gate for the per-session audio design (#10/#12):
+    //  on some Windows builds recording from an RDP session's private "Remote
+    //  Audio" endpoint silently yields nothing. These interfaces let us answer
+    //  it with a number instead of a human driving Audacity.
+    // ═══════════════════════════════════════════════════════════════════
+
+    /// <summary>CLSCTX_ALL — for IMMDevice::Activate, which is an in-proc audio engine object.</summary>
+    public const uint CLSCTX_ALL = 0x17;
+
+    /// <summary>Shared-mode stream. Exclusive mode would lock other apps out of the endpoint.</summary>
+    public const uint AUDCLNT_SHAREMODE_SHARED = 0;
+
+    /// <summary>
+    /// Capture the stream being RENDERED to an output endpoint, rather than from an input
+    /// device. This is the whole trick: it makes an output endpoint readable.
+    /// </summary>
+    public const uint AUDCLNT_STREAMFLAGS_LOOPBACK = 0x00020000;
+
+    /// <summary>Buffer duration is expressed in 100-nanosecond units.</summary>
+    public const long ReferenceTimesPerSecond = 10_000_000;
+
+    /// <summary>The packet contained no meaningful data — treat it as silence, not as samples.</summary>
+    public const uint AUDCLNT_BUFFERFLAGS_SILENT = 0x2;
+
+    /// <summary>WAVE_FORMAT_EXTENSIBLE — wFormatTag when the real format lives in the union.</summary>
+    public const ushort WAVE_FORMAT_EXTENSIBLE = 0xFFFE;
+
+    public const ushort WAVE_FORMAT_PCM = 1;
+    public const ushort WAVE_FORMAT_IEEE_FLOAT = 3;
+
+    /// <summary>
+    /// WAVEFORMATEX — the endpoint's mix format. Returned by GetMixFormat as a pointer to
+    /// COM-allocated memory the caller must free.
+    ///
+    /// Only the leading fields are declared; WAVE_FORMAT_EXTENSIBLE appends a union plus a
+    /// sub-format GUID after cbSize. We never need those: for loopback we ask for the mix
+    /// format and hand the same pointer straight back to Initialize, so the tail travels
+    /// with the pointer and never has to be marshalled.
+    /// </summary>
+    [StructLayout(LayoutKind.Sequential, Pack = 1)]
+    public struct WaveFormatEx
+    {
+        public ushort wFormatTag;
+        public ushort nChannels;
+        public uint nSamplesPerSec;
+        public uint nAvgBytesPerSec;
+        public ushort nBlockAlign;
+        public ushort wBitsPerSample;
+        public ushort cbSize;
+    }
+
+    /// <summary>
+    /// IAudioClient — opens a stream on an endpoint. Activate it from an IMMDevice.
+    /// </summary>
+    [ComImport]
+    [Guid("1CB9AD4C-DBFA-4C32-B178-C2F568A703B2")]
+    [InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+    public interface IAudioClient
+    {
+        [PreserveSig] int Initialize(
+            uint shareMode,
+            uint streamFlags,
+            long hnsBufferDuration,
+            long hnsPeriodicity,
+            IntPtr pFormat,
+            IntPtr audioSessionGuid);
+
+        [PreserveSig] int GetBufferSize(out uint numBufferFrames);
+        [PreserveSig] int GetStreamLatency(out long hnsLatency);
+        [PreserveSig] int GetCurrentPadding(out uint numPaddingFrames);
+        [PreserveSig] int IsFormatSupported(uint shareMode, IntPtr pFormat, out IntPtr ppClosestMatch);
+        [PreserveSig] int GetMixFormat(out IntPtr ppDeviceFormat);
+        [PreserveSig] int GetDevicePeriod(out long phnsDefaultDevicePeriod, out long phnsMinimumDevicePeriod);
+        [PreserveSig] int Start();
+        [PreserveSig] int Stop();
+        [PreserveSig] int Reset();
+        [PreserveSig] int SetEventHandle(IntPtr eventHandle);
+        [PreserveSig] int GetService([MarshalAs(UnmanagedType.LPStruct)] Guid riid,
+                                     [MarshalAs(UnmanagedType.IUnknown)] out object ppv);
+    }
+
+    /// <summary>
+    /// IAudioCaptureClient — pulls captured packets. Obtain via IAudioClient::GetService.
+    /// </summary>
+    [ComImport]
+    [Guid("C8ADBD64-E71E-48A0-A4DE-185C395CD317")]
+    [InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+    public interface IAudioCaptureClient
+    {
+        [PreserveSig] int GetBuffer(
+            out IntPtr ppData,
+            out uint pNumFramesToRead,
+            out uint pdwFlags,
+            out long pu64DevicePosition,
+            out long pu64QPCPosition);
+
+        [PreserveSig] int ReleaseBuffer(uint numFramesRead);
+        [PreserveSig] int GetNextPacketSize(out uint pNumFramesInNextPacket);
+    }
+
+    // ═══════════════════════════════════════════════════════════════════
     //  COM Interface — IPolicyConfig (undocumented, stable)
     // ═══════════════════════════════════════════════════════════════════
 
