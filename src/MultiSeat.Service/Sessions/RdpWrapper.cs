@@ -110,12 +110,27 @@ public sealed class RdpWrapper
     /// <summary>
     /// The version of <c>termsrv.dll</c> that rdpwrap.ini is keyed by — e.g. "10.0.26100.8737".
     ///
-    /// Read from the numeric VS_FIXEDFILEINFO fields, NOT from the FileVersion string.
-    /// Windows servicing updates the binary version resource but can leave the localized
-    /// string block stale, so the two disagree on a patched machine: this host's string
-    /// reads "10.0.26100.8115" while the numeric fields (and the file's actual identity,
-    /// confirmed by hashing it against the WinSxS copies) are 10.0.26100.8737. Trusting the
-    /// string means looking up a version of termsrv.dll that is not the one installed.
+    /// Read the build/revision from the numeric VS_FIXEDFILEINFO fields, NOT from the
+    /// FileVersion string. Windows servicing updates the binary version resource but can
+    /// leave the localized string block stale, so the two disagree on a patched machine:
+    /// this host's string reads "10.0.26100.8115" while the numeric fields (and the file's
+    /// actual identity, confirmed by hashing it against the WinSxS copies) are
+    /// 10.0.26100.8737. Trusting the string means looking up a termsrv.dll that is not the
+    /// one installed.
+    ///
+    /// The major/minor come from <see cref="Environment.OSVersion"/> instead, because this
+    /// process has no application manifest: Windows then applies its compatibility shim and
+    /// reports the major/minor of OS files as 6.2 (Windows 8). Observed in production — the
+    /// service resolved "6.2.26100.8737" for a file PowerShell reads as "10.0.26100.8737",
+    /// and no such ini section exists, so a correctly-patched host was reported broken. The
+    /// shim leaves build and revision untouched, and .NET's OSVersion is honest (it calls
+    /// RtlGetVersion), so composing the two gives the true version.
+    ///
+    /// Note OSVersion's own build (26200 here) is the OS build and is NOT interchangeable
+    /// with termsrv.dll's build (26100) — only major/minor are taken from it.
+    ///
+    /// The deeper fix is to ship an app manifest declaring supportedOS, which would remove
+    /// the shim; that is a broader change than this check warrants.
     ///
     /// Returns null if the file or its version resource cannot be read.
     /// </summary>
@@ -128,7 +143,8 @@ public sealed class RdpWrapper
             if (!File.Exists(termsrv)) return null;
 
             var vi = FileVersionInfo.GetVersionInfo(termsrv);
-            return $"{vi.FileMajorPart}.{vi.FileMinorPart}.{vi.FileBuildPart}.{vi.FilePrivatePart}";
+            var os = Environment.OSVersion.Version;
+            return $"{os.Major}.{os.Minor}.{vi.FileBuildPart}.{vi.FilePrivatePart}";
         }
         catch (Exception ex)
         {
