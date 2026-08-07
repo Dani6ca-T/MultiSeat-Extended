@@ -327,6 +327,32 @@ public static class ComInterfaces
         [PreserveSig] int GetMute([MarshalAs(UnmanagedType.Bool)] out bool mute);
     }
 
+    /// <summary>
+    /// IAudioMeterInformation — reads the current peak sample value of an endpoint or
+    /// session, in [0.0, 1.0].
+    ///
+    /// This is the only audio instrument that works on this host: it is headless and the
+    /// user is never physically at it, so "play a sound and listen" is not a measurement
+    /// anyone can take. Peak metering answers "is audio actually flowing to this endpoint"
+    /// objectively and over a remote session.
+    ///
+    /// Activate it from an IMMDevice for the endpoint's own peak, or QueryInterface it from
+    /// an IAudioSessionControl2 for a single application's peak.
+    ///
+    /// NOTE: the meter reflects what is flowing *right now*, so a single sample can read 0
+    /// between buffers. Always poll over a window and keep the maximum.
+    /// </summary>
+    [ComImport]
+    [Guid("C02216F6-8C67-4B5B-9D00-D008E73E0064")]
+    [InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+    public interface IAudioMeterInformation
+    {
+        [PreserveSig] int GetPeakValue(out float peak);
+        [PreserveSig] int GetMeteringChannelCount(out int count);
+        [PreserveSig] int GetChannelsPeakValues(int channelCount, [Out] float[] peaks);
+        [PreserveSig] int QueryHardwareSupport(out uint response);
+    }
+
     // ═══════════════════════════════════════════════════════════════════
     //  COM Interface — IPolicyConfig (undocumented, stable)
     // ═══════════════════════════════════════════════════════════════════

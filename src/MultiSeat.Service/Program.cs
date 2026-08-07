@@ -40,6 +40,22 @@ if (args.Length == 2 && args[0] == "--mute-audio" && int.TryParse(args[1], out v
     return AudioMuteHelper.MuteByPid(pidToMute) ? 0 : 1;
 }
 
+// ── Audio-peak reporting mode ─────────────────────────────────────────
+// Reports which render endpoints are actually carrying audio, and from which process,
+// by polling peak meters. This host is headless and reached over RustDesk, so "play a
+// sound and listen" is not an available measurement — and RustDesk re-routes host audio,
+// which would confound any listening test of audio routing. This is the objective
+// substitute.
+//
+// Session-scoped like --mute-audio: run it INSIDE the session you want to measure
+// (console session for host audio, a seat/RDP session for that session's audio).
+// Usage: MultiSeat.Service.exe --audio-peaks [seconds]
+if (args.Length >= 1 && args[0] == "--audio-peaks")
+{
+    var window = args.Length >= 2 && double.TryParse(args[1], out var secs) ? secs : 5.0;
+    return AudioPeakHelper.ReportPeaks(window) ? 0 : 1;
+}
+
 // ── Hide-windows helper mode ──────────────────────────────────────────
 // Invoked by the service via CreateProcessAsUser in the console session so that
 // EnumWindows sees the console user's windows (window enumeration is per-desktop;
