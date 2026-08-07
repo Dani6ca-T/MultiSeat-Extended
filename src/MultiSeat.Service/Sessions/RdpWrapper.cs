@@ -101,29 +101,82 @@ public sealed class RdpWrapper
         _logger.LogInformation("RDP Wrapper detected at {Path}", wrapperDll);
 
         if (iniPath != null && File.Exists(iniPath))
-            return ValidateIniForBuild(iniPath, build);
+            return ValidateIniForTermsrv(iniPath);
 
         _logger.LogInformation("rdpwrap.ini not found — assuming wrapper is active");
         return true;
     }
 
-    private bool ValidateIniForBuild(string iniPath, int build)
+    /// <summary>
+    /// The version of <c>termsrv.dll</c> that rdpwrap.ini is keyed by — e.g. "10.0.26100.8737".
+    ///
+    /// Read from the numeric VS_FIXEDFILEINFO fields, NOT from the FileVersion string.
+    /// Windows servicing updates the binary version resource but can leave the localized
+    /// string block stale, so the two disagree on a patched machine: this host's string
+    /// reads "10.0.26100.8115" while the numeric fields (and the file's actual identity,
+    /// confirmed by hashing it against the WinSxS copies) are 10.0.26100.8737. Trusting the
+    /// string means looking up a version of termsrv.dll that is not the one installed.
+    ///
+    /// Returns null if the file or its version resource cannot be read.
+    /// </summary>
+    private string? ResolveTermsrvVersion()
     {
         try
         {
-            var content = File.ReadAllText(iniPath);
-            var buildStr = build.ToString();
+            var termsrv = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.System), "termsrv.dll");
+            if (!File.Exists(termsrv)) return null;
 
-            if (content.Contains(buildStr))
+            var vi = FileVersionInfo.GetVersionInfo(termsrv);
+            return $"{vi.FileMajorPart}.{vi.FileMinorPart}.{vi.FileBuildPart}.{vi.FilePrivatePart}";
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "Could not read termsrv.dll version");
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Check that rdpwrap.ini carries offsets for the termsrv.dll actually installed.
+    ///
+    /// The ini is keyed by termsrv.dll's file version (<c>[10.0.26100.8737]</c>), which is a
+    /// different identifier from the Windows build number (26200) — different numbering
+    /// scheme, different value. This used to substring-search the ini for the OS build, which
+    /// was wrong in both directions: it passed on any ini that happened to contain those
+    /// digits anywhere, and it would fail a correctly-patched host whose ini simply had no
+    /// section from that servicing branch. It only appeared to work here because the current
+    /// upstream ini happens to carry an unrelated [10.0.26200.5001] section.
+    /// </summary>
+    private bool ValidateIniForTermsrv(string iniPath)
+    {
+        var version = ResolveTermsrvVersion();
+        if (version is null)
+        {
+            // Can't identify the DLL, so we can't judge the ini. Don't claim breakage we
+            // haven't established — the wrapper may well be fine.
+            _logger.LogWarning(
+                "Could not determine termsrv.dll version — skipping rdpwrap.ini validation");
+            return true;
+        }
+
+        try
+        {
+            if (IniHasOffsetsFor(File.ReadLines(iniPath), version))
             {
-                _logger.LogInformation("rdpwrap.ini contains entry for build {Build}", build);
+                _logger.LogInformation(
+                    "rdpwrap.ini has offsets for termsrv.dll {Version}", version);
                 return true;
             }
 
+            var section = $"[{version}]";
             _logger.LogError(
-                "rdpwrap.ini does NOT contain an entry for build {Build}. " +
+                "rdpwrap.ini has no {Section} section, so it carries no offsets for the " +
+                "termsrv.dll installed on this machine — multi-session will not work. " +
                 "Update rdpwrap.ini from https://github.com/sebaxakerhtc/rdpwrap.ini " +
-                "or apply a manual patch.", build);
+                "and restart TermService. (Note: termsrv.dll's FileVersion STRING may report " +
+                "a different, stale version — {Version} is from the binary version fields.)",
+                section, version);
             return false;
         }
         catch (Exception ex)
@@ -131,5 +184,29 @@ public sealed class RdpWrapper
             _logger.LogError(ex, "Failed to read rdpwrap.ini");
             return false;
         }
+    }
+
+    /// <summary>
+    /// True when rdpwrap.ini declares a section for this exact termsrv.dll version.
+    ///
+    /// Matches the section header <c>[10.0.26100.8737]</c> as a whole line, not as a
+    /// substring: the ini is full of version-like numbers (other builds' sections, offset
+    /// tables, sub-sections such as <c>[10.0.26100.8737-SLInit]</c>), so a substring test
+    /// reports coverage that does not exist.
+    ///
+    /// Pure and static so it can be tested without a real Windows install — same rationale
+    /// as <see cref="Streaming.ApolloManager.ResolveLogPath"/>.
+    /// </summary>
+    public static bool IniHasOffsetsFor(IEnumerable<string> iniLines, string termsrvVersion)
+    {
+        var section = $"[{termsrvVersion}]";
+
+        foreach (var line in iniLines)
+        {
+            if (line.AsSpan().Trim().Equals(section, StringComparison.OrdinalIgnoreCase))
+                return true;
+        }
+
+        return false;
     }
 }
