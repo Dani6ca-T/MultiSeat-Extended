@@ -97,6 +97,13 @@ internal static class AudioPeakHelper
                                 Pid = (int)pid,
                                 ProcessName = ProcessNameOf((int)pid),
                                 Meter = sessionMeter,
+                                // Peak alone CANNOT tell you whether a session is audible: the meter
+                                // reports the signal presented to the session, BEFORE its volume and
+                                // mute are applied. Measured 2026-08-14 — a successfully muted mstsc
+                                // still metered 0.34. Muting is exactly what MultiSeat relies on under
+                                // AudioMode.PerSession, so the mute flag has to be reported alongside
+                                // the peak or the readout invites the wrong conclusion.
+                                Muted = ReadMute(session),
                             });
                     }
                 }
@@ -123,8 +130,13 @@ internal static class AudioPeakHelper
                 Console.WriteLine($"{Verdict(p.Peak),-6} peak={p.Peak:F6}  {p.DeviceName}{marker}");
                 Console.WriteLine($"       id={p.DeviceId}");
                 foreach (var s in p.Sessions.OrderByDescending(x => x.Peak))
+                {
+                    // MUTED wins the verdict: a muted session is inaudible no matter what it meters.
+                    var verdict = s.Muted == true ? "MUTED" : Verdict(s.Peak);
+                    var mute = s.Muted switch { true => " muted", false => "", _ => " mute=?" };
                     Console.WriteLine($"         APP | {s.ProcessName} (pid {s.Pid}) "
-                                    + $"peak={s.Peak:F6} {Verdict(s.Peak)}");
+                                    + $"peak={s.Peak:F6} {verdict}{mute}");
+                }
                 Console.WriteLine();
             }
 
@@ -153,6 +165,16 @@ internal static class AudioPeakHelper
     {
         if (meter is null) return 0f;
         return meter.GetPeakValue(out float peak) == 0 ? peak : 0f;
+    }
+
+    /// <summary>
+    /// Read a session's mute flag. Null when the session does not expose ISimpleAudioVolume,
+    /// so "unknown" is never silently reported as "not muted".
+    /// </summary>
+    private static bool? ReadMute(object session)
+    {
+        if (session is not ComInterfaces.ISimpleAudioVolume vol) return null;
+        return vol.GetMute(out bool muted) == 0 ? muted : null;
     }
 
     private static ComInterfaces.IAudioMeterInformation? ActivateMeter(ComInterfaces.IMMDevice device)
@@ -193,5 +215,7 @@ internal static class AudioPeakHelper
         public string ProcessName = "";
         public ComInterfaces.IAudioMeterInformation? Meter;
         public float Peak;
+        /// <summary>Null = the session did not expose a mute flag, not "unmuted".</summary>
+        public bool? Muted;
     }
 }

@@ -1142,20 +1142,31 @@ public sealed class SessionLauncher
     /// </summary>
     private void EnsureDefaultRdp(SafeTokenHandle consoleToken, uint consoleSessionId)
     {
-        const string content =
+        // audiomode decides where the seat's audio is rendered, and it is the single switch
+        // that separates the two AudioModes:
+        //
+        //   i:1 (SharedHost) — play audio on the remote computer (host). Makes host audio
+        //     devices (VB-CABLE, VoiceMeeter) visible inside the session via WASAPI so Apollo
+        //     can loopback-capture a named virtual_sink. Side effect, and the reason
+        //     PerSession exists: seats then share the host's audio subsystem, suspending the
+        //     console's playback and leaking seat audio to the host's speakers (#10, #12).
+        //
+        //   i:0 (PerSession) — redirect to the client. Windows creates a PRIVATE "Remote Audio"
+        //     render endpoint inside this session and makes it the session default; Apollo,
+        //     running in-session, loopback-captures it. Host devices are invisible here — which
+        //     is the point, not a limitation. The redirected stream still arrives at the
+        //     console-side mstsc, so MuteMstscAudio is what keeps it off the host's speakers.
+        //
+        // NOTE (both modes): do NOT add audiocapturemode:i:1 here — it triggers a Windows
+        // mic-access security dialog that DismissMstscSecurityDialog cannot catch, hanging the
+        // RDP connection. Mic under SharedHost is handled via the VAC pair instead; PerSession
+        // has no mic path at all (see AudioMode.PerSession).
+        var audioMode = _options.AudioMode == AudioMode.PerSession ? 0 : 1;
+
+        var content =
             "authentication level:i:0\r\n" +
             "prompt for credentials:i:0\r\n" +
-            // audiomode:i:1 — play audio on the remote computer (host). This makes all host
-            // audio devices (VB-CABLE, VoiceMeeter) visible inside the RDP session via WASAPI,
-            // which is required for Apollo to loopback-capture game audio (audio_sink) and to
-            // render Moonlight mic audio (virtual_sink). With the default audiomode:i:0 (redirect
-            // to client), only "Remote Audio Output" is visible — VAC devices are invisible and
-            // both audio_sink and virtual_sink silently fail.
-            // NOTE: do NOT add audiocapturemode:i:1 here — it triggers a Windows mic-access
-            // security dialog that the DismissMstscSecurityDialog dismisser cannot catch,
-            // causing the RDP connection to hang. VAC-based mic routing via virtual_sink is
-            // sufficient and does not require mic redirect from the console session.
-            "audiomode:i:1\r\n" +
+            $"audiomode:i:{audioMode}\r\n" +
             // The mstsc window is hidden — RDP stream quality has zero user-visible impact.
             // These settings minimize TermService encoding CPU on the host:
             //   session bpp:i:8      → 8-bit color (256 colors): 1/4 the pixel data vs 32-bit
@@ -1199,7 +1210,10 @@ public sealed class SessionLauncher
                 waitForExit: true);
 
             if (exit == 0)
-                _logger.LogInformation("Default.rdp written to console user's shell Documents folder");
+                _logger.LogInformation(
+                    "Default.rdp written to console user's shell Documents folder " +
+                    "(audiomode:i:{AudioMode} — {Mode})",
+                    audioMode, _options.AudioMode);
             else
                 _logger.LogWarning(
                     "PowerShell exited with code {Code} writing Default.rdp — " +
@@ -1527,24 +1541,56 @@ public sealed class SessionLauncher
 
     /// <summary>
     /// Mute mstsc's audio session in the console session.
-    /// With audiomode:i:1 (play on remote), mstsc has no audio session in the
-    /// console session so this is typically a no-op — but it's kept as a safety
-    /// net in case mstsc creates a session-scoped audio endpoint for control traffic.
-    /// The Core Audio API is session-scoped, so the helper runs in the console session.
+    ///
+    /// SharedHost (audiomode:i:1): audio plays on the host, so mstsc has no audio session of its
+    /// own and this is typically a no-op — kept as a safety net in case mstsc creates a
+    /// session-scoped endpoint for control traffic. One blocking attempt, as before.
+    ///
+    /// PerSession (audiomode:i:0): this is LOAD-BEARING. The seat's audio is redirected to the
+    /// RDP *client*, and that client is the hidden mstsc living in the console session — so
+    /// without this mute the seat's game audio comes out of the host's speakers. It is also the
+    /// step that lets the seat keep its own audio while the host stays quiet, which is the whole
+    /// point of the mode.
+    ///
+    /// Under PerSession we do not block provisioning on it, and we do not bound it either: a
+    /// bounded poll was measured failing outright, because mstsc creates no audio session until
+    /// the seat first plays something, which can be long after provisioning. The helper therefore
+    /// WATCHES for the life of the mstsc process (timeout -1) and exits with it. Verify with
+    /// `MultiSeat.Service.exe --audio-peaks` in the console session — the mstsc APP line must
+    /// read 0.000000 while a seat is playing audio.
     /// </summary>
     private void MuteMstscAudio(SafeTokenHandle consoleToken, uint consoleSessionId, int mstscPid)
     {
+        var perSession = _options.AudioMode == AudioMode.PerSession;
+
         try
         {
             var exePath = Path.Combine(AppContext.BaseDirectory, "MultiSeat.Service.exe");
+            // -1 = watch for the process's lifetime; 0 = the historical single attempt.
+            var timeoutMs = perSession ? -1 : 0;
+
             RunInConsoleSession(consoleToken, consoleSessionId,
-                $"\"{exePath}\" --mute-audio {mstscPid}",
-                waitForExit: true);
-            _logger.LogInformation("MuteMstscAudio helper ran for PID {Pid}", mstscPid);
+                $"\"{exePath}\" --mute-audio {mstscPid} {timeoutMs}",
+                waitForExit: !perSession);
+
+            if (perSession)
+                _logger.LogInformation(
+                    "MuteMstscAudio watcher started for PID {Pid} — it will mute mstsc as soon as " +
+                    "the seat plays audio and stay resident until mstsc exits (per-session audio: " +
+                    "this is what keeps seat audio off the host's speakers)", mstscPid);
+            else
+                _logger.LogInformation("MuteMstscAudio helper ran for PID {Pid}", mstscPid);
         }
         catch (Exception ex)
         {
-            _logger.LogWarning(ex, "Failed to run mute-audio helper for PID {Pid} (non-critical)", mstscPid);
+            // Non-critical under SharedHost (no-op anyway); under PerSession this means seat
+            // audio may be audible on the host, so say so rather than logging a bare warning.
+            if (perSession)
+                _logger.LogWarning(ex,
+                    "Failed to start mute-audio watcher for PID {Pid} — seat audio may play on " +
+                    "the host's speakers. Check with --audio-peaks in the console session.", mstscPid);
+            else
+                _logger.LogWarning(ex, "Failed to run mute-audio helper for PID {Pid} (non-critical)", mstscPid);
         }
     }
 

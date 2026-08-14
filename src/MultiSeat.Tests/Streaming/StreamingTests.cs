@@ -176,6 +176,85 @@ public class StreamingTests
     }
 
     [Fact]
+    public void ApolloConfigBuilder_PerSessionAudio_NamesNoSinkAndDisablesMic()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), $"multiseat-test-{Guid.NewGuid():N}");
+
+        try
+        {
+            var logger = new TestLogger<ApolloConfigBuilder>();
+            var options = new MultiSeatOptions { AudioMode = AudioMode.PerSession };
+            var builder = new ApolloConfigBuilder(logger, Options.Create(options));
+
+            var seat = new SeatInfo
+            {
+                AccountName = "MultiSeatSeat01",
+                PortBase = 47984,
+                // Deliberately populated: a seat may still carry a device from a previous
+                // SharedHost run. PerSession must ignore it rather than name it.
+                AudioGameRenderFriendlyName = "CABLE In 16ch (VB-Audio Virtual Cable)",
+            };
+
+            var content = File.ReadAllText(builder.BuildConfig(seat, tempDir));
+
+            // The core of per-session audio: name NO sink. Apollo then captures the RDP
+            // session's own Remote Audio endpoint, which is already the session default.
+            // Naming it via virtual_sink makes Apollo rewrite the endpoint's wave format and
+            // breaks loopback capture for everyone including Apollo; audio_sink re-roles it.
+            Assert.DoesNotContain("virtual_sink = ", content);
+            Assert.DoesNotContain("audio_sink = ", content);
+
+            // Guard specifically against the seat's stale device leaking into the config.
+            Assert.DoesNotContain("CABLE In 16ch", content);
+
+            // Apollo must still be barred from taking or re-asserting endpoint ownership.
+            Assert.Contains("keep_sink_default = disabled", content);
+            Assert.Contains("auto_capture_sink = disabled", content);
+
+            // No mic path exists in this mode — a session that keeps its own audio cannot see
+            // the host's Steam Streaming Microphone. Written explicitly, not left to default.
+            Assert.Contains("stream_mic = disabled", content);
+        }
+        finally
+        {
+            DeleteTestDir(tempDir);
+        }
+    }
+
+    [Fact]
+    public void ApolloConfigBuilder_SharedHostRemainsTheDefault()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), $"multiseat-test-{Guid.NewGuid():N}");
+
+        try
+        {
+            var logger = new TestLogger<ApolloConfigBuilder>();
+            // Default options — no AudioMode set anywhere.
+            var builder = new ApolloConfigBuilder(logger, Options.Create(new MultiSeatOptions()));
+
+            Assert.Equal(AudioMode.SharedHost, new MultiSeatOptions().AudioMode);
+
+            var seat = new SeatInfo
+            {
+                AccountName = "MultiSeatSeat01",
+                PortBase = 47984,
+                AudioGameRenderFriendlyName = "CABLE In 16ch (VB-Audio Virtual Cable)",
+            };
+
+            var content = File.ReadAllText(builder.BuildConfig(seat, tempDir));
+
+            // Existing installs must be untouched by the new mode: the seat's cable is still
+            // named and the mic path is still on.
+            Assert.Contains("virtual_sink = CABLE In 16ch (VB-Audio Virtual Cable)", content);
+            Assert.Contains("stream_mic = enabled", content);
+        }
+        finally
+        {
+            DeleteTestDir(tempDir);
+        }
+    }
+
+    [Fact]
     public void ApolloConfigBuilder_UpdateDisplayOutput_ModifiesConfig()
     {
         var tempDir = Path.Combine(Path.GetTempPath(), $"multiseat-test-{Guid.NewGuid():N}");

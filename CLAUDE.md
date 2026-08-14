@@ -33,7 +33,33 @@ Each seat reserves a block of 30 ports: `PortBase + (seat_index × 30)`. Default
 - Apollo's per-seat offsets span `-5` (GFE HTTPS) to `+26` (RTSP) around the base.
 - The base sits **above** a stock Apollo's block (~47979–48010, centered on the Moonlight default 47984) so MultiSeat coexists with a standalone Apollo — see "Coexistence with a standalone Apollo" below.
 
-## Audio Device Layout
+## Audio: two modes (`MultiSeat:AudioMode`)
+
+| | `SharedHost` (default) | `PerSession` |
+|---|---|---|
+| RDP | `audiomode:i:1` — play on host | `audiomode:i:0` — play on client |
+| Endpoint | a host virtual cable per seat | the session's own **Remote Audio** (created by Windows) |
+| Apollo config | `virtual_sink = <cable>` | **no sink named at all** |
+| Prereqs | VB-CABLE + VoiceMeeter | **none** |
+| Seat cap from audio | 4 (one cable each) | none |
+| Microphone | works (`stream_mic`) | **not available** |
+| Client "Play audio on host PC" | **off** | **on** |
+
+`PerSession` is what actually fixes #10 and #12: seats stop sharing the host's audio subsystem, so an
+active seat no longer suspends the console's playback or leaks onto its speakers. Two rules that are
+not optional (both learned the hard way in issue #15):
+
+- **Never name the endpoint.** `audio_sink` makes Apollo re-role it; `virtual_sink` makes Apollo
+  rewrite its wave format, breaking loopback for every client including Apollo. Leave both unset —
+  Apollo takes the session default, which is already the endpoint you want.
+- **`SessionLauncher.MuteMstscAudio` is load-bearing here**, not a safety net: the redirected audio
+  reaches the hidden console-side `mstsc`, and muting it is what keeps seat audio out of the host's
+  speakers. Verify with `MultiSeat.Service.exe --audio-peaks` in the console session — the `mstsc`
+  APP line must read `0.000000` while a seat streams.
+
+Default stays `SharedHost` because `PerSession` has no mic path. See `docs/design/per-session-audio.md`.
+
+## Audio Device Layout (`SharedHost` mode only)
 
 - Seat 0 → VB-CABLE basic "CABLE Input"
 - Seat 1 → VoiceMeeter "VoiceMeeter Input"
@@ -47,7 +73,7 @@ VoiceMeeter must be running — `AudioRouter` auto-starts it. Registered in `HKL
 Reflects fixes shipped 2026-07-24 (GitHub issues #11 / #10 / #9a):
 
 - **Resolution follows the Moonlight client.** Each per-seat `sunshine.conf` sets Apollo's display-device keys — `dd_configuration_option = ensure_active`, `dd_resolution_option = auto`, `dd_refresh_rate_option = auto` (`ApolloConfigBuilder`). Apollo resizes the SudoVDA display to the mode the client requests on connect. The dashboard resolution is the SudoVDA creation/advertised default, **not** authoritative. **Requires the client's "Optimize game settings" (SOPS) enabled** — otherwise Apollo leaves the mode unchanged. Without the `dd_*` keys, `dd_configuration_option` defaults to `disabled` and Apollo never resizes the virtual display (it stays at the host/RDP surface size).
-- **Seat audio does not hijack the host default.** The seat's virtual audio device is written as Apollo's `virtual_sink` (not `audio_sink`) with `keep_sink_default = disabled` + `auto_capture_sink = disabled`, and MultiSeat no longer runs `--set-default-render`. Windows has a **single machine-wide default output** shared by the console + all seats; Apollo still points the game at the sink during an active stream and restores the previous default afterward, without re-asserting it. Keep the client's "Play audio on host PC" **off** so `virtual_sink` is used. Not full isolation — true N-way seat audio needs per-app routing (`IAudioPolicyConfigFactory::SetPersistedDefaultAudioEndpoint`), not yet built.
+- **Seat audio does not hijack the host default.** The seat's virtual audio device is written as Apollo's `virtual_sink` (not `audio_sink`) with `keep_sink_default = disabled` + `auto_capture_sink = disabled`, and MultiSeat no longer runs `--set-default-render`. Windows has a **single machine-wide default output** shared by the console + all seats; Apollo still points the game at the sink during an active stream and restores the previous default afterward, without re-asserting it. Keep the client's "Play audio on host PC" **off** so `virtual_sink` is used. Not full isolation — an active seat still suspends the console's playback and leaks onto its speakers (#12). **Real isolation is `AudioMode = PerSession`** (see "Audio: two modes" above); it arrived via RDP per-session endpoints, not the per-app routing (`IAudioPolicyConfigFactory::SetPersistedDefaultAudioEndpoint`) this note used to predict.
 - **Controller forwarding is native by default.** `EnableViGEmController` defaults **off** — Apollo forwards the Moonlight client's controller into the seat itself and MultiSeat creates no ViGEm pad. The dashboard shows the seat's Controller service as **"Native"** (not a down light) and the Input tab notes that XInput→seat assignment only applies when `EnableViGEmController` is on. `SeatServices.ControllerManaged` + `GET /api/input/mode` surface the mode.
 
 ## Install / Deploy
@@ -150,8 +176,8 @@ Apps launch into the seat session via `ProcessInjector.LaunchInSessionAsync`. Th
 
 - Apollo (Sunshine fork with multi-instance support) — NOT upstream Sunshine
 - SudoVDA virtual display driver
-- VB-CABLE basic (seat 0 audio)
-- VoiceMeeter Potato (seats 1–3 audio)
+- VB-CABLE basic (seat 0 audio) — **`SharedHost` audio only; not needed under `PerSession`**
+- VoiceMeeter Potato (seats 1–3 audio) — **`SharedHost` audio only; not needed under `PerSession`**
 - HidHide v1.5.230 (controller isolation)
 - ViGEmBus v1.22.0 EXE — not MSI (virtual controller bus)
 - RDPWrap (multi-session RDP on Windows Home/Pro)

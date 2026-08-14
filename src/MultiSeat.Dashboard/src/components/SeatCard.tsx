@@ -361,20 +361,31 @@ export function SeatCard({ seat, onUpdate }: Props) {
                     </button>
                   }
                 />
-                <ServiceRow
-                  name="Audio"
-                  active={services.audio}
-                  detail={seat.vacCableIndex >= 0 ? `VAC #${seat.vacCableIndex}` : undefined}
-                  actions={
-                    <button
-                      className="btn-sm"
-                      disabled={actionLoading !== null}
-                      onClick={() => serviceAction("audio-reset", () => seatsApi.resetAudio(seat.id))}
-                    >
-                      {actionLoading === "audio-reset" ? "..." : "Reset"}
-                    </button>
-                  }
-                />
+                {services.audioManaged ? (
+                  <ServiceRow
+                    name="Audio"
+                    active={services.audio}
+                    detail={seat.vacCableIndex >= 0 ? `VAC #${seat.vacCableIndex}` : undefined}
+                    actions={
+                      <button
+                        className="btn-sm"
+                        disabled={actionLoading !== null}
+                        onClick={() => serviceAction("audio-reset", () => seatsApi.resetAudio(seat.id))}
+                      >
+                        {actionLoading === "audio-reset" ? "..." : "Reset"}
+                      </button>
+                    }
+                  />
+                ) : (
+                  // Per-session audio: no MultiSeat-assigned cable. The seat's RDP session owns
+                  // a private "Remote Audio" endpoint that Apollo captures directly, so there is
+                  // no device that could be missing and nothing to reset.
+                  <ServiceRow
+                    name="Audio"
+                    active
+                    detail="Session — Apollo captures the seat's own endpoint"
+                  />
+                )}
                 {services.controllerManaged ? (
                   <ServiceRow
                     name="Controller"

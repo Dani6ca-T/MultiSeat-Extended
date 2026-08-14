@@ -19,6 +19,15 @@ public sealed class SeatServices
     /// a down/grey light.
     /// </summary>
     public bool ControllerManaged { get; set; }
+
+    /// <summary>
+    /// True when MultiSeat assigns this seat a host-side virtual audio cable
+    /// (AudioMode = SharedHost). When false, audio is per-session: the seat's RDP
+    /// session owns a private "Remote Audio" endpoint that Apollo captures directly,
+    /// MultiSeat assigns no device, and <see cref="Audio"/> is not a device-health
+    /// signal — the dashboard shows "Session" rather than a down light.
+    /// </summary>
+    public bool AudioManaged { get; set; }
     public bool InputHooks { get; set; }
     public bool Firewall { get; set; }
     public bool Session { get; set; }

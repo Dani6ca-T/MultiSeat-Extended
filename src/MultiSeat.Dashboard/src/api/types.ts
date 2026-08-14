@@ -177,6 +177,11 @@ export interface SeatServices {
   // Apollo forwards the client's controller natively — the UI shows "Native" instead
   // of a down light.
   controllerManaged: boolean;
+  // True when MultiSeat assigns this seat a host-side virtual audio cable (AudioMode
+  // SharedHost). When false, audio is per-session — the seat's RDP session owns its own
+  // "Remote Audio" endpoint, so the UI shows "Session" instead of a down light and offers
+  // no Reset (there is no device assignment to reset).
+  audioManaged: boolean;
   inputHooks: boolean;
   firewall: boolean;
   session: boolean;

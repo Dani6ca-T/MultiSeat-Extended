@@ -1,6 +1,14 @@
 # Design: Per-session audio isolation
 
-Status: **Proposed / scoping** · Fixes: #10, #12 · Related: #11 (display-side twin)
+Status: **Implemented behind `AudioMode = PerSession`; default remains `SharedHost`** · Fixes: #10, #12 · Related: #11 (display-side twin)
+
+> **R1 is answered — twice.** Our own spike (2026-08-07) measured a clean WASAPI loopback capture of a
+> seat session's Remote Audio endpoint (`packets=600, silent=0`, peak 0.356) and confirmed that muting
+> the console-side `mstsc` stops host leakage without killing capture. Independently, **jmlopezdona
+> ([issue #15](https://github.com/vibesoftwarecoder/MultiSeat/issues/15)) has run this design in
+> production since 2026-08-10** with the virtual cables uninstalled, several seats with simultaneous
+> audio and the console unaffected. Two of his findings corrected this document — see
+> "Corrections from the field" below. The implementation here is ours; the sharp edges are his.
 
 ## Problem
 
@@ -51,14 +59,27 @@ R1 is the gate. If loopback on Remote Audio fails, fallback options: (a) a per-s
 
 Add `MultiSeatOptions.AudioMode = { SharedHost (current default) | PerSession }` so the two paths coexist and we can flip the default once proven.
 
-- **`SessionLauncher.EnsureDefaultRdp`** — `audiomode:i:1` → `audiomode:i:0` when `PerSession`.
-- **`SessionLauncher`** — make `MuteMstscAudio` load-bearing (retry / re-mute on connect) under `PerSession`.
-- **`ApolloConfigBuilder`** — `PerSession`: point Apollo at the Remote Audio endpoint (named `audio_sink`/`virtual_sink`, or rely on session default) and drop the host-VAC `virtual_sink`.
-- **New in-session helper** (or extend `--enum-displays`-style pattern) — resolve the seat session's Remote Audio endpoint ID and (if needed) set it as session default; report it for the Apollo config.
-- **`AudioRouter` / `AudioDeviceEnumerator`** — `PerSession`: skip VAC assignment, VoiceMeeter startup, and cable dedup entirely.
-- **`SeatManager` step 5** — branch on `AudioMode`.
-- **Prereqs (`install-prerequisites.ps1`) + `CLAUDE.md`** — VB-CABLE / VoiceMeeter become **not required** under `PerSession`; document.
-- **Tests** — config generation under both modes.
+- ✅ **`SessionLauncher.EnsureDefaultRdp`** — `audiomode:i:1` → `audiomode:i:0` when `PerSession`. The mode is logged alongside the write so a pasted log says which path a reporter is on.
+- ✅ **`SessionLauncher.MuteMstscAudio`** — load-bearing under `PerSession`: `--mute-audio <pid> [timeoutMs]` now polls (a process has no audio session until it renders), runs fire-and-forget so it never blocks provisioning, and logs a leak-specific warning on failure.
+- ✅ **`ApolloConfigBuilder`** — `PerSession`: **name no sink at all** (see corrections) and write `stream_mic = disabled`. `keep_sink_default`/`auto_capture_sink` stay `disabled` in both modes.
+- ❌ **New in-session helper to resolve the endpoint ID** — **not needed, and would have been harmful.** Apollo takes the session default, which is already the right endpoint.
+- ✅ **`AudioRouter`** — `EnsureVacScanned` returns immediately under `PerSession`, so no VoiceMeeter start and no "missing devices" warnings on a host that deliberately has none.
+- ✅ **`SeatManager`** — step 5 skips `AssignCable` (which *throws* when no cables exist — the expected state here); `ResetAudio` is a logged no-op; `SeatServices.AudioManaged` tells the dashboard to show "Session" instead of a down light.
+- ✅ **Tests** — config generation under both modes, including a guard that a stale `AudioGameRenderFriendlyName` never leaks into a `PerSession` config.
+- ⬜ **Prereqs (`install-prerequisites.ps1`)** — VB-CABLE / VoiceMeeter are **not required** under `PerSession`; `CLAUDE.md` documents this, the installer does not yet branch on it.
+
+## Corrections from the field (issue #15)
+
+Two things this document had wrong, each of which cost jmlopezdona a night:
+
+1. **Do not name the endpoint.** The line above used to say "point Apollo at the Remote Audio endpoint (named `audio_sink`/`virtual_sink`)". Both namings fail: `audio_sink` makes Apollo **re-role** the endpoint, and `virtual_sink` makes Apollo **rewrite its wave format**, which breaks it for every loopback client *including Apollo itself*. Leaving both keys unset is not a shortcut — it is the only thing that works.
+2. **Client-side "Play audio on host PC" must be ON** under `PerSession` — the opposite of `SharedHost`, and safe because the "host" of a redirected session *is* the seat's own session.
+
+Also: the endpoint's friendly name is **localized** by Windows ("Audio remoto" on a Spanish install), which is a second, independent reason never to resolve it by name.
+
+## The cost: no microphone
+
+A session that keeps its own audio cannot see the host's Steam Streaming Microphone, and there is no in-session equivalent to render into — so `stream_mic` is written `disabled` under `PerSession`. Game audio out works; the Moonlight → game mic path does not. This is why `SharedHost` remains the default rather than being deleted: installs that rely on mic must be able to keep it.
 
 ## What this removes / simplifies (the upside beyond the bug fixes)
 
@@ -68,14 +89,26 @@ Add `MultiSeatOptions.AudioMode = { SharedHost (current default) | PerSession }`
 
 ## Rollout
 
-1. **Spike R1 + R2** on the box (needs a live seat — user-driven). Go/no-go gate.
-2. Implement behind `AudioMode = PerSession` (default stays `SharedHost`).
-3. Dogfood on the box; validate #10 + #12 scenarios (console keeps audio while a seat streams; seat audio reaches Moonlight; multiple seats independent).
-4. Flip default to `PerSession`; mark VAC/VoiceMeeter optional in prereqs.
-5. Later: remove the shared-host path once `PerSession` is proven across setups.
+1. ✅ **Spike R1 + R2** — passed 2026-08-07 (ours) and corroborated in production by #15.
+2. ✅ **Implement behind `AudioMode = PerSession`** (default stays `SharedHost`).
+3. ⬜ **Dogfood on the box** — set `"AudioMode": "PerSession"`, provision a seat, and validate the #10 + #12 scenarios. All three readouts are objective, so this can be validated on a headless host with no one at the keyboard:
+   - console keeps audio while a seat streams → `--audio-peaks` in the **console** session: host app peaks stay non-zero;
+   - seat audio does not leak to the host → same run, the **mstsc** APP line reads `0.000000` (this is what proves `MuteMstscAudio` landed);
+   - the seat has audio → `--audio-peaks` **inside the seat session**: the game's APP line is non-zero on `Remote Audio`.
+4. ⬜ Flip default to `PerSession`; mark VAC/VoiceMeeter optional in prereqs.
+5. ⬜ Later: remove the shared-host path — **only if** the mic path is replaced first, since that is what `SharedHost` still buys.
 
-## Open decisions for the user
+## The mute is a watcher, not a poll — and here is why
 
-1. **Ship behind a flag with `SharedHost` default (recommended)**, or replace the shared path outright?
-2. Who drives the **R1/R2 spike** (needs a live seat + a couple of manual audio tests on the box)? That's the gate before any implementation effort.
-3. Keep VB-CABLE/VoiceMeeter as an optional fallback path long-term, or fully deprecate once `PerSession` proves out?
+The first implementation bounded the mute at 120 s after `mstsc` launched. **Measured on 2026-08-14, that failed outright:** with a seat idle for several minutes and then playing audio, the console read
+
+```
+CABLE In 16ch (VB-Audio Virtual Cable) [DEFAULT]
+     APP | mstsc (pid 12296) peak=0.356986 AUDIO
+```
+
+i.e. the seat's audio was coming out of the host's speakers. `mstsc` creates **no audio session at all** until the seat first renders something — it is not created when the RDP audio channel is negotiated at connect — so the bounded poll had long expired and had nothing to mute in the meantime.
+
+`--mute-audio <pid> -1` therefore **watches for the life of the `mstsc` process**: polls every 1 s until a session appears, mutes it, then re-asserts every 10 s (so a session torn down and recreated cannot come back audible) and exits when `mstsc` does. One lightweight process per seat, which is the same lifetime as the `mstsc` it guards.
+
+This is the one part of `PerSession` that is genuinely load-bearing and invisible when it breaks, so it is worth re-measuring after any change to seat launch.

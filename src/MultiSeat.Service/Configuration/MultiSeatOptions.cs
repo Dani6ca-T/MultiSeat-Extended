@@ -23,7 +23,13 @@ public sealed class MultiSeatOptions
     public bool RequireHttps { get; set; } = true;
     public string[] CorsOrigins { get; set; } = [];
 
+    // ── Audio ────────────────────────────────────────────────────────
+    // How seat game audio reaches Moonlight. See AudioMode for the trade-off.
+    // Default SharedHost — the historical behaviour; PerSession drops mic support.
+    public AudioMode AudioMode { get; set; } = AudioMode.SharedHost;
+
     // ── Virtual Audio Cable ──────────────────────────────────────────
+    // Only used when AudioMode = SharedHost. PerSession needs no virtual cables at all.
     public int VacCableCount { get; set; } = 4;  // number of VAC cables installed
 
     // ── HidHide ──────────────────────────────────────────────────────
@@ -105,6 +111,52 @@ public sealed class MultiSeatOptions
     // Absolute path to the repo root. Required for the dashboard Rebuild button.
     // Example: C:\MultiSeat-Development
     public string SourceDir { get; set; } = string.Empty;
+}
+
+/// <summary>
+/// Where a seat's game audio is rendered, and therefore what Apollo captures.
+/// </summary>
+public enum AudioMode
+{
+    /// <summary>
+    /// Seats render onto the HOST's audio subsystem (RDP audiomode:i:1) and each seat gets a
+    /// dedicated host-side virtual cable (VB-CABLE / VoiceMeeter) that Apollo names as its
+    /// virtual_sink. Requires those cables installed — one per seat, which caps seats at 4.
+    ///
+    /// Known limitation, and the reason PerSession exists: every seat shares the host's single
+    /// audio subsystem, so an active seat suspends the console session's own playback and its
+    /// audio leaks onto the console's physical output (issues #10, #12). No amount of
+    /// default-device juggling fixes that — there is one global default and one shared endpoint.
+    ///
+    /// Supports the Moonlight → game microphone path (stream_mic).
+    /// </summary>
+    SharedHost,
+
+    /// <summary>
+    /// Each seat keeps its audio INSIDE its own RDP session (audiomode:i:0). Windows gives every
+    /// session a private "Remote Audio" render endpoint and makes it that session's default, so
+    /// games play to it automatically and Apollo loopback-captures it from within the session.
+    /// The host's physical devices are never a render target for any seat, which is what makes
+    /// this isolation real rather than negotiated.
+    ///
+    /// Needs NO virtual audio cables — no VB-CABLE, no VoiceMeeter — and therefore has no
+    /// 4-seat audio ceiling. The redirected stream still reaches the console-side mstsc, so
+    /// SessionLauncher.MuteMstscAudio becomes load-bearing here: it is what stops seat audio
+    /// playing out of the host's speakers.
+    ///
+    /// Two hard-won rules, both verified in the field before we shipped this:
+    ///   - Do NOT name the endpoint. Writing it to audio_sink makes Apollo re-role it; writing
+    ///     it to virtual_sink makes Apollo rewrite its wave format, which breaks the endpoint
+    ///     for every loopback client including Apollo itself. Leave both keys unset and Apollo
+    ///     simply takes the session default, which is already the endpoint we want.
+    ///   - Client-side "Play audio on host PC" must be ON (the opposite of SharedHost). That is
+    ///     safe here because the "host" of a redirected session IS the seat's own session.
+    ///
+    /// COST: no microphone. A session that keeps its own audio cannot see the host's Steam
+    /// Streaming Microphone, so stream_mic is written disabled. Game audio out works; the
+    /// Moonlight → game mic path does not. Installs that need the mic should stay on SharedHost.
+    /// </summary>
+    PerSession,
 }
 
 /// <summary>

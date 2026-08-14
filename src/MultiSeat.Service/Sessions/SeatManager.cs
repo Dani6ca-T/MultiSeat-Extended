@@ -205,9 +205,22 @@ public sealed class SeatManager
             seat.ProvisioningStep = "Audio";
             await BroadcastState(seat);
 
-            // Assign VAC before Apollo so the config has the audio device
-            seat.VacCableIndex = _audioRouter.AssignCable(seat);
-            _logger.LogDebug("Seat {Id}: VAC cable {C}", seat.Id, seat.VacCableIndex);
+            // PerSession needs no host-side audio device: the seat's RDP session has its own
+            // "Remote Audio" endpoint and Apollo captures that. Skipping AssignCable is not just
+            // an optimisation — it throws when no virtual cables are installed, and uninstalling
+            // VB-CABLE/VoiceMeeter is a supported (indeed expected) state in this mode.
+            if (_options.AudioMode == AudioMode.PerSession)
+            {
+                _logger.LogInformation(
+                    "Seat {Id}: per-session audio — no virtual cable assigned; Apollo captures " +
+                    "the session's own Remote Audio endpoint", seat.Id);
+            }
+            else
+            {
+                // Assign VAC before Apollo so the config has the audio device
+                seat.VacCableIndex = _audioRouter.AssignCable(seat);
+                _logger.LogDebug("Seat {Id}: VAC cable {C}", seat.Id, seat.VacCableIndex);
+            }
 
             // ── 5.5. Set seat session default capture for mic routing ────
             // Apollo renders Moonlight mic audio into CABLE Input (virtual_sink) from
@@ -463,7 +476,11 @@ public sealed class SeatManager
             Apollo = seat.ApolloProcessId > 0 && _apolloManager.IsAlive(seatId),
             ApolloRestarts = _apolloManager.GetRestartCount(seatId),
             Display = !string.IsNullOrEmpty(seat.DisplayDevicePath),
-            Audio = seat.VacCableIndex >= 0,
+            // PerSession: the endpoint is created by Windows with the session itself, so there
+            // is no device assignment that could be missing — report healthy, and let
+            // AudioManaged tell the dashboard not to read this as a device light.
+            Audio = _options.AudioMode == AudioMode.PerSession || seat.VacCableIndex >= 0,
+            AudioManaged = _options.AudioMode == AudioMode.SharedHost,
             Controller = seat.ViGEmControllerIndex >= 0,
             ControllerManaged = _options.EnableViGEmController,
             InputHooks = _inputHookManager.IsInstalled,
@@ -605,6 +622,18 @@ public sealed class SeatManager
     {
         var seat = GetSeat(seatId)
             ?? throw new InvalidOperationException("Seat not found.");
+
+        // Nothing to reset under per-session audio: MultiSeat assigns no device, and the
+        // session's Remote Audio endpoint lives and dies with the session itself. Re-assigning
+        // here would throw on a host that has (legitimately) no virtual cables installed.
+        if (_options.AudioMode == AudioMode.PerSession)
+        {
+            _logger.LogInformation(
+                "Seat {Id}: audio reset is a no-op under per-session audio — the session owns " +
+                "its own Remote Audio endpoint. Restart the seat's Apollo if capture is wrong.",
+                seatId);
+            return;
+        }
 
         _audioRouter.ReleaseCable(seat);
         seat.VacCableIndex = _audioRouter.AssignCable(seat);

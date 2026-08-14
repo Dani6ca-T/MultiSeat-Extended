@@ -167,6 +167,12 @@ public sealed class AudioRouter
 
     private void EnsureVacScanned()
     {
+        // Under per-session audio there are no seat cables by design — VB-CABLE and VoiceMeeter
+        // are not merely unused, they are expected to be absent. Return an empty set without
+        // scanning so we never launch VoiceMeeter on a host that deliberately uninstalled it,
+        // and never warn about "missing" devices the mode does not want.
+        if (_options.AudioMode == AudioMode.PerSession) return;
+
         lock (_vacLock)
         {
             if (_vacScanned) return;

@@ -34,10 +34,14 @@ if (args.Length >= 3 && args[0] == "--click-dialog")
 // ── Mute-audio helper mode ────────────────────────────────────────────
 // Invoked by the service via CreateProcessAsUser in the console session so
 // that the Core Audio API sees Session 1's audio sessions (session-scoped).
-// Usage: MultiSeat.Service.exe --mute-audio <pid>
-if (args.Length == 2 && args[0] == "--mute-audio" && int.TryParse(args[1], out var pidToMute))
+// Usage: MultiSeat.Service.exe --mute-audio <pid> [timeoutMs]
+// A process has no audio session until it first renders audio, which under AudioMode.PerSession
+// happens well after mstsc launches — so 0 means one attempt, >0 polls until that deadline, and
+// -1 watches for the target process's whole lifetime (what PerSession uses).
+if (args.Length >= 2 && args[0] == "--mute-audio" && int.TryParse(args[1], out var pidToMute))
 {
-    return AudioMuteHelper.MuteByPid(pidToMute) ? 0 : 1;
+    var muteTimeoutMs = args.Length >= 3 && int.TryParse(args[2], out var t) ? t : 0;
+    return AudioMuteHelper.MuteByPid(pidToMute, muteTimeoutMs) ? 0 : 1;
 }
 
 // ── Audio-peak reporting mode ─────────────────────────────────────────

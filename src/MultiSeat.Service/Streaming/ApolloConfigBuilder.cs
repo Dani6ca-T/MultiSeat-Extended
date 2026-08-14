@@ -136,6 +136,10 @@ public sealed class ApolloConfigBuilder
         //   auto          — follow the resolution/refresh the Moonlight client requests.
         // NOTE: Apollo only applies these when the Moonlight client has "Optimize game
         // settings" (SOPS) enabled — otherwise it logs a warning and leaves the mode as-is.
+        // Do NOT add dd_use_sunshine_virtual_display_driver here. It is not a key this Apollo
+        // build has — it only ever appeared in the config dump because Apollo echoes unknown
+        // keys back, which is what made it look like it was doing something. Measured and
+        // reported in issue #15.
         sb.AppendLine("# Display device — match the Moonlight client's requested resolution/fps");
         sb.AppendLine("dd_configuration_option = ensure_active");
         sb.AppendLine("dd_resolution_option = auto");
@@ -177,7 +181,26 @@ public sealed class ApolloConfigBuilder
         // the stream and restores the previous default afterwards, without holding it. MultiSeat no
         // longer sets the global default itself (see SeatManager — the --set-default-render step was
         // removed for the same reason).
-        if (!string.IsNullOrEmpty(seat.AudioGameRenderFriendlyName))
+        if (_options.AudioMode == AudioMode.PerSession)
+        {
+            // PerSession: the seat's RDP session has its OWN "Remote Audio" endpoint, already
+            // the session default, and Apollo runs inside that session — so it captures the
+            // right thing with no sink named at all.
+            //
+            // Naming it is not merely unnecessary, it BREAKS it:
+            //   audio_sink   → Apollo re-roles the endpoint;
+            //   virtual_sink → Apollo REWRITES the endpoint's wave format, after which loopback
+            //                  capture fails for every client including Apollo itself.
+            // Both were tried in the field and both failed. Leave both keys unset.
+            //
+            // The endpoint's friendly name is localized by Windows ("Audio remoto" on a Spanish
+            // install), which is a second, independent reason never to match it by name here.
+            sb.AppendLine("# Audio output — per-session: Apollo captures this RDP session's own");
+            sb.AppendLine("# 'Remote Audio' endpoint, which Windows already made the session default.");
+            sb.AppendLine("# Both audio_sink and virtual_sink are deliberately UNSET — naming this");
+            sb.AppendLine("# endpoint makes Apollo re-role it or rewrite its wave format, breaking capture.");
+        }
+        else if (!string.IsNullOrEmpty(seat.AudioGameRenderFriendlyName))
         {
             sb.AppendLine("# Audio output — capture the seat's virtual device without holding the global default");
             sb.AppendLine($"virtual_sink = {seat.AudioGameRenderFriendlyName}");
@@ -186,6 +209,9 @@ public sealed class ApolloConfigBuilder
         {
             sb.AppendLine("# virtual_sink = (no game audio device assigned)");
         }
+        // Both modes: never let Apollo take or re-assert ownership of an endpoint. Under
+        // SharedHost that protects the console's default (#10); under PerSession it keeps
+        // Apollo's hands off the session endpoint it is only supposed to read.
         sb.AppendLine("keep_sink_default = disabled");
         sb.AppendLine("auto_capture_sink = disabled");
         sb.AppendLine();
@@ -196,8 +222,21 @@ public sealed class ApolloConfigBuilder
         // "Microphone (Steam Streaming Microphone)" as the session default capture so games
         // automatically use it. Requires Steam installed for its audio driver.
         // Client must be logabell/moonlight-qt-mic (standard Moonlight does not send mic packets).
-        sb.AppendLine("# Audio input — Apollo streams Moonlight mic into Steam Streaming Microphone");
-        sb.AppendLine("stream_mic = enabled");
+        //
+        // PerSession has no mic path: a session that keeps its own audio cannot see the host's
+        // Steam Streaming Microphone, and there is no in-session equivalent to render into. This
+        // is the mode's one real cost, so it is written explicitly rather than left to default.
+        if (_options.AudioMode == AudioMode.PerSession)
+        {
+            sb.AppendLine("# Audio input — unavailable under per-session audio: the seat session");
+            sb.AppendLine("# cannot see the host's Steam Streaming Microphone. Use SharedHost if you need mic.");
+            sb.AppendLine("stream_mic = disabled");
+        }
+        else
+        {
+            sb.AppendLine("# Audio input — Apollo streams Moonlight mic into Steam Streaming Microphone");
+            sb.AppendLine("stream_mic = enabled");
+        }
         sb.AppendLine();
 
         // ── Input ─────────────────────────────────────────────────────
