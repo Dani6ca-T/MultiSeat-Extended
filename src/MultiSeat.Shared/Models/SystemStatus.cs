@@ -3,6 +3,14 @@ namespace MultiSeat.Shared.Models;
 public sealed class SystemStatus
 {
     public int ActiveSeats { get; set; }
+
+    /// <summary>
+    /// The seat limit the service actually enforces — <c>MultiSeat:MaxSeats</c> from
+    /// appsettings.json, set by MetricsCollector. NOT <see cref="Constants.MaxSeats"/>, which is
+    /// the architectural ceiling that port blocks are carved for. The default below is only a
+    /// fallback for a status object nobody populated; anything served to the dashboard is the
+    /// configured value.
+    /// </summary>
     public int MaxSeats { get; set; } = Constants.MaxSeats;
     public GpuInfo? Gpu { get; set; }
     public CpuInfo? Cpu { get; set; }

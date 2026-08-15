@@ -22,6 +22,13 @@ public static class Constants
     // StreamingTests.Constants_PortsPerSeat_NoUsedPortCollision — re-check it if the used-offset
     // set changes.
     public const int PortsPerSeat = 30;
+
+    /// <summary>
+    /// Architectural ceiling: how many seat port blocks exist (PortAllocator carves exactly this
+    /// many). It is NOT the seat limit an operator gets — that is <c>MultiSeat:MaxSeats</c> in
+    /// appsettings.json, which SeatManager enforces and defaults to 4. Configuring more than this
+    /// many seats would pass that check and then find no port block available.
+    /// </summary>
     public const int MaxSeats = 8;
 
     // ── Port offsets within a seat's block ────────────────────────────

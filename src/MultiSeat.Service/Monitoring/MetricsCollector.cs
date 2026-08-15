@@ -2,6 +2,8 @@ using System.Diagnostics;
 using System.Management;
 using System.Net.NetworkInformation;
 using System.Runtime.InteropServices;
+using Microsoft.Extensions.Options;
+using MultiSeat.Service.Configuration;
 using MultiSeat.Service.Sessions;
 using MultiSeat.Shared.Models;
 
@@ -15,6 +17,7 @@ public sealed class MetricsCollector : IDisposable
 {
     private readonly GpuMonitor _gpu;
     private readonly RdpWrapper _rdpWrapper;
+    private readonly MultiSeatOptions _options;
     private readonly ILogger<MetricsCollector> _logger;
 
     private PerformanceCounter? _cpuCounter;
@@ -24,10 +27,15 @@ public sealed class MetricsCollector : IDisposable
     private readonly Dictionary<string, (long rx, long tx)> _lastNetSample = new();
     private DateTime _lastNetSampleTime = DateTime.MinValue;
 
-    public MetricsCollector(GpuMonitor gpu, RdpWrapper rdpWrapper, ILogger<MetricsCollector> logger)
+    public MetricsCollector(
+        GpuMonitor gpu,
+        RdpWrapper rdpWrapper,
+        IOptions<MultiSeatOptions> options,
+        ILogger<MetricsCollector> logger)
     {
         _gpu = gpu;
         _rdpWrapper = rdpWrapper;
+        _options = options.Value;
         _logger = logger;
         InitCpuCounter();
         InitCpuName();
@@ -81,6 +89,11 @@ public sealed class MetricsCollector : IDisposable
         return new SystemStatus
         {
             ActiveSeats = seatManager.ActiveSeatCount,
+            // Report the limit that is actually ENFORCED — MultiSeat:MaxSeats, the value
+            // SeatManager rejects provisioning against. Leaving this unset fell back to the
+            // model's default of Constants.MaxSeats (the architectural ceiling used to carve
+            // port blocks), so the dashboard advertised 8 seats on a host configured for 4.
+            MaxSeats = _options.MaxSeats,
             Gpu = gpu,
             Cpu = cpu,
             Network = network,
