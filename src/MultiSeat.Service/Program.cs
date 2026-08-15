@@ -200,5 +200,18 @@ ApiServer.ConfigureServices(builder.Services, builder.Configuration);
 
 var host = builder.Build();
 
+// ── Log-filter inspection mode ────────────────────────────────────────
+// Reports which levels actually reach each logging provider — above all the Windows Event
+// Log, the only destination a service has. Unlike the helper modes at the top of this file
+// this one runs AFTER Build(), on purpose: it must inspect the REAL host's configuration.
+// Reconstructing an equivalent host here would be free to drift from the one that ships,
+// which would make the diagnostic worse than useless. Building the host does not start it —
+// no hosted service runs and no port is bound — so this is safe to run on a live machine.
+//
+// Exit code 0 = the service's Information logs reach the Event Log, 1 = they do not.
+// Usage: MultiSeat.Service.exe --log-filters
+if (args.Contains("--log-filters"))
+    return MultiSeat.Service.Diagnostics.LogFilterInspector.Run(host.Services);
+
 await host.RunAsync();
 return 0;

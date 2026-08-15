@@ -56,6 +56,16 @@ if (-not $events) {
         }
         Write-Host ("[{0:yyyy-MM-dd HH:mm:ss}] {1,-11} {2}" -f $_.TimeCreated, $_.LevelDisplayName, $_.Message) -ForegroundColor $color
     }
+
+    # A log made only of Warnings and Errors is a symptom, not a healthy quiet machine: it means
+    # the EventLog provider is filtering Information out, so the whole narrative around each
+    # failure is missing. Say so rather than let someone send an incomplete log.
+    $appEvents = $events | Where-Object { $_.ProviderName -eq 'MultiSeat.Service' }
+    if ($appEvents -and -not ($appEvents | Where-Object { $_.LevelDisplayName -eq 'Information' })) {
+        Write-Host "`n  NOTE: no Information-level entries from MultiSeat.Service in this window." -ForegroundColor Yellow
+        Write-Host "  That usually means they are being filtered out, not that nothing happened." -ForegroundColor DarkGray
+        Write-Host "  Check with:  & '$env:ProgramFiles\MultiSeat\MultiSeat.Service.exe' --log-filters" -ForegroundColor DarkGray
+    }
 }
 
 # -- Helper log files (these really are files) ------------------------

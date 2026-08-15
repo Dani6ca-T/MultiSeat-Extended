@@ -129,6 +129,19 @@ Note `LogDebug` is still not in the Event Log by design (health-check chatter wo
 `LogDebug` call is effectively write-only on a deployed host. Use `LogInformation` for anything a
 reporter may need to see.
 
+**Don't reason about the rules — ask:**
+
+```powershell
+& 'C:\Program Files\MultiSeat\MultiSeat.Service.exe' --log-filters
+```
+
+Prints every filter rule in order, then what each provider actually accepts per category, and exits
+0/1 on whether the service's own Information logs reach the Event Log. It inspects the real host
+(it runs after `builder.Build()`, and building starts nothing), so the answer is the deployed one.
+Worth running on a reporter's machine before asking them for logs. Covered by
+`LoggingFilterTests`, which asserts the shipped `appsettings.json` still lets Information through,
+still keeps ASP.NET Core request logs out, and still keeps `Debug` out.
+
 `scripts\show-logs.ps1` reads both, plus the helper and per-seat Apollo logs. Or directly:
 
 ```powershell
