@@ -110,6 +110,25 @@ Two separate scripts — prereqs and service deploy are intentionally split:
 - `MultiSeat.Service` — application logging (`ILogger` categories; the detailed output)
 - `MultiSeatService` — service lifecycle (started / stopped)
 
+### The `Logging:EventLog` section is load-bearing — do not delete it
+
+`AddWindowsService()` installs a **provider-specific** filter rule pinning the EventLog provider to
+**Warning and above**. Provider-specific rules outrank every category rule under `Logging:LogLevel`
+(those match any provider), so `"MultiSeat.Service": "Debug"` there does *nothing* for the Event Log
+— which is the only destination a Windows Service has. Before this was fixed, 300 sampled events on
+the reference host were 275 Warning + 25 Error and **zero Information**: every `LogInformation`
+diagnostic we wrote was invisible to us *and* to bug reporters.
+
+The `Logging:EventLog:LogLevel` section in `appsettings.json` overrides it — those rules are also
+provider-specific and are added afterwards, so they win at equal specificity. Keep its `Default` at
+`Warning`: raising it would also outrank `"Microsoft": "Warning"` and push every ASP.NET Core request
+log into a machine-wide log. Our own categories all begin `MultiSeat.Service`, so one prefix rule
+covers the service.
+
+Note `LogDebug` is still not in the Event Log by design (health-check chatter would flood it) — so a
+`LogDebug` call is effectively write-only on a deployed host. Use `LogInformation` for anything a
+reporter may need to see.
+
 `scripts\show-logs.ps1` reads both, plus the helper and per-seat Apollo logs. Or directly:
 
 ```powershell
