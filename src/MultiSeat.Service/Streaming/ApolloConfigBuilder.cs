@@ -405,27 +405,100 @@ public sealed class ApolloConfigBuilder
     /// Apollo looks for apps in {workingDir}/config/apps.json. Without it the
     /// seat will have an empty app list. Always overwrites so the seat picks up
     /// any games the user adds to the main Apollo installation.
+    ///
+    /// The copy is not verbatim: per-app keys that only make sense for the console
+    /// install are stripped on the way in — see <see cref="ConsoleOnlyAppKeys"/>.
     /// </summary>
     private void EnsureSeatAppsJson(string seatDir)
     {
         var dest = Path.Combine(seatDir, "config", "apps.json");
-        var source = @"C:\Program Files\Apollo\config\apps.json";
 
-        if (!File.Exists(source))
+        var source = ResolveAppsJsonSource();
+        if (source is null)
         {
-            _logger.LogDebug("Apollo apps.json not found at {Path} — seat will use built-in defaults", source);
+            _logger.LogDebug("No Apollo apps.json found to seed — seat will use built-in defaults");
             return;
         }
 
         try
         {
-            File.Copy(source, dest, overwrite: true);
-            _logger.LogDebug("Copied apps.json to seat config dir: {Dest}", dest);
+            var json = File.ReadAllText(source);
+            var stripped = StripConsoleOnlyAppKeys(json, out var removed);
+
+            File.WriteAllText(dest, stripped, Encoding.UTF8);
+
+            if (removed > 0)
+                _logger.LogInformation(
+                    "Seeded apps.json from {Source} — stripped {Count} console-only key(s)", source, removed);
+            else
+                _logger.LogDebug("Seeded apps.json from {Source} to {Dest}", source, dest);
         }
         catch (Exception ex)
         {
-            _logger.LogWarning(ex, "Could not copy apps.json to {Dest}", dest);
+            _logger.LogWarning(ex, "Could not seed apps.json to {Dest}", dest);
         }
+    }
+
+    /// <summary>
+    /// Per-app keys that must never ride from the console's apps.json into a seat.
+    ///
+    /// <c>virtual-display</c> makes Apollo attempt to create a virtual display every time a
+    /// client connects to that app. Inside an RDP seat that attempt cannot succeed — the
+    /// monitor is created but attaches to the CONSOLE session's desktop, where the seat can
+    /// never see it — and it is only removed on an explicit app quit, so every dropped
+    /// session leaves a phantom monitor behind in the console user's topology. Measured and
+    /// reported by jmlopezdona in issue #15 (he accumulated 10).
+    /// </summary>
+    private static readonly string[] ConsoleOnlyAppKeys = ["virtual-display"];
+
+    /// <summary>
+    /// Where to seed a seat's app list from. Prefer MultiSeat's own Apollo install; fall back
+    /// to a standalone Apollo so a host that curates its games there still inherits them.
+    /// Returns null when neither exists.
+    /// </summary>
+    private string? ResolveAppsJsonSource()
+    {
+        var candidates = new List<string>(2);
+
+        var apolloRoot = Path.GetDirectoryName(_options.ApolloExePath);
+        if (!string.IsNullOrEmpty(apolloRoot))
+            candidates.Add(Path.Combine(apolloRoot, "config", "apps.json"));
+
+        candidates.Add(@"C:\Program Files\Apollo\config\apps.json");
+
+        return candidates.FirstOrDefault(File.Exists);
+    }
+
+    /// <summary>
+    /// Remove <see cref="ConsoleOnlyAppKeys"/> from every entry in an apps.json document.
+    /// Returns the original text unchanged if it cannot be parsed — a seat with an
+    /// unstripped app list is still better than a seat with none.
+    /// </summary>
+    internal static string StripConsoleOnlyAppKeys(string json, out int removed)
+    {
+        removed = 0;
+
+        JsonNode? root;
+        try
+        {
+            root = JsonNode.Parse(json);
+        }
+        catch (JsonException)
+        {
+            return json;
+        }
+
+        if (root?["apps"] is not JsonArray apps)
+            return json;
+
+        foreach (var app in apps)
+        {
+            if (app is not JsonObject entry) continue;
+            foreach (var key in ConsoleOnlyAppKeys)
+                if (entry.Remove(key)) removed++;
+        }
+
+        return root.ToJsonString(new JsonSerializerOptions { WriteIndented = true });
     }
 
     /// <summary>

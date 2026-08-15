@@ -254,6 +254,48 @@ public class StreamingTests
         }
     }
 
+    // A seat must never inherit "virtual-display" from the console's app list: Apollo would
+    // then try to create a virtual display on every client connect, and each attempt leaves a
+    // phantom monitor behind in the CONSOLE user's topology (issue #15).
+    [Fact]
+    public void ApolloConfigBuilder_StripsVirtualDisplayFromSeatAppsJson()
+    {
+        const string appsJson = """
+            {
+              "env": { "PATH": "$(PATH)" },
+              "apps": [
+                { "name": "Desktop", "image-path": "desktop.png", "virtual-display": true },
+                { "name": "Steam Big Picture", "cmd": "steam.exe -bigpicture" }
+              ]
+            }
+            """;
+
+        var result = ApolloConfigBuilder.StripConsoleOnlyAppKeys(appsJson, out var removed);
+
+        Assert.Equal(1, removed);
+        Assert.DoesNotContain("virtual-display", result);
+
+        // Everything else survives the round-trip.
+        Assert.Contains("Desktop", result);
+        Assert.Contains("desktop.png", result);
+        Assert.Contains("Steam Big Picture", result);
+        Assert.Contains("steam.exe -bigpicture", result);
+        Assert.Contains("$(PATH)", result);
+    }
+
+    // A seat with an unstripped app list still beats a seat with no apps at all, so malformed
+    // input is passed through rather than throwing or emptying the file.
+    [Fact]
+    public void ApolloConfigBuilder_StripConsoleOnlyAppKeys_PassesThroughUnparseableJson()
+    {
+        const string garbage = "{ this is not json";
+
+        var result = ApolloConfigBuilder.StripConsoleOnlyAppKeys(garbage, out var removed);
+
+        Assert.Equal(garbage, result);
+        Assert.Equal(0, removed);
+    }
+
     [Fact]
     public void ApolloConfigBuilder_UpdateDisplayOutput_ModifiesConfig()
     {
