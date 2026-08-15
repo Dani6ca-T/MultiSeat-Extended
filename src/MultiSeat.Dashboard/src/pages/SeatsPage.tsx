@@ -4,6 +4,7 @@ import type { AccountInfo } from "../api/types";
 import { accounts as accountsApi } from "../api/client";
 import { useSeats } from "../hooks/useSeats";
 import { SeatCard } from "../components/SeatCard";
+import { HostCard } from "../components/HostCard";
 import { CreateSeatForm } from "../components/CreateSeatForm";
 import { ConnectionBar } from "../components/ConnectionBar";
 
@@ -54,7 +55,16 @@ export function SeatsPage() {
         />
       )}
 
-      {seats.length === 0 ? (
+      {/* The console's own Apollo, alongside the seats. Always shown: "no standalone Apollo
+          running" is itself the answer people come here looking for. */}
+      <div className="card-grid">
+        <HostCard />
+        {seats.map((seat) => (
+          <SeatCard key={seat.id} seat={seat} onUpdate={refresh} />
+        ))}
+      </div>
+
+      {seats.length === 0 && (
         <div className="empty-state">
           <p>No seats provisioned yet.</p>
           <p className="text-muted" style={{ marginBottom: 20 }}>
@@ -63,12 +73,6 @@ export function SeatsPage() {
           <Link to="/accounts" className="btn-link" style={{ padding: "8px 20px" }}>
             Go to Accounts →
           </Link>
-        </div>
-      ) : (
-        <div className="card-grid">
-          {seats.map((seat) => (
-            <SeatCard key={seat.id} seat={seat} onUpdate={refresh} />
-          ))}
         </div>
       )}
     </div>

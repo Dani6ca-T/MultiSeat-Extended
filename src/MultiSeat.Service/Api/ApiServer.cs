@@ -36,6 +36,7 @@ public static class ApiServer
         builder.Services.AddSingleton(hostServices.GetRequiredService<Monitoring.GpuMonitor>());
         builder.Services.AddSingleton(hostServices.GetRequiredService<Monitoring.MetricsCollector>());
         builder.Services.AddSingleton(hostServices.GetRequiredService<Monitoring.SessionHealthCheck>());
+        builder.Services.AddSingleton(hostServices.GetRequiredService<Monitoring.HostApolloMonitor>());
         builder.Services.AddSingleton(hostServices.GetRequiredService<Display.VirtualDisplayManager>());
         builder.Services.AddSingleton(hostServices.GetRequiredService<Configuration.SeatPresetStore>());
 
@@ -134,6 +135,7 @@ public static class ApiServer
         SeatEndpoints.Map(app);
         AccountEndpoints.Map(app);
         SystemEndpoints.Map(app);
+        HostEndpoints.Map(app);
         InputEndpoints.Map(app);
         WebSocketHub.Map(app);
 

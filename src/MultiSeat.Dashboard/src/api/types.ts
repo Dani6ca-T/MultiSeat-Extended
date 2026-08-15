@@ -186,3 +186,24 @@ export interface SeatServices {
   firewall: boolean;
   session: boolean;
 }
+
+/**
+ * The host's own standalone Apollo — the instance run for the console account, which
+ * MultiSeat coexists with and never manages. Mirrors MultiSeat.Shared.Models.HostApolloInfo.
+ */
+export interface HostApolloInfo {
+  detected: boolean;
+  processId: number;
+  executablePath: string | null;
+  startedAt: string | null;
+  port: number | null;
+  webUiPort: number | null;
+  reachable: boolean;
+  hostName: string | null;
+  appVersion: string | null;
+  streaming: boolean;
+  paired: boolean;
+  serviceStatus: string | null;
+  consoleSessionId: number;
+  note: string | null;
+}

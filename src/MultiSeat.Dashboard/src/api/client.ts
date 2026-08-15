@@ -13,6 +13,7 @@ import type {
   InputMode,
   SeatServices,
   NvencQualityPreset,
+  HostApolloInfo,
 } from "./types";
 
 const BASE = "/api";
@@ -157,6 +158,12 @@ export const system = {
       method: "POST",
       body: JSON.stringify({ enabled }),
     }),
+};
+
+// ── Host (the console's own Apollo) ───────────────────────────────
+
+export const host = {
+  get: () => request<HostApolloInfo>("/host"),
 };
 
 // ── Input ─────────────────────────────────────────────────────────
