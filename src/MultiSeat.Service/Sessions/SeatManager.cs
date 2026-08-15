@@ -796,6 +796,72 @@ public sealed class SeatManager
             seatId, preset, seat.ApolloProcessId);
     }
 
+    /// <summary>
+    /// Change a live seat's resolution.
+    ///
+    /// The seat streams its RDP session surface, and that surface's size is fixed by mstsc when
+    /// the session is created (issue #15 — there is no in-seat virtual display to resize, and
+    /// ChangeDisplaySettingsEx from inside the session returns success while doing nothing).
+    /// So changing resolution means giving the seat a new session at the new size: disconnect,
+    /// reconnect with the new geometry, and restart Apollo so it re-reads the desktop.
+    ///
+    /// The Windows session id is preserved — mstsc reconnects to the same session rather than
+    /// logging it off — so anything running in the seat survives.
+    /// </summary>
+    public async Task SetResolutionAsync(Guid seatId, int width, int height,
+        SeatPresetStore presetStore, CancellationToken ct)
+    {
+        var seat = GetSeat(seatId)
+            ?? throw new InvalidOperationException("Seat not found.");
+
+        var geometry = RdpGeometry.ForClient(width, height);
+        if (!geometry.IsValid)
+            throw new ArgumentException(
+                $"{width}x{height} is not a usable desktop size — mstsc would ignore it.");
+
+        if (seat.Width == width && seat.Height == height)
+        {
+            _logger.LogDebug("Seat {Id}: already {W}x{H}, nothing to do", seatId, width, height);
+            return;
+        }
+
+        _logger.LogInformation(
+            "Seat {Id}: changing resolution {OldW}x{OldH} -> {W}x{H}",
+            seatId, seat.Width, seat.Height, width, height);
+
+        seat.Width = width;
+        seat.Height = height;
+
+        // Take the session down and bring it back at the new size. Apollo is stopped first so it
+        // is not capturing a desktop that is about to change under it.
+        _apolloManager.KillForReconnect(seat);
+        _sessionLauncher.DisconnectSession(seat.SessionId);
+
+        seat.SessionId = await _sessionLauncher.LaunchSessionAsync(seat.AccountName, ct, geometry);
+
+        // Apollo advertises the seat's resolution in its config, so regenerate before starting.
+        _configBuilder.BuildConfig(seat, _options.ApolloConfigDir);
+        seat.ApolloProcessId = await _apolloManager.StartAsync(seat, ct);
+
+        if (seat.AutoStart)
+        {
+            presetStore.Upsert(new SeatPreset
+            {
+                AccountName = seat.AccountName,
+                Width = width,
+                Height = height,
+                Fps = seat.Fps,
+                AutoStart = true,
+                NvencPreset = seat.NvencPreset,
+            });
+        }
+
+        _ = BroadcastState(seat);
+        _logger.LogInformation(
+            "Seat {Id}: resolution now {W}x{H} on session {Sid} (Apollo PID {Pid})",
+            seatId, width, height, seat.SessionId, seat.ApolloProcessId);
+    }
+
     /// <summary>Recreate the virtual display for a seat.</summary>
     public async Task ResetDisplayAsync(Guid seatId, CancellationToken ct)
     {

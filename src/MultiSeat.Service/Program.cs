@@ -198,6 +198,7 @@ builder.Services.AddSingleton<VirtualDisplayManager>();
 builder.Services.AddSingleton<ApolloManager>();
 builder.Services.AddSingleton<ApolloConfigBuilder>();
 builder.Services.AddSingleton<OnConnectAppLauncher>();
+builder.Services.AddSingleton<ClientResolutionFollower>();
 builder.Services.AddSingleton<PortAllocator>();
 builder.Services.AddSingleton<AudioDeviceEnumerator>();
 builder.Services.AddSingleton<AudioRouter>();

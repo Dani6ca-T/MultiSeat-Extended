@@ -41,6 +41,16 @@ public sealed class NvencPresetRequest
     public NvencQualityPreset Preset { get; init; } = NvencQualityPreset.Balanced;
 }
 
+/// <summary>
+/// A new desktop size for a live seat. Applied by recreating the seat's RDP session at that
+/// size, because nothing inside the session can change it.
+/// </summary>
+public sealed class ResolutionRequest
+{
+    public int Width { get; init; }
+    public int Height { get; init; }
+}
+
 public sealed class AutoStartRequest
 {
     public bool Enabled { get; init; }

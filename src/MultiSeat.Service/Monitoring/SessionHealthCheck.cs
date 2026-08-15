@@ -24,19 +24,22 @@ public sealed class SessionHealthCheck
     private readonly ApolloManager _apolloManager;
     private readonly SeatManager _seatManager;
     private readonly OnConnectAppLauncher _onConnectApps;
+    private readonly ClientResolutionFollower _resolutionFollower;
 
     public SessionHealthCheck(
         ILogger<SessionHealthCheck> logger,
         SessionLauncher sessionLauncher,
         ApolloManager apolloManager,
         SeatManager seatManager,
-        OnConnectAppLauncher onConnectApps)
+        OnConnectAppLauncher onConnectApps,
+        ClientResolutionFollower resolutionFollower)
     {
         _logger = logger;
         _sessionLauncher = sessionLauncher;
         _apolloManager = apolloManager;
         _seatManager = seatManager;
         _onConnectApps = onConnectApps;
+        _resolutionFollower = resolutionFollower;
     }
 
     /// <summary>
@@ -197,6 +200,12 @@ public sealed class SessionHealthCheck
         // MultiSeat:LaunchOnConnect is empty. Cheap: reads only the bytes appended
         // since the previous tick. Does not change seat state here.
         _onConnectApps.ProcessSeat(seat, ct);
+
+        // ── Follow the client's requested resolution ──────────────
+        // Apollo cannot apply it itself inside an RDP seat, so resize by reconnecting the
+        // session. No-op unless MultiSeat:FollowClientResolution is on.
+        if (await _resolutionFollower.ProcessSeatAsync(seat, ct))
+            return true; // seat geometry changed — worth broadcasting
 
         // ── Late SudoVDA detection ────────────────────────────────
         // Apollo creates the seat's virtual display when a client connects, not at startup,

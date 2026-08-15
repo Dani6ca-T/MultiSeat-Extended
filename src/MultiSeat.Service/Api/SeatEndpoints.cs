@@ -205,8 +205,41 @@ public static class SeatEndpoints
                 if (seat is null)
                     return Results.NotFound();
 
-                await sessionLauncher.LaunchSessionAsync(seat.AccountName, ct);
+                // Pass the seat's geometry: if the session has to be recreated rather than
+                // reattached, it must come back at the seat's own size, not inherit the
+                // console desktop's.
+                await sessionLauncher.LaunchSessionAsync(
+                    seat.AccountName, ct, RdpGeometry.ForClient(seat.Width, seat.Height));
                 return Results.Ok(new { sessionId = seat.SessionId, message = "Session reconnected" });
+            });
+
+        // Change a live seat's resolution. The seat streams its RDP session surface, whose size
+        // only mstsc can set, so this takes the session down and brings it back at the new size.
+        group.MapPost("/{id:guid}/resolution",
+            async (Guid id, ResolutionRequest req, SeatManager mgr,
+                   SeatPresetStore presets, CancellationToken ct) =>
+            {
+                if (mgr.GetSeat(id) is null)
+                    return Results.NotFound();
+                try
+                {
+                    await mgr.SetResolutionAsync(id, req.Width, req.Height, presets, ct);
+                    var seat = mgr.GetSeat(id);
+                    return Results.Ok(new
+                    {
+                        width = seat?.Width,
+                        height = seat?.Height,
+                        sessionId = seat?.SessionId,
+                    });
+                }
+                catch (ArgumentException ex)
+                {
+                    return Results.BadRequest(new { error = ex.Message });
+                }
+                catch (InvalidOperationException ex)
+                {
+                    return Results.BadRequest(new { error = ex.Message });
+                }
             });
 
         // ── Paired client management ───────────────────────────────────

@@ -49,6 +49,20 @@ public sealed class MultiSeatOptions
     public bool AutoAssignControllers { get; set; } = true;
 
     // ── Display ──────────────────────────────────────────────────────
+    // Resize a seat to whatever resolution its Moonlight client asks for.
+    //
+    // Apollo's own dd_resolution_option = auto cannot do this: a seat streams its RDP session
+    // surface, nothing inside the session can resize it (issue #15), and Apollo logs
+    // "[1610] failed to set display mode!". Only mstsc sets that size, so following the client
+    // means reconnecting the session — which preserves the Windows session and everything
+    // running in it, but does briefly interrupt an active stream.
+    //
+    // Off by default for that reason, and because the trigger (a client connecting) could not
+    // be exercised on the reference host, which is headless and has never had a Moonlight
+    // client attached. The resize path itself IS verified: 1280x720 -> 1920x1080 on a live
+    // seat, session id preserved.
+    public bool FollowClientResolution { get; set; } = false;
+
     // Enable Windows Advanced Color (HDR) on virtual displays at seat creation.
     // Requires SudoVDA driver v0.5+ with HDR EDID support.
     // When enabled, Apollo will stream in HDR if the Moonlight client also supports it.
