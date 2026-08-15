@@ -49,6 +49,7 @@ public sealed class SeatManager
     private readonly InputHookManager _inputHookManager;
     private readonly HidHideConfigurator _hidHide;
     private readonly OnConnectAppLauncher _onConnectApps;
+    private readonly Monitoring.ApolloServerQuery _serverQuery;
     private readonly IEnumerable<IEmulatorConfigSeeder> _emulatorSeeders;
 
     public SeatManager(
@@ -68,6 +69,7 @@ public sealed class SeatManager
         InputHookManager inputHookManager,
         HidHideConfigurator hidHide,
         OnConnectAppLauncher onConnectApps,
+        Monitoring.ApolloServerQuery serverQuery,
         IEnumerable<IEmulatorConfigSeeder> emulatorSeeders)
     {
         _logger = logger;
@@ -86,6 +88,7 @@ public sealed class SeatManager
         _inputHookManager = inputHookManager;
         _hidHide = hidHide;
         _onConnectApps = onConnectApps;
+        _serverQuery = serverQuery;
         _emulatorSeeders = emulatorSeeders;
     }
 
@@ -477,15 +480,29 @@ public sealed class SeatManager
 
     /// <summary>
     /// Get the live status of each subsystem for a seat.
+    ///
+    /// Async because it asks the seat's Apollo whether it actually answers, rather than only
+    /// whether its process exists — the two differ exactly when a seat is broken in the way a
+    /// user notices. Only queried when the process is alive and the seat has a port, so a torn
+    /// down or provisioning seat costs nothing.
     /// </summary>
-    public SeatServices GetSeatServices(Guid seatId)
+    public async Task<SeatServices> GetSeatServicesAsync(Guid seatId, CancellationToken ct = default)
     {
         var seat = GetSeat(seatId);
         if (seat is null) return new SeatServices();
 
+        var apolloAlive = seat.ApolloProcessId > 0 && _apolloManager.IsAlive(seatId);
+
+        Monitoring.ApolloServerInfo? server = null;
+        if (apolloAlive && seat.PortBase > 0)
+            server = await _serverQuery.QueryAsync(
+                seat.PortBase + Shared.Constants.OffsetGfeHttp, ct);
+
         return new SeatServices
         {
-            Apollo = seat.ApolloProcessId > 0 && _apolloManager.IsAlive(seatId),
+            Apollo = apolloAlive,
+            ApolloReachable = server is not null,
+            ApolloStreaming = server?.Streaming ?? false,
             ApolloRestarts = _apolloManager.GetRestartCount(seatId),
             Display = !string.IsNullOrEmpty(seat.DisplayDevicePath),
             // PerSession: the endpoint is created by Windows with the session itself, so there

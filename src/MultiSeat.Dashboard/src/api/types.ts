@@ -168,7 +168,14 @@ export interface ApiAuthStatus {
 // ── Per-seat service status ───────────────────────────────────────
 
 export interface SeatServices {
+  // The Apollo PROCESS is alive.
   apollo: boolean;
+  // Apollo ANSWERED a serverinfo query on the seat's port, i.e. a Moonlight client could
+  // actually reach it. Distinct from `apollo` on purpose: a process can be up and not serving
+  // (starting, wedged, wrong port), and only this answers "is the seat usable right now?".
+  apolloReachable: boolean;
+  // Apollo reports a client actively streaming on this seat.
+  apolloStreaming: boolean;
   apolloRestarts: number;
   display: boolean;
   audio: boolean;

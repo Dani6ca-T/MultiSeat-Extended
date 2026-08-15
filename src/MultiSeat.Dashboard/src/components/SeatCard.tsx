@@ -348,6 +348,22 @@ export function SeatCard({ seat, onUpdate }: Props) {
                     </>
                   }
                 />
+                {/* Separate from the process row on purpose: a live process that is not
+                    answering is the failure a user actually notices, and it would look
+                    healthy if reachability were folded into the Apollo light. */}
+                <ServiceRow
+                  name="Apollo API"
+                  active={services.apolloReachable}
+                  detail={
+                    services.apolloReachable
+                      ? services.apolloStreaming
+                        ? "streaming"
+                        : `answering on ${seat.portBase}`
+                      : services.apollo
+                        ? "process up, not answering"
+                        : "not running"
+                  }
+                />
                 <ServiceRow
                   name="Display"
                   active={services.display}

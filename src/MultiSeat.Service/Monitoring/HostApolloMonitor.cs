@@ -22,20 +22,20 @@ namespace MultiSeat.Service.Monitoring;
 public sealed partial class HostApolloMonitor
 {
     private readonly MultiSeatOptions _options;
+    private readonly ApolloServerQuery _serverQuery;
     private readonly ILogger<HostApolloMonitor> _logger;
-    private readonly HttpClient _http;
 
     /// <summary>Apollo's default <c>port</c> when its config does not say otherwise.</summary>
     private const int DefaultApolloPort = 47989;
 
-    public HostApolloMonitor(IOptions<MultiSeatOptions> options, ILogger<HostApolloMonitor> logger)
+    public HostApolloMonitor(
+        IOptions<MultiSeatOptions> options,
+        ApolloServerQuery serverQuery,
+        ILogger<HostApolloMonitor> logger)
     {
         _options = options.Value;
+        _serverQuery = serverQuery;
         _logger = logger;
-
-        // Short timeout on purpose: this runs behind a dashboard poll, and a hung local query
-        // must not stall the page. An unreachable Apollo is a legitimate answer, not an error.
-        _http = new HttpClient { Timeout = TimeSpan.FromSeconds(3) };
     }
 
     public async Task<HostApolloInfo> CollectAsync(CancellationToken ct = default)
@@ -157,42 +157,20 @@ public sealed partial class HostApolloMonitor
     /// </summary>
     private async Task QueryServerInfoAsync(HostApolloInfo info, int port, CancellationToken ct)
     {
-        try
-        {
-            var url = $"http://127.0.0.1:{port}/serverinfo?uniqueid=multiseat-dashboard";
-            var xml = await _http.GetStringAsync(url, ct);
-
-            info.Reachable = true;
-            info.HostName = Tag(xml, "hostname");
-            info.AppVersion = Tag(xml, "appversion");
-
-            // state is SUNSHINE_SERVER_FREE when idle; currentgame is 0 when nothing is running.
-            var state = Tag(xml, "state");
-            var currentGame = Tag(xml, "currentgame");
-            info.Streaming =
-                (state is not null && !state.EndsWith("FREE", StringComparison.OrdinalIgnoreCase))
-                || (currentGame is not null && currentGame != "0");
-
-            info.Paired = Tag(xml, "PairStatus") == "1";
-        }
-        catch (OperationCanceledException) when (ct.IsCancellationRequested)
-        {
-            throw;
-        }
-        catch (Exception ex)
+        var server = await _serverQuery.QueryAsync(port, ct);
+        if (server is null)
         {
             info.Note =
                 $"Apollo is running (PID {info.ProcessId}) but did not answer on port {port}. " +
                 "It may still be starting, or be configured on a different port.";
-            _logger.LogDebug(ex, "Standalone Apollo serverinfo query failed on port {Port}", port);
+            return;
         }
-    }
 
-    private static string? Tag(string xml, string tag)
-    {
-        var m = Regex.Match(xml, $"<{Regex.Escape(tag)}>(.*?)</{Regex.Escape(tag)}>",
-            RegexOptions.IgnoreCase | RegexOptions.Singleline);
-        return m.Success ? m.Groups[1].Value.Trim() : null;
+        info.Reachable = true;
+        info.HostName = server.HostName;
+        info.AppVersion = server.AppVersion;
+        info.Streaming = server.Streaming;
+        info.Paired = server.Paired;
     }
 
     /// <summary>ApolloService state, or null when the service is not installed.</summary>

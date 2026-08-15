@@ -5,7 +5,20 @@ namespace MultiSeat.Shared.Models;
 /// </summary>
 public sealed class SeatServices
 {
+    /// <summary>The Apollo process for this seat is alive.</summary>
     public bool Apollo { get; set; }
+
+    /// <summary>
+    /// Apollo answered a serverinfo query on the seat's port — i.e. a Moonlight client could
+    /// actually reach it. Distinct from <see cref="Apollo"/> on purpose: a process can be alive
+    /// and still not serving (starting up, wedged, or listening somewhere unexpected), and only
+    /// this one answers "is my seat usable right now?".
+    /// </summary>
+    public bool ApolloReachable { get; set; }
+
+    /// <summary>Apollo reports a client actively streaming on this seat.</summary>
+    public bool ApolloStreaming { get; set; }
+
     public int ApolloRestarts { get; set; }
     public bool Display { get; set; }
     public bool Audio { get; set; }

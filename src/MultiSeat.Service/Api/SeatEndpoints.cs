@@ -65,11 +65,11 @@ public static class SeatEndpoints
 
         // ── Per-seat service management ────────────────────────────────
 
-        group.MapGet("/{id:guid}/services", (Guid id, SeatManager mgr) =>
+        group.MapGet("/{id:guid}/services", async (Guid id, SeatManager mgr, CancellationToken ct) =>
         {
             if (mgr.GetSeat(id) is null)
                 return Results.NotFound();
-            return Results.Ok(mgr.GetSeatServices(id));
+            return Results.Ok(await mgr.GetSeatServicesAsync(id, ct));
         });
 
         group.MapPost("/{id:guid}/apollo/stop", (Guid id, SeatManager mgr) =>
