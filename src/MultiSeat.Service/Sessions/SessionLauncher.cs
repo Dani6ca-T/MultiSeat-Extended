@@ -50,6 +50,20 @@ public sealed class SessionLauncher
     // DisconnectSession() kills mstsc, sending the session back to Disconnected.
     private readonly ConcurrentDictionary<int, Process?> _pendingMstsc = new();
 
+    /// <summary>
+    /// Serializes "write Default.rdp, then launch mstsc against it".
+    ///
+    /// There is exactly one Default.rdp and it must stay that way — an explicit .rdp argument
+    /// triggers the unsuppressible security warning (see <see cref="RdpFileBuilder"/>) — but its
+    /// contents are now per-seat, since it carries that seat's geometry. Two seats provisioning
+    /// at once could otherwise interleave write/launch and hand a seat the other's resolution,
+    /// which would look exactly like the bug this geometry work exists to fix.
+    ///
+    /// Held until the session exists, i.e. until mstsc has certainly read the file. Seat
+    /// provisioning is sequential today, so in practice this costs nothing.
+    /// </summary>
+    private readonly SemaphoreSlim _rdpFileGate = new(1, 1);
+
     // RDP loopback address — use 127.0.0.2 to avoid conflicts with 127.0.0.1/localhost
     private const string RdpLoopbackAddress = "127.0.0.2";
 
@@ -76,7 +90,14 @@ public sealed class SessionLauncher
     /// processes have finished initializing. Until then an mstsc window is
     /// minimized on the console desktop.
     /// </summary>
-    public async Task<int> LaunchSessionAsync(string accountName, CancellationToken ct)
+    /// <param name="geometry">
+    /// Desktop size for the session, or null to let mstsc choose (which means inheriting the
+    /// console desktop's size). Only honoured when a session is CREATED — reconnecting to an
+    /// existing session cannot resize it, so a caller changing resolution must log the session
+    /// off first. See <see cref="RdpGeometry"/>.
+    /// </param>
+    public async Task<int> LaunchSessionAsync(
+        string accountName, CancellationToken ct, RdpGeometry? geometry = null)
     {
         var password = _accounts.GetCredential(accountName)
             ?? throw new InvalidOperationException(
@@ -120,7 +141,7 @@ public sealed class SessionLauncher
                     "Account {Account} has DISCONNECTED session {Sid} — reconnecting via mstsc",
                     accountName, existingSessionId);
 
-                await ReconnectSessionAsync(existingSessionId, accountName, password, ct);
+                await ReconnectSessionAsync(existingSessionId, accountName, password, geometry, ct);
 
                 // ReconnectSessionAsync logs a warning but doesn't throw when the session
                 // stays Disconnected (e.g. on cold boot where SYSTEM running mstsc can't
@@ -163,7 +184,7 @@ public sealed class SessionLauncher
         // No session yet (or stale session was logged off) — create one via RDP loopback.
         _logger.LogInformation("Creating background session for {Account}", accountName);
 
-        var sessionId = await CreateSessionViaRdpLoopbackAsync(accountName, password, ct);
+        var sessionId = await CreateSessionViaRdpLoopbackAsync(accountName, password, geometry, ct);
 
         if (sessionId < 0)
             throw new InvalidOperationException(
@@ -445,7 +466,7 @@ public sealed class SessionLauncher
     /// DisconnectSession() once processes have finished initializing.
     /// </summary>
     private async Task<int> CreateSessionViaRdpLoopbackAsync(
-        string accountName, string password, CancellationToken ct)
+        string accountName, string password, RdpGeometry? geometry, CancellationToken ct)
     {
         var consoleSessionId = Kernel32.WTSGetActiveConsoleSessionId();
         if (consoleSessionId == 0xFFFFFFFF)
@@ -461,6 +482,10 @@ public sealed class SessionLauncher
         var machineName = Environment.MachineName;
         var credTarget = $"TERMSRV/{RdpLoopbackAddress}";
         Process? mstscProcess = null;
+
+        // Default.rdp is shared but its contents are per-seat — hold the gate across
+        // write-then-launch so a concurrent provision cannot hand this seat another's geometry.
+        await _rdpFileGate.WaitAsync(ct);
 
         try
         {
@@ -483,7 +508,7 @@ public sealed class SessionLauncher
             // mstsc treats Default.rdp as a trusted user settings file — no "unknown
             // publisher" security warning. Passing an explicit unsigned .rdp file as an
             // argument is what triggers that dialog; using Default.rdp avoids it entirely.
-            EnsureDefaultRdp(primaryConsoleToken, consoleSessionId);
+            EnsureDefaultRdp(primaryConsoleToken, consoleSessionId, geometry);
 
             // Step 3: Launch mstsc.exe targeting loopback (no file argument)
             _logger.LogInformation("Launching mstsc to {Addr} for {Account}...",
@@ -536,6 +561,11 @@ public sealed class SessionLauncher
         }
         finally
         {
+            // Released here rather than right after the launch: mstsc reads Default.rdp at an
+            // unobservable moment during startup, so the only safe release point is after the
+            // session it produced exists.
+            _rdpFileGate.Release();
+
             // Always clean up stored credentials
             try
             {
@@ -559,8 +589,15 @@ public sealed class SessionLauncher
     /// to ACTIVE state. The session ID is unchanged — mstsc reconnects to it.
     /// Stores mstsc in _pendingMstsc; caller must call DisconnectSession().
     /// </summary>
+    /// <remarks>
+    /// <paramref name="geometry"/> is written into Default.rdp for consistency but does NOT
+    /// resize the session: reconnecting attaches to a desktop that already exists at its
+    /// original size. Changing a live seat's resolution means logging the session off and
+    /// creating a new one.
+    /// </remarks>
     private async Task ReconnectSessionAsync(
-        int sessionId, string accountName, string password, CancellationToken ct)
+        int sessionId, string accountName, string password, RdpGeometry? geometry,
+        CancellationToken ct)
     {
         var consoleSessionId = Kernel32.WTSGetActiveConsoleSessionId();
         if (consoleSessionId == 0xFFFFFFFF)
@@ -571,6 +608,9 @@ public sealed class SessionLauncher
 
         var credTarget = $"TERMSRV/{RdpLoopbackAddress}";
         Process? mstscProcess = null;
+
+        // Same shared-file gate as the create path — this also writes Default.rdp then launches.
+        await _rdpFileGate.WaitAsync(ct);
 
         try
         {
@@ -583,7 +623,7 @@ public sealed class SessionLauncher
                     "cmdkey exited with code {Code} during reconnect for {Account}",
                     cmdkeyExit, accountName);
 
-            EnsureDefaultRdp(primaryToken, consoleSessionId);
+            EnsureDefaultRdp(primaryToken, consoleSessionId, geometry);
             mstscProcess = LaunchMstscInConsoleSession(primaryToken, consoleSessionId);
             DismissMstscSecurityDialog(consoleSessionId, mstscProcess.Id);
 
@@ -617,6 +657,8 @@ public sealed class SessionLauncher
         }
         finally
         {
+            _rdpFileGate.Release();
+
             try
             {
                 RunInConsoleSession(primaryToken, consoleSessionId,
@@ -1140,48 +1182,13 @@ public sealed class SessionLauncher
     /// SYSTEM writing directly to the path would bypass the redirect and land in the wrong
     /// location; running as the user lets GetFolderPath('MyDocuments') return the right path.
     /// </summary>
-    private void EnsureDefaultRdp(SafeTokenHandle consoleToken, uint consoleSessionId)
+    private void EnsureDefaultRdp(
+        SafeTokenHandle consoleToken, uint consoleSessionId, RdpGeometry? geometry)
     {
-        // audiomode decides where the seat's audio is rendered, and it is the single switch
-        // that separates the two AudioModes:
-        //
-        //   i:1 (SharedHost) — play audio on the remote computer (host). Makes host audio
-        //     devices (VB-CABLE, VoiceMeeter) visible inside the session via WASAPI so Apollo
-        //     can loopback-capture a named virtual_sink. Side effect, and the reason
-        //     PerSession exists: seats then share the host's audio subsystem, suspending the
-        //     console's playback and leaking seat audio to the host's speakers (#10, #12).
-        //
-        //   i:0 (PerSession) — redirect to the client. Windows creates a PRIVATE "Remote Audio"
-        //     render endpoint inside this session and makes it the session default; Apollo,
-        //     running in-session, loopback-captures it. Host devices are invisible here — which
-        //     is the point, not a limitation. The redirected stream still arrives at the
-        //     console-side mstsc, so MuteMstscAudio is what keeps it off the host's speakers.
-        //
-        // NOTE (both modes): do NOT add audiocapturemode:i:1 here — it triggers a Windows
-        // mic-access security dialog that DismissMstscSecurityDialog cannot catch, hanging the
-        // RDP connection. Mic under SharedHost is handled via the VAC pair instead; PerSession
-        // has no mic path at all (see AudioMode.PerSession).
-        var audioMode = _options.AudioMode == AudioMode.PerSession ? 0 : 1;
-
-        var content =
-            "authentication level:i:0\r\n" +
-            "prompt for credentials:i:0\r\n" +
-            $"audiomode:i:{audioMode}\r\n" +
-            // The mstsc window is hidden — RDP stream quality has zero user-visible impact.
-            // These settings minimize TermService encoding CPU on the host:
-            //   session bpp:i:8      → 8-bit color (256 colors): 1/4 the pixel data vs 32-bit
-            //   connection type:i:1  → modem quality: simplest RDP compression algorithm,
-            //                          suppresses RemoteFX/H.264 RDP codec entirely
-            //   disable wallpaper    → solid black background on the RDP display: nothing to encode
-            //   disable themes/anims → no Aero rendering overhead on the RDP virtual display
-            "session bpp:i:8\r\n" +
-            "connection type:i:1\r\n" +
-            "disable wallpaper:i:1\r\n" +
-            "disable full window drag:i:1\r\n" +
-            "disable menu anims:i:1\r\n" +
-            "disable themes:i:1\r\n" +
-            "allow font smoothing:i:0\r\n" +
-            "allow desktop composition:i:0\r\n";
+        // Content (including why each key is there) lives in RdpFileBuilder — it is a pure
+        // function of the audio mode and the geometry, so it can be asserted in tests rather
+        // than only observed on a live host.
+        var content = RdpFileBuilder.Build(_options.AudioMode, geometry);
 
         // Stage the file content in ProgramData where SYSTEM always has write access.
         const string stagingPath = @"C:\ProgramData\MultiSeat\default_rdp_staging.rdp";
@@ -1212,8 +1219,10 @@ public sealed class SessionLauncher
             if (exit == 0)
                 _logger.LogInformation(
                     "Default.rdp written to console user's shell Documents folder " +
-                    "(audiomode:i:{AudioMode} — {Mode})",
-                    audioMode, _options.AudioMode);
+                    "(audio {Mode}, geometry {Geometry})",
+                    _options.AudioMode,
+                    geometry is null ? "unset — session inherits the console desktop size"
+                                     : $"{geometry.Width}x{geometry.Height} @ {geometry.ScaleFactor}%");
             else
                 _logger.LogWarning(
                     "PowerShell exited with code {Code} writing Default.rdp — " +

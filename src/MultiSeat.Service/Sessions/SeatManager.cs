@@ -139,8 +139,13 @@ public sealed class SeatManager
             }
 
             // ── 2. Launch background session ──────────────────────────
+            // Pass the seat's resolution as the RDP geometry. The seat streams its RDP session
+            // surface (there is no in-seat virtual display — issue #15), and that surface's size
+            // is set by mstsc at connect time and cannot be changed from inside the session. So
+            // this is what makes the dashboard resolution actually take effect; without it the
+            // session inherits whatever size mstsc picks, which tracks the console desktop.
             seat.SessionId = await _sessionLauncher.LaunchSessionAsync(
-                seat.AccountName, ct);
+                seat.AccountName, ct, RdpGeometry.ForClient(seat.Width, seat.Height));
             _logger.LogInformation("Seat {Id}: Windows session {Sid}", seat.Id, seat.SessionId);
 
             seat.Status = SeatStatus.Configuring;
