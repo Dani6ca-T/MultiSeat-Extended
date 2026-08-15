@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Microsoft.AspNetCore.Mvc;
 using MultiSeat.Service.Configuration;
 using MultiSeat.Service.Sessions;
@@ -239,6 +240,49 @@ public static class SeatEndpoints
                 catch (InvalidOperationException ex)
                 {
                     return Results.BadRequest(new { error = ex.Message });
+                }
+            });
+
+        // Diagnostic: what advanced colour (HDR) does this seat's session advertise, and what is
+        // actually active? Answers whether the RdpIdd target inside a seat is HDR-capable at all
+        // — the premise the terminal-session HDR work in issue #15 rests on. Runs the probe
+        // inside the seat's own session, because display APIs see nothing from Session 0.
+        group.MapGet("/{id:guid}/diagnostics/advanced-color",
+            async (Guid id, SeatManager mgr, SessionLauncher launcher, CancellationToken ct) =>
+            {
+                var seat = mgr.GetSeat(id);
+                if (seat is null) return Results.NotFound();
+                if (seat.SessionId < 0)
+                    return Results.BadRequest(new { error = "Seat has no session." });
+
+                // ProgramData rather than %TEMP%: the helper runs as the seat user and the
+                // service reads the result back as SYSTEM.
+                var outFile = Path.Combine(
+                    @"C:\ProgramData\MultiSeat", $"ms_advcolor_{Guid.NewGuid():N}.json");
+                var exe = Path.Combine(AppContext.BaseDirectory, "MultiSeat.Service.exe");
+
+                try
+                {
+                    launcher.RunHelperInSeatSession(
+                        seat.SessionId, seat.AccountName, $"\"{exe}\" --advanced-color \"{outFile}\"");
+
+                    // Fire-and-forget launch, so wait for the artefact rather than an exit code.
+                    for (var i = 0; i < 40 && !File.Exists(outFile); i++)
+                        await Task.Delay(200, ct);
+
+                    if (!File.Exists(outFile))
+                        return Results.Problem("The probe did not produce a result in the seat session.");
+
+                    using var doc = JsonDocument.Parse(await File.ReadAllTextAsync(outFile, ct));
+                    return Results.Ok(doc.RootElement.Clone());
+                }
+                catch (Exception ex)
+                {
+                    return Results.Problem(ex.Message);
+                }
+                finally
+                {
+                    try { File.Delete(outFile); } catch { /* best effort */ }
                 }
             });
 

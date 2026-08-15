@@ -196,6 +196,41 @@ internal static class User32
     public static extern uint DisplayConfigGetDeviceInfo(
         ref DisplayConfigSourceDeviceName deviceName);
 
+    // ── Advanced Color (HDR) ─────────────────────────────────────────
+    // DISPLAYCONFIG_GET_ADVANCED_COLOR_INFO. Distinguishes what a target ADVERTISES from what
+    // is actually ACTIVE, which is the whole question when asking whether a session could do
+    // HDR: a target can report advanced colour supported while the source stays 8-bit SDR.
+    public const uint DISPLAYCONFIG_DEVICE_INFO_GET_ADVANCED_COLOR_INFO = 9;
+
+    [StructLayout(LayoutKind.Sequential)]
+    public struct DisplayConfigGetAdvancedColorInfo
+    {
+        public DisplayConfigDeviceInfoHeader header;
+
+        /// <summary>
+        /// Bitfield:
+        ///   0 advancedColorSupported     — the target can do advanced colour (HDR-capable)
+        ///   1 advancedColorEnabled       — advanced colour is currently ON
+        ///   2 wideColorEnforced
+        ///   3 advancedColorForceDisabled — policy/user turned it off
+        /// </summary>
+        public uint value;
+
+        /// <summary>DISPLAYCONFIG_COLOR_ENCODING — 0 RGB, 1 YCbCr444, 2 YCbCr422, 3 YCbCr420, 4 Intensity.</summary>
+        public uint colorEncoding;
+
+        public uint bitsPerColorChannel;
+
+        public bool AdvancedColorSupported => (value & 0x1) != 0;
+        public bool AdvancedColorEnabled => (value & 0x2) != 0;
+        public bool WideColorEnforced => (value & 0x4) != 0;
+        public bool AdvancedColorForceDisabled => (value & 0x8) != 0;
+    }
+
+    [DllImport(Lib, SetLastError = false)]
+    public static extern uint DisplayConfigGetDeviceInfo(
+        ref DisplayConfigGetAdvancedColorInfo colorInfo);
+
     // ── ChangeDisplaySettingsEx ──────────────────────────────────────
     // Used to set the refresh rate and resolution of a virtual display.
     // Works from Session 0 against GDI device names (e.g. \\.\DISPLAY5).

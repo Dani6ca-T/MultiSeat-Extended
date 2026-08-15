@@ -127,6 +127,16 @@ if (args.Length == 2 && args[0] == "--enum-displays")
     return MultiSeat.Service.Display.DisplayEnumeratorHelper.RunAndWriteToFile(args[1]);
 }
 
+// ── Advanced-colour (HDR) probe ───────────────────────────────────────
+// Reports, per display target, what the session ADVERTISES as HDR-capable versus what is
+// actually ACTIVE. Session-scoped like every display API, so run it inside the session being
+// asked about — Session 0 sees no displays at all.
+// Usage: MultiSeat.Service.exe --advanced-color <output-json-file>
+if (args.Length == 2 && args[0] == "--advanced-color")
+{
+    return MultiSeat.Service.Display.AdvancedColorHelper.RunAndWriteToFile(args[1]);
+}
+
 // ── Set-default-capture helper mode ──────────────────────────────────
 // Sets the Windows default audio capture (microphone) device for the current session.
 // Usage: MultiSeat.Service.exe --set-default-capture <deviceId>
