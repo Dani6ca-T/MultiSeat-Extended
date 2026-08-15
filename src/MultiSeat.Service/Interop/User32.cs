@@ -333,4 +333,18 @@ internal static class User32
 
     [DllImport(Lib)]
     public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
+
+    [DllImport(Lib)]
+    public static extern bool IsWindowVisible(IntPtr hWnd);
+
+    /// <summary>True when the window is minimized — i.e. already off-screen.</summary>
+    [DllImport(Lib)]
+    public static extern bool IsIconic(IntPtr hWnd);
+
+    /// <summary>
+    /// Window class name. Used to tell mstsc's RDP client window (which covers the screen and
+    /// must stay hidden) from its dialogs (which must NOT be hidden — see WindowHideHelper).
+    /// </summary>
+    [DllImport(Lib, CharSet = CharSet.Unicode, SetLastError = true)]
+    public static extern int GetClassName(IntPtr hWnd, System.Text.StringBuilder lpClassName, int nMaxCount);
 }

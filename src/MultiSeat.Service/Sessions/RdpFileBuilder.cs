@@ -115,13 +115,23 @@ public static class RdpFileBuilder
         // mstsc WINDOW. That window is hidden and minimized here, so leaving either on lets a
         // window we deliberately never show dictate the resolution a player streams at. Off,
         // desktopwidth/desktopheight are authoritative and the surface is deterministic.
+        // screen mode id:i:1 (windowed) is REQUIRED, and it was measured, not assumed. Full
+        // screen — mstsc's default when the key is absent — sizes the session from the local
+        // monitor and ignores desktopwidth/desktopheight entirely: with the key removed and
+        // 1280x720 requested, the seat came up 1920x1080, the console's size. That is the very
+        // mechanism this fix exists to defeat.
+        //
+        // The cost is that mstsc now has a real window it can show on the console desktop, where
+        // it covers the screen of whoever is using the host. It is not enough to hide it once
+        // after connecting: mstsc re-shows it later. SessionLauncher therefore starts a resident
+        // watcher (--hide-windows <pid> -1) that keeps it hidden for the process's lifetime.
         content +=
             $"desktopwidth:i:{geometry.Width}\r\n" +
             $"desktopheight:i:{geometry.Height}\r\n" +
             $"desktopscalefactor:i:{geometry.ScaleFactor}\r\n" +
             "smart sizing:i:0\r\n" +
             "dynamic resolution:i:0\r\n" +
-            "screen mode id:i:1\r\n"; // windowed — full screen would force the console's size back in
+            "screen mode id:i:1\r\n";
 
         return content;
     }

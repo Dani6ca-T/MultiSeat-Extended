@@ -549,6 +549,7 @@ public sealed class SessionLauncher
             // the RDP session which freezes Moonlight. Hidden = no throttling.
             await Task.Delay(500, ct); // brief wait for mstsc to create its window
             HideProcessWindows(primaryConsoleToken, consoleSessionId, mstscProcess.Id);
+            StartWindowHideWatcher(primaryConsoleToken, consoleSessionId, mstscProcess.Id);
             MuteMstscAudio(primaryConsoleToken, consoleSessionId, mstscProcess.Id);
 
             _pendingMstsc[sessionId] = mstscProcess;
@@ -650,6 +651,7 @@ public sealed class SessionLauncher
 
             await Task.Delay(500, ct);
             HideProcessWindows(primaryToken, consoleSessionId, mstscProcess.Id);
+            StartWindowHideWatcher(primaryToken, consoleSessionId, mstscProcess.Id);
             MuteMstscAudio(primaryToken, consoleSessionId, mstscProcess.Id);
 
             _pendingMstsc[sessionId] = mstscProcess;
@@ -1568,6 +1570,45 @@ public sealed class SessionLauncher
     /// `MultiSeat.Service.exe --audio-peaks` in the console session — the mstsc APP line must
     /// read 0.000000 while a seat is playing audio.
     /// </summary>
+    /// <summary>
+    /// Start a resident watcher that keeps mstsc's RDP client window hidden for as long as the
+    /// process lives.
+    ///
+    /// Hiding once after the session connects is not enough. mstsc re-shows that window later —
+    /// on connect, on reconnect, and when the session's resolution changes — and because the
+    /// window is now a real one (screen mode id:i:1 is required for the seat's geometry to
+    /// apply at all), it lands on top of whatever the console user is doing. The natural
+    /// response, closing it, disconnects the seat.
+    ///
+    /// Same shape as <see cref="MuteMstscAudio"/>'s watcher, and narrow by design: it only
+    /// touches the RDP client window class, never dialogs, so it cannot hide the security prompt
+    /// out from under the dismisser.
+    /// </summary>
+    private void StartWindowHideWatcher(
+        SafeTokenHandle consoleToken, uint consoleSessionId, int mstscPid)
+    {
+        try
+        {
+            var exePath = Path.Combine(AppContext.BaseDirectory, "MultiSeat.Service.exe");
+
+            RunInConsoleSession(consoleToken, consoleSessionId,
+                $"\"{exePath}\" --hide-windows {mstscPid} -1",
+                waitForExit: false);
+
+            _logger.LogInformation(
+                "Window-hide watcher started for mstsc PID {Pid} — keeps its RDP window hidden " +
+                "for the process's lifetime so it cannot appear on the console user's screen",
+                mstscPid);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex,
+                "Failed to start window-hide watcher for mstsc PID {Pid} — its window may become " +
+                "visible on the console desktop. Closing that window would disconnect the seat.",
+                mstscPid);
+        }
+    }
+
     private void MuteMstscAudio(SafeTokenHandle consoleToken, uint consoleSessionId, int mstscPid)
     {
         var perSession = _options.AudioMode == AudioMode.PerSession;

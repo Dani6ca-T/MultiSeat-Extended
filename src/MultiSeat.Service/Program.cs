@@ -92,6 +92,17 @@ if (args.Length == 2 && args[0] == "--hide-windows" && int.TryParse(args[1], out
     return WindowHideHelper.HideByPid(pidToHide) ? 0 : 1;
 }
 
+// With a duration, stays resident and keeps the RDP client window hidden instead of hiding
+// once: mstsc re-shows that window on connect, on reconnect, and when the session resolution
+// changes, and a single hide leaves it covering the console user's screen (where closing it —
+// the obvious response — disconnects the seat).
+// Usage: MultiSeat.Service.exe --hide-windows <pid> <seconds | -1 for the process's lifetime>
+if (args.Length == 3 && args[0] == "--hide-windows"
+    && int.TryParse(args[1], out var pidToWatch) && int.TryParse(args[2], out var hideSeconds))
+{
+    return WindowHideHelper.WatchAndHide(pidToWatch, hideSeconds) ? 0 : 1;
+}
+
 // ── Enum-displays helper mode ─────────────────────────────────────────
 // Launched inside the console session via CreateProcessAsUser so that
 // QueryDisplayConfig sees the real display topology (Session 0 has no displays).
