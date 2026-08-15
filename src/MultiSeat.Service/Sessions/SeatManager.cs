@@ -332,9 +332,16 @@ public sealed class SeatManager
                 }
                 else
                 {
-                    _logger.LogWarning(
-                        "Seat {Id}: SudoVDA display not found in Apollo log — " +
-                        "streaming will capture primary monitor instead of virtual display",
+                    // Not a fault, and deliberately not a warning. Apollo does not create the
+                    // seat's virtual display at startup — it creates it when a client connects
+                    // and launches an app — so there is nothing to find at provisioning time on
+                    // ANY host. TryLateDisplayDetectionAsync retries from the health-check tick
+                    // and applies isolation if it ever appears. The old text here claimed the
+                    // seat would "capture the primary monitor instead", which read as a broken
+                    // install and cost issue #15's reporter two days of driver debugging.
+                    _logger.LogDebug(
+                        "Seat {Id}: no virtual display in the Apollo log yet — expected at this " +
+                        "point; Apollo creates one on client connect and the health check retries",
                         seat.Id);
                 }
             }
@@ -549,22 +556,6 @@ public sealed class SeatManager
     }
 
     /// <summary>
-    /// Make SudoVDA the session primary, shrink the RDP virtual display to 640×480,
-    /// and clamp SudoVDA's refresh rate to seat.Fps. Runs inside the seat's RDP session
-    /// via the --setup-display-isolation and --set-display-hz helper modes.
-    ///
-    /// This state does not survive a session disconnect (sleep/wake) or an Apollo restart,
-    /// so this method is called from every code path that (re)starts Apollo:
-    ///   - Initial provisioning (after the SudoVDA-output restart).
-    ///   - User-triggered RestartApolloAsync.
-    ///   - SessionHealthCheck after sleep-reconnect or crash auto-restart.
-    ///
-    /// Without re-applying after a wake event, SudoVDA stops being primary and the
-    /// stream falls back to the Microsoft Remote Display Adapter at its default
-    /// 1024×768 — even though Apollo logs request 1920×1080.
-    /// Both steps are best-effort; failures are logged and ignored.
-    /// </summary>
-    /// <summary>
     /// Second chance at finding the seat's SudoVDA display, run from the health-check tick.
     ///
     /// Provisioning looks for the display ~5s after Apollo starts, but Apollo does not create
@@ -630,6 +621,22 @@ public sealed class SeatManager
         return true;
     }
 
+    /// <summary>
+    /// Make SudoVDA the session primary, shrink the RDP virtual display to 640×480,
+    /// and clamp SudoVDA's refresh rate to seat.Fps. Runs inside the seat's RDP session
+    /// via the --setup-display-isolation and --set-display-hz helper modes.
+    ///
+    /// This state does not survive a session disconnect (sleep/wake) or an Apollo restart,
+    /// so this method is called from every code path that (re)starts Apollo:
+    ///   - Initial provisioning (after the SudoVDA-output restart).
+    ///   - User-triggered RestartApolloAsync.
+    ///   - SessionHealthCheck after sleep-reconnect or crash auto-restart.
+    ///
+    /// Without re-applying after a wake event, SudoVDA stops being primary and the
+    /// stream falls back to the Microsoft Remote Display Adapter at its default
+    /// 1024×768 — even though Apollo logs request 1920×1080.
+    /// Both steps are best-effort; failures are logged and ignored.
+    /// </summary>
     public async Task ApplyDisplayIsolationAsync(SeatInfo seat, CancellationToken ct)
     {
         var helperExe = Path.Combine(AppContext.BaseDirectory, "MultiSeat.Service.exe");

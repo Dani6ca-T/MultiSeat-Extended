@@ -9,7 +9,18 @@
 | **Windows Server** | Not officially tested |
 | **Architecture** | x64 only |
 
-> Windows 11 24H2 is recommended because it ships with the RdpIdd virtual display driver improvements that MultiSeat relies on for stable per-session display allocation.
+> **A seat does not get its own virtual display on any Windows version.** Windows does not let a
+> virtual display created in the console session join an RDP session's topology: the monitor is
+> created, attaches to the *console* desktop, and the seat enumerates zero SudoVDA entries. Seats
+> therefore capture the RDP session surface. This is normal architecture, not a broken install —
+> measured and reported in [issue #15](https://github.com/vibesoftwarecoder/MultiSeat/issues/15).
+>
+> Two consequences worth knowing before you file a bug:
+>
+> - **HDR cannot work for a seat** (`EnableHdr`). The RDP surface has no EDID, so Apollo reports
+>   `HDR Not Supported` regardless of the setting or the GPU.
+> - **Seat resolution** is the RDP session's, which only `mstsc` sets at connect time — it cannot be
+>   changed from inside the session afterwards.
 
 ---
 
