@@ -27,6 +27,110 @@ internal static class WindowHideHelper
     private const string RdpClientWindowClass = "TscShellContainerClass";
 
     /// <summary>
+    /// Watch for an mstsc that starts AFTER this call and keep its RDP client window hidden.
+    ///
+    /// Exists because starting the watcher with a PID is inherently too late. mstsc creates its
+    /// window hidden and then shows it itself about 300ms after launch, while spawning this
+    /// helper (CreateProcessAsUser plus .NET startup) takes longer than that — so a PID-based
+    /// watcher always arrives after the window is already on screen, measured at about a second
+    /// of full-size window on the console user's display. Started BEFORE mstsc, the helper is
+    /// already polling when that window appears and hides it within one poll interval.
+    ///
+    /// Processes already running are recorded as a baseline and never touched, so an mstsc the
+    /// user started for their own remote desktop is left alone.
+    /// </summary>
+    /// <param name="processName">Process to watch for, without extension (i.e. "mstsc").</param>
+    /// <param name="startedAfterUtc">
+    /// Only processes started after this instant are touched. The caller stamps it immediately
+    /// before launching mstsc.
+    ///
+    /// This is a timestamp rather than "processes running when I started" for a reason: taking
+    /// that snapshot here loses a race it cannot win. The helper is spawned before mstsc, but its
+    /// own runtime takes a few hundred milliseconds to boot, by which time mstsc already exists —
+    /// so it lands in the snapshot, is treated as pre-existing, and is ignored for the rest of the
+    /// seat's life. Measured exactly that way: the watcher ran, adopted nothing, and the window
+    /// stayed on screen until an unrelated one-shot hid it seconds later.
+    /// </param>
+    /// <param name="adoptTimeoutSeconds">
+    /// How long to wait for that new process to appear before giving up. Once one is adopted the
+    /// helper runs until it exits, however long that is.
+    /// </param>
+    public static bool WatchAndHideNew(string processName, DateTime startedAfterUtc, int adoptTimeoutSeconds)
+    {
+        var adopted = new HashSet<int>();
+        var adoptDeadline = DateTime.UtcNow.AddSeconds(adoptTimeoutSeconds);
+        var hidden = 0;
+
+        Console.Out.WriteLine(
+            $"[WindowHide] Watching for a {processName} started after {startedAfterUtc:HH:mm:ss.fff}Z");
+
+        while (true)
+        {
+            var current = CurrentPids(processName);
+
+            foreach (var pid in current)
+            {
+                if (!StartedAfter(pid, startedAfterUtc)) continue;
+
+                if (adopted.Add(pid))
+                    Console.Out.WriteLine($"[WindowHide] Adopted new {processName} PID {pid}");
+
+                foreach (var hWnd in FindVisibleClientWindows((uint)pid))
+                {
+                    User32.ShowWindow(hWnd, Kernel32.SW_HIDE);
+                    hidden++;
+                    Console.Out.WriteLine(
+                        $"[WindowHide] Hid a visible {RdpClientWindowClass} window for PID {pid} (total {hidden})");
+                }
+            }
+
+            // Done once everything we adopted has exited...
+            if (adopted.Count > 0 && !adopted.Any(current.Contains)) break;
+            // ...or if nothing ever showed up.
+            if (adopted.Count == 0 && DateTime.UtcNow > adoptDeadline)
+            {
+                Console.Out.WriteLine($"[WindowHide] No new {processName} appeared within {adoptTimeoutSeconds}s");
+                break;
+            }
+
+            Thread.Sleep(100);
+        }
+
+        Console.Out.WriteLine($"[WindowHide] Stopped watching after hiding {hidden} window(s)");
+        return true;
+    }
+
+    private static HashSet<int> CurrentPids(string processName)
+    {
+        try
+        {
+            return Process.GetProcessesByName(processName).Select(p => p.Id).ToHashSet();
+        }
+        catch
+        {
+            return [];
+        }
+    }
+
+    /// <summary>
+    /// True when the process began after the given instant. Anything older is someone else's —
+    /// an mstsc the user opened themselves must never be hidden.
+    /// </summary>
+    private static bool StartedAfter(int pid, DateTime startedAfterUtc)
+    {
+        try
+        {
+            using var p = Process.GetProcessById(pid);
+            return p.StartTime.ToUniversalTime() >= startedAfterUtc;
+        }
+        catch
+        {
+            // Exited, or start time unreadable — either way, not ours to touch.
+            return false;
+        }
+    }
+
+    /// <summary>
     /// Keep the RDP client window hidden for as long as the process lives (or for a bounded
     /// number of seconds).
     ///
@@ -75,7 +179,9 @@ internal static class WindowHideHelper
                     $"[WindowHide] Hid a visible {RdpClientWindowClass} window for PID {pid} (total {hidden})");
             }
 
-            Thread.Sleep(250);
+            // 100ms rather than 250: this is racing mstsc showing its own window, and every
+            // poll interval is time that window spends on someone's screen.
+            Thread.Sleep(100);
         }
 
         Console.Out.WriteLine($"[WindowHide] Stopped watching PID {pid} after hiding {hidden} window(s)");

@@ -489,6 +489,14 @@ public sealed class SessionLauncher
 
         try
         {
+            // Step 0: Start the window hider first of all, so it is fully booted and polling
+            // before mstsc exists. Spawning it immediately before mstsc is not enough — the
+            // helper takes a few hundred ms to start, and mstsc shows its window ~300ms in, so
+            // the first poll can land just after the window is already on screen (measured: one
+            // provision in three still flashed for ~850ms). The steps below take a second or
+            // more, which is free head start.
+            StartWindowHideWatcher(primaryConsoleToken, consoleSessionId);
+
             // Step 1: Store credentials via cmdkey
             _logger.LogDebug("Storing RDP credentials for {Account} (target: {Cred})...",
                 accountName, credTarget);
@@ -548,8 +556,10 @@ public sealed class SessionLauncher
             // Hide the mstsc window — a minimized mstsc causes Windows to throttle
             // the RDP session which freezes Moonlight. Hidden = no throttling.
             await Task.Delay(500, ct); // brief wait for mstsc to create its window
+            // Belt and braces: the watcher (started at launch) handles the RDP window; this
+            // one-shot also clears anything else mstsc left on screen now that the connection
+            // is up and no dialog is pending.
             HideProcessWindows(primaryConsoleToken, consoleSessionId, mstscProcess.Id);
-            StartWindowHideWatcher(primaryConsoleToken, consoleSessionId, mstscProcess.Id);
             MuteMstscAudio(primaryConsoleToken, consoleSessionId, mstscProcess.Id);
 
             _pendingMstsc[sessionId] = mstscProcess;
@@ -624,6 +634,7 @@ public sealed class SessionLauncher
                     "cmdkey exited with code {Code} during reconnect for {Account}",
                     cmdkeyExit, accountName);
 
+            StartWindowHideWatcher(primaryToken, consoleSessionId);   // first — needs a head start
             EnsureDefaultRdp(primaryToken, consoleSessionId, geometry);
             mstscProcess = LaunchMstscInConsoleSession(primaryToken, consoleSessionId);
             DismissMstscSecurityDialog(consoleSessionId, mstscProcess.Id);
@@ -651,7 +662,6 @@ public sealed class SessionLauncher
 
             await Task.Delay(500, ct);
             HideProcessWindows(primaryToken, consoleSessionId, mstscProcess.Id);
-            StartWindowHideWatcher(primaryToken, consoleSessionId, mstscProcess.Id);
             MuteMstscAudio(primaryToken, consoleSessionId, mstscProcess.Id);
 
             _pendingMstsc[sessionId] = mstscProcess;
@@ -918,15 +928,22 @@ public sealed class SessionLauncher
             else
             {
                 // No virtual display found (EnumDisplayMonitors is not accessible from
-                // Session 0 / SYSTEM service). Start mstsc minimized so it doesn't
-                // appear on the main monitor. Security dialog pop-ups are separate
-                // top-level windows that the --click-dialog helper still finds by title
-                // even when mstsc is minimized. HideProcessWindows() removes the taskbar
-                // entry after the session connects.
+                // Session 0 / SYSTEM service), so there is nowhere off-screen to put the
+                // window. Start it HIDDEN rather than minimized.
+                //
+                // Minimized is not good enough: measured, mstsc shows the window itself when
+                // the connection comes up, roughly 440ms after launch, and it lands full-size
+                // on the console user's display for about a second before anything can hide it
+                // — the window-hide watcher is a separate process and cannot start that fast.
+                // Closing that window (the natural response) disconnects the seat.
+                //
+                // Hidden is also the state this window ends up in anyway, and the one that does
+                // NOT make Windows throttle the RDP session the way minimized does. Security
+                // dialogs are separate top-level windows, so the dismisser still finds them.
                 startX = 0; startY = 0; startW = 0; startH = 0;
-                showCmd = (uint)Kernel32.SW_SHOWMINNOACTIVE;
+                showCmd = (uint)Kernel32.SW_HIDE;
                 _logger.LogInformation(
-                    "No secondary monitor found — mstsc will start minimized.");
+                    "No secondary monitor found — mstsc will start hidden.");
             }
 
             var si = new Kernel32.StartupInfo
@@ -1249,10 +1266,25 @@ public sealed class SessionLauncher
     /// session. This works on all Windows versions including Windows 11 where the
     /// dialog is rendered in WinUI/XAML and EnumChildWindows cannot find buttons.
     /// AppActivate targets the dialog by its fixed title "Remote Desktop Connection".
-    /// Polls for up to 12 s (60 × 200 ms) waiting for the dialog to appear.
+    ///
+    /// Runs only at mstsc launch and exits the moment it clicks, so it costs one
+    /// short-lived process per seat rather than anything resident. It is a FALLBACK:
+    /// <see cref="TrustRdpLoopbackServer"/> writes a permanent HKCU trust entry, which is
+    /// what stops the dialog appearing at all. In practice this fires on the first
+    /// connection after the .rdp settings change and then never again.
+    ///
+    /// It must outlive the connect attempt. Polling for a fixed 12 s while
+    /// SessionConnectTimeoutMs was 15 s left a 3 s hole in which a late dialog went
+    /// unclicked, provisioning timed out, and the log blamed "session did not appear" —
+    /// pointing at RDP Wrapper rather than at a dialog nobody answered.
     /// </summary>
     private void DismissMstscSecurityDialog(uint consoleSessionId, int mstscPid)
     {
+        // Outlast the connect attempt, with a margin for the dialog appearing right at the
+        // deadline. Bounded either way: it stops as soon as it clicks.
+        var pollMs = 200;
+        var attempts = Math.Max(60, (_options.SessionConnectTimeoutMs + 5000) / pollMs);
+
         _ = Task.Run(() =>
         {
             try
@@ -1262,13 +1294,13 @@ public sealed class SessionLauncher
                 // SendKeys injects Enter regardless of Win32 vs WinUI rendering.
                 // Single quotes used throughout to avoid nested-quote issues in
                 // the powershell.exe -Command "..." wrapper.
-                const string ps =
+                var ps =
                     "$w=New-Object -ComObject WScript.Shell;" +
-                    "for($i=0;$i-lt60;$i++){" +
+                    $"for($i=0;$i-lt{attempts};$i++){{" +
                     "if($w.AppActivate('Remote Desktop Connection')){" +
                     "Start-Sleep -Milliseconds 300;" +
                     "$w.SendKeys('{ENTER}');exit 0};" +
-                    "Start-Sleep -Milliseconds 200};exit 1";
+                    $"Start-Sleep -Milliseconds {pollMs}}};exit 1";
                 var result = RunInConsoleSession(token, consoleSessionId,
                     $"powershell.exe -NoProfile -NonInteractive -Command \"{ps}\"",
                     waitForExit: true);
@@ -1584,28 +1616,34 @@ public sealed class SessionLauncher
     /// touches the RDP client window class, never dialogs, so it cannot hide the security prompt
     /// out from under the dismisser.
     /// </summary>
-    private void StartWindowHideWatcher(
-        SafeTokenHandle consoleToken, uint consoleSessionId, int mstscPid)
+    private void StartWindowHideWatcher(SafeTokenHandle consoleToken, uint consoleSessionId)
     {
         try
         {
             var exePath = Path.Combine(AppContext.BaseDirectory, "MultiSeat.Service.exe");
 
+            // Wait for mstsc long enough to cover a slow connect, then follow it for its lifetime.
+            var adoptSeconds = Math.Max(30, (_options.SessionConnectTimeoutMs / 1000) + 15);
+
+            // Stamp the cutoff HERE, before mstsc exists. The helper cannot sample it itself: by
+            // the time its runtime is up, mstsc is already running and would look pre-existing.
+            // A second of slack absorbs clock granularity between the two processes.
+            var startedAfter = DateTime.UtcNow.AddSeconds(-1);
+
             RunInConsoleSession(consoleToken, consoleSessionId,
-                $"\"{exePath}\" --hide-windows {mstscPid} -1",
+                $"\"{exePath}\" --hide-windows-new {startedAfter.Ticks} {adoptSeconds}",
                 waitForExit: false);
 
             _logger.LogInformation(
-                "Window-hide watcher started for mstsc PID {Pid} — keeps its RDP window hidden " +
-                "for the process's lifetime so it cannot appear on the console user's screen",
-                mstscPid);
+                "Window-hide watcher started — it will adopt the mstsc launched next and keep its " +
+                "RDP window hidden for that process's lifetime, so it cannot appear on the console " +
+                "user's screen (closing that window would disconnect the seat)");
         }
         catch (Exception ex)
         {
             _logger.LogWarning(ex,
-                "Failed to start window-hide watcher for mstsc PID {Pid} — its window may become " +
-                "visible on the console desktop. Closing that window would disconnect the seat.",
-                mstscPid);
+                "Failed to start window-hide watcher — mstsc's window may become visible on the " +
+                "console desktop. Closing that window would disconnect the seat.");
         }
     }
 

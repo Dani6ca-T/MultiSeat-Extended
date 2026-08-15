@@ -103,6 +103,21 @@ if (args.Length == 3 && args[0] == "--hide-windows"
     return WindowHideHelper.WatchAndHide(pidToWatch, hideSeconds) ? 0 : 1;
 }
 
+// Started BEFORE mstsc, because starting after it is too late: mstsc shows its own window
+// ~300ms in, faster than this helper can be spawned, so a PID-based watcher only ever catches
+// a window that has already been on screen for about a second. Baselines the mstsc processes
+// that already exist and only touches ones that appear afterwards.
+// The timestamp is passed in rather than sampled here on purpose: this process takes a few
+// hundred ms to boot, so anything it samples itself already includes the mstsc it is meant to
+// adopt, and it would ignore it for the whole seat's life.
+// Usage: MultiSeat.Service.exe --hide-windows-new <utcTicks> <seconds to wait for it to appear>
+if (args.Length == 3 && args[0] == "--hide-windows-new"
+    && long.TryParse(args[1], out var afterTicks) && int.TryParse(args[2], out var adoptSeconds))
+{
+    var startedAfter = new DateTime(afterTicks, DateTimeKind.Utc);
+    return WindowHideHelper.WatchAndHideNew("mstsc", startedAfter, adoptSeconds) ? 0 : 1;
+}
+
 // ── Enum-displays helper mode ─────────────────────────────────────────
 // Launched inside the console session via CreateProcessAsUser so that
 // QueryDisplayConfig sees the real display topology (Session 0 has no displays).
