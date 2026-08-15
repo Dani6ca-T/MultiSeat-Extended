@@ -26,18 +26,51 @@ public sealed class RdpWrapper
     ///   2. termsrv.dll is loaded and patched
     ///   3. Windows build is recognized by the wrapper config
     /// </summary>
+    /// <summary>
+    /// How long to let TermService finish starting before judging it stopped. Long enough to
+    /// cover a cold boot, short enough not to stall service startup on a host where it really
+    /// is disabled.
+    /// </summary>
+    private static readonly TimeSpan TermServiceStartTimeout = TimeSpan.FromSeconds(15);
+
+    /// <summary>
+    /// Poll a service until it reports Running, or the timeout expires. Returns false without
+    /// waiting the full timeout if the service is Disabled — that will never become Running.
+    /// </summary>
+    private static bool WaitForRunning(System.ServiceProcess.ServiceController sc, TimeSpan timeout)
+    {
+        var deadline = DateTime.UtcNow + timeout;
+
+        while (true)
+        {
+            sc.Refresh();
+            if (sc.Status == System.ServiceProcess.ServiceControllerStatus.Running) return true;
+            if (sc.StartType == System.ServiceProcess.ServiceStartMode.Disabled) return false;
+            if (DateTime.UtcNow >= deadline) return false;
+
+            Thread.Sleep(500);
+        }
+    }
+
     public bool EnsureMultiSession()
     {
         var build = Environment.OSVersion.Version.Build;
         _logger.LogInformation("Windows build: {Build}", build);
 
-        // Check if TermService is running
+        // Check if TermService is running.
+        //
+        // Give it a moment first. MultiSeat is an auto-start service, so on a cold boot it can
+        // reach this line while TermService is still in StartPending — which used to produce
+        // "TermService is not running" and "patch not detected" in the same second, on a host
+        // where multi-session was working fine seconds later (issue #15).
         try
         {
             using var sc = new System.ServiceProcess.ServiceController("TermService");
-            if (sc.Status != System.ServiceProcess.ServiceControllerStatus.Running)
+            if (!WaitForRunning(sc, TermServiceStartTimeout))
             {
-                _logger.LogError("TermService is not running");
+                _logger.LogError(
+                    "TermService is {Status} after waiting {Seconds}s — multi-session cannot work",
+                    sc.Status, TermServiceStartTimeout.TotalSeconds);
                 return false;
             }
         }
@@ -61,13 +94,23 @@ public sealed class RdpWrapper
         if (File.Exists(wrapperDllSys32))
         {
             wrapperDll = wrapperDllSys32;
-            iniPath = Path.Combine(
+
+            // Set only when present — an absent ini means "nothing to validate", not "invalid".
+            var classicIni = Path.Combine(
                 Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles),
                 "RDP Wrapper", "rdpwrap.ini");
+            if (File.Exists(classicIni)) iniPath = classicIni;
         }
         else
         {
-            // Check the ServiceDll registry key
+            // Check the ServiceDll registry key.
+            //
+            // Do NOT require the literal string "rdpwrap" here. RDP Wrapper is not the only
+            // patch that works this way — TermWrap (llccd/TermWrap) points ServiceDll at its
+            // own DLL too, and issue #15's reporter had this reporting "patch not detected"
+            // while three sessions were demonstrably running under it. What actually matters
+            // is that TermService has been redirected away from the stock termsrv.dll, so
+            // test for that instead and let the name be whatever it is.
             try
             {
                 using var key = Microsoft.Win32.Registry.LocalMachine.OpenSubKey(
@@ -76,11 +119,18 @@ public sealed class RdpWrapper
                 if (!string.IsNullOrEmpty(svcDll))
                 {
                     var expanded = Environment.ExpandEnvironmentVariables(svcDll);
-                    if (expanded.Contains("rdpwrap", StringComparison.OrdinalIgnoreCase)
-                        && File.Exists(expanded))
+                    var isStockTermsrv = string.Equals(
+                        Path.GetFileName(expanded), "termsrv.dll", StringComparison.OrdinalIgnoreCase);
+
+                    if (!isStockTermsrv && File.Exists(expanded))
                     {
                         wrapperDll = expanded;
-                        iniPath = Path.Combine(Path.GetDirectoryName(expanded)!, "rdpwrap.ini");
+
+                        // Only RDP Wrapper is keyed by an offsets ini. If a sibling rdpwrap.ini
+                        // is absent the patch is something else (e.g. TermWrap, which finds its
+                        // offsets by disassembling termsrv), and there is nothing to validate.
+                        var sibling = Path.Combine(Path.GetDirectoryName(expanded)!, "rdpwrap.ini");
+                        if (File.Exists(sibling)) iniPath = sibling;
                     }
                 }
             }
@@ -93,17 +143,20 @@ public sealed class RdpWrapper
         if (wrapperDll == null)
         {
             _logger.LogWarning(
-                "rdpwrap.dll not found in System32 or via TermService ServiceDll. " +
-                "RDP Wrapper is not installed. Run prerequisites\\install-prerequisites.ps1.");
+                "No multi-session patch found — no rdpwrap.dll in System32, and TermService's " +
+                "ServiceDll still points at the stock termsrv.dll. Run " +
+                "prerequisites\\install-prerequisites.ps1 to install RDP Wrapper.");
             return false;
         }
 
-        _logger.LogInformation("RDP Wrapper detected at {Path}", wrapperDll);
+        _logger.LogInformation("Multi-session patch detected at {Path}", wrapperDll);
 
-        if (iniPath != null && File.Exists(iniPath))
+        if (iniPath != null)
             return ValidateIniForTermsrv(iniPath);
 
-        _logger.LogInformation("rdpwrap.ini not found — assuming wrapper is active");
+        _logger.LogInformation(
+            "No rdpwrap.ini alongside {Path} — patch is not ini-keyed (e.g. TermWrap), " +
+            "nothing to validate", wrapperDll);
         return true;
     }
 
