@@ -248,7 +248,7 @@ public static class SeatEndpoints
         // — the premise the terminal-session HDR work in issue #15 rests on. Runs the probe
         // inside the seat's own session, because display APIs see nothing from Session 0.
         group.MapGet("/{id:guid}/diagnostics/advanced-color",
-            async (Guid id, SeatManager mgr, SessionLauncher launcher, CancellationToken ct) =>
+            async (Guid id, bool? enable, SeatManager mgr, SessionLauncher launcher, CancellationToken ct) =>
             {
                 var seat = mgr.GetSeat(id);
                 if (seat is null) return Results.NotFound();
@@ -263,8 +263,11 @@ public static class SeatEndpoints
 
                 try
                 {
+                    // ?enable=true asks Windows to turn Advanced Color on before re-reading, which
+                    // distinguishes "Windows refused" from "nobody ever asked".
+                    var arg = enable == true ? " enable" : "";
                     launcher.RunHelperInSeatSession(
-                        seat.SessionId, seat.AccountName, $"\"{exe}\" --advanced-color \"{outFile}\"");
+                        seat.SessionId, seat.AccountName, $"\"{exe}\" --advanced-color \"{outFile}\"{arg}");
 
                     // Fire-and-forget launch, so wait for the artefact rather than an exit code.
                     for (var i = 0; i < 40 && !File.Exists(outFile); i++)

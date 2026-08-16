@@ -343,7 +343,11 @@ internal static class User32
     // Enables Windows Advanced Color (HDR) on a specific display target.
     // Requires the adapterId + targetId from QueryDisplayConfig.
 
-    public const uint DISPLAYCONFIG_DEVICE_INFO_SET_ADVANCED_COLOR_STATE = 14;
+    // 10 per DISPLAYCONFIG_DEVICE_INFO_TYPE (…GET_ADVANCED_COLOR_INFO = 9, SET = 10).
+    // This was 14 — wrong, and it had never been caught because nothing called it. A wrong
+    // request type makes DisplayConfigSetDeviceInfo return 87 (ERROR_INVALID_PARAMETER), which
+    // reads exactly like "Windows refused the request" and is not.
+    public const uint DISPLAYCONFIG_DEVICE_INFO_SET_ADVANCED_COLOR_STATE = 10;
 
     [StructLayout(LayoutKind.Sequential)]
     public struct DisplayConfigSetAdvancedColorState

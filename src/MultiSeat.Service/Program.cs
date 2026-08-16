@@ -131,10 +131,13 @@ if (args.Length == 2 && args[0] == "--enum-displays")
 // Reports, per display target, what the session ADVERTISES as HDR-capable versus what is
 // actually ACTIVE. Session-scoped like every display API, so run it inside the session being
 // asked about — Session 0 sees no displays at all.
-// Usage: MultiSeat.Service.exe --advanced-color <output-json-file>
-if (args.Length == 2 && args[0] == "--advanced-color")
+// Pass "enable" to first ASK Windows to turn Advanced Color on for the active targets and then
+// re-read — the difference between "we asked and it refused" and "we never asked".
+// Usage: MultiSeat.Service.exe --advanced-color <output-json-file> [enable]
+if (args.Length >= 2 && args[0] == "--advanced-color")
 {
-    return MultiSeat.Service.Display.AdvancedColorHelper.RunAndWriteToFile(args[1]);
+    var tryEnable = args.Length >= 3 && args[2].Equals("enable", StringComparison.OrdinalIgnoreCase);
+    return MultiSeat.Service.Display.AdvancedColorHelper.RunAndWriteToFile(args[1], tryEnable);
 }
 
 // ── Set-default-capture helper mode ──────────────────────────────────

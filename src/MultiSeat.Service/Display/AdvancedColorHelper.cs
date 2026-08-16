@@ -22,10 +22,71 @@ namespace MultiSeat.Service.Display;
 /// </summary>
 internal static class AdvancedColorHelper
 {
-    public static int RunAndWriteToFile(string outputPath)
+    /// <summary>
+    /// Ask Windows to turn Advanced Color ON for every ACTIVE target, then report what actually
+    /// happened.
+    ///
+    /// Per Nonary on issue #15 this is expected to be insufficient by itself — the target flips
+    /// nothing because the VidPN SOURCE mode stays SDR — but "we asked and Windows refused" is a
+    /// materially different claim from "we never asked", and until now nobody had asked: the
+    /// SetAdvancedColorState interop existed in User32 with no callers at all, so the old
+    /// EnableHdr option never invoked it.
+    /// </summary>
+    /// <summary>
+    /// Return code from SetAdvancedColorState per target id, kept so the RESULT of asking is
+    /// reported and not just the state afterwards. "Windows refused" and "Windows accepted and
+    /// changed nothing" are different findings, and the helper's stdout goes nowhere when it is
+    /// launched into a session with CreateProcessAsUser.
+    /// </summary>
+    private static readonly Dictionary<uint, uint> SetResults = [];
+
+    private static void TryEnableOnActiveTargets()
+    {
+        var ret = User32.GetDisplayConfigBufferSizes(
+            User32.QDC_ALL_PATHS, out var numPaths, out var numModes);
+        if (ret != User32.ERROR_SUCCESS) return;
+
+        var paths = new User32.DisplayConfigPathInfo[numPaths];
+        var modes = new User32.DisplayConfigModeInfo[numModes];
+        if (User32.QueryDisplayConfig(User32.QDC_ALL_PATHS, ref numPaths, paths,
+                ref numModes, modes, IntPtr.Zero) != User32.ERROR_SUCCESS)
+            return;
+
+        foreach (var path in paths.Take((int)numPaths))
+        {
+            if ((path.flags & User32.DISPLAYCONFIG_PATH_ACTIVE) == 0) continue;
+
+            var set = new User32.DisplayConfigSetAdvancedColorState
+            {
+                header = new User32.DisplayConfigDeviceInfoHeader
+                {
+                    type = User32.DISPLAYCONFIG_DEVICE_INFO_SET_ADVANCED_COLOR_STATE,
+                    size = (uint)Marshal.SizeOf<User32.DisplayConfigSetAdvancedColorState>(),
+                    adapterId = path.targetInfo.adapterId,
+                    id = path.targetInfo.id,
+                },
+                value = 1, // bit 0 = enable
+            };
+
+            var rc = User32.DisplayConfigSetDeviceInfo(ref set);
+            SetResults[path.targetInfo.id] = rc;
+            Console.Out.WriteLine(
+                $"[AdvancedColor] SetAdvancedColorState(target {path.targetInfo.id}) returned {rc}" +
+                (rc == User32.ERROR_SUCCESS ? " (success)" : " (failed)"));
+        }
+    }
+
+    public static int RunAndWriteToFile(string outputPath, bool tryEnable = false)
     {
         try
         {
+            if (tryEnable)
+            {
+                Console.Out.WriteLine("[AdvancedColor] Asking Windows to enable Advanced Color on active targets...");
+                TryEnableOnActiveTargets();
+                Thread.Sleep(1500); // let any mode change settle before re-reading
+            }
+
             var records = Enumerate();
             File.WriteAllText(outputPath,
                 JsonSerializer.Serialize(records, new JsonSerializerOptions { WriteIndented = true }));
@@ -113,7 +174,10 @@ internal static class AdvancedColorHelper
                 AdvancedColorForceDisabled: color.AdvancedColorForceDisabled,
                 BitsPerColorChannel: color.bitsPerColorChannel,
                 ColorEncoding: color.colorEncoding,
-                TargetId: path.targetInfo.id));
+                TargetId: path.targetInfo.id,
+                SetAdvancedColorResult: SetResults.TryGetValue(path.targetInfo.id, out var sr)
+                    ? sr
+                    : null));
         }
 
         return results;
@@ -135,4 +199,9 @@ internal record AdvancedColorRecord(
     bool AdvancedColorForceDisabled,
     uint BitsPerColorChannel,
     uint ColorEncoding,
-    uint TargetId);
+    uint TargetId,
+    /// <summary>
+    /// Win32 return of SetAdvancedColorState when an enable was attempted for this target
+    /// (0 = ERROR_SUCCESS), or null when no attempt was made.
+    /// </summary>
+    uint? SetAdvancedColorResult = null);
