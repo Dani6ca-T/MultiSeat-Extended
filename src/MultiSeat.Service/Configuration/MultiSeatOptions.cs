@@ -67,11 +67,23 @@ public sealed class MultiSeatOptions
     // Requires SudoVDA driver v0.5+ with HDR EDID support.
     // When enabled, Apollo will stream in HDR if the Moonlight client also supports it.
     //
-    // ⚠️ This cannot currently work for a SEAT, on any Windows version. A seat never gets its
-    // own virtual display — Windows does not let a console-created virtual display join an RDP
-    // session's topology (issue #15) — so the seat captures the RDP session surface, which has
-    // no EDID and reports "HDR Not Supported" regardless of this setting. Left in place because
-    // it costs nothing and becomes meaningful the moment a seat can own a display.
+    // ⚠️ Currently a NO-OP for a seat — nothing reads this to enable advanced colour, and no
+    // seat has ever streamed HDR.
+    //
+    // An earlier version of this comment said HDR was impossible for a seat because the RDP
+    // surface has no EDID. That was wrong, and measuring it is what showed so: inside a live seat
+    // the active RDP target reports advancedColorSupported = TRUE with advancedColorEnabled =
+    // false at 8 bits per channel. The capability is advertised; what does not follow is the
+    // VidPN SOURCE mode, which stays SDR.
+    //
+    // Nonary (Vibepollo/Vibeshine) demonstrated HDR working inside a terminal session by forcing
+    // Windows to rebuild that source mode — an FP16 shared-displayable primary, then
+    // D3DKMTSetVidPnSourceOwner and D3DKMTSetDisplayMode with PreserveVidPn=FALSE — all user
+    // mode. See issue #15. MultiSeat does not implement that yet, which is why this flag does
+    // nothing rather than why HDR is impossible.
+    //
+    // To check a host: GET /api/seats/{id}/diagnostics/advanced-color, or run
+    // MultiSeat.Service.exe --advanced-color <file> inside the session.
     public bool EnableHdr { get; set; } = false;
 
     // ── Controller emulation ─────────────────────────────────────────

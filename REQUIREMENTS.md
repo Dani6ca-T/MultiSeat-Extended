@@ -17,8 +17,15 @@
 >
 > Two consequences worth knowing before you file a bug:
 >
-> - **HDR cannot work for a seat** (`EnableHdr`). The RDP surface has no EDID, so Apollo reports
->   `HDR Not Supported` regardless of the setting or the GPU.
+> - **HDR does not work for a seat today** (`EnableHdr` has no effect) — but not for the reason
+>   this used to give. Measured on a live seat: the RDP surface *advertises* advanced colour
+>   (`advancedColorSupported = true`) while it sits inactive at 8 bits per channel. So "the RDP
+>   surface has no EDID" was wrong; the capability is advertised. The blocker is that the VidPN
+>   **source** mode stays SDR. Nonary demonstrated HDR working inside a terminal session by
+>   forcing Windows to rebuild that source mode
+>   ([issue #15](https://github.com/vibesoftwarecoder/MultiSeat/issues/15)); MultiSeat does not do
+>   that yet. Check any host with
+>   `GET /api/seats/{id}/diagnostics/advanced-color`.
 > - **Seat resolution** is the RDP session's, which only `mstsc` sets at connect time — it cannot be
 >   changed from inside the session afterwards.
 
