@@ -74,6 +74,20 @@ internal static partial class NetApi
         int totalentries);
 
     [DllImport(Lib, CharSet = CharSet.Unicode, SetLastError = true)]
+    public static extern int NetLocalGroupDelMembers(
+        string? servername,
+        string groupname,
+        int level,
+        ref LocalGroupMembersInfo3 buf,
+        int totalentries);
+
+    /// <summary>ERROR_MEMBER_NOT_IN_ALIAS — removing a member that was not in the group.</summary>
+    public const int ERROR_MEMBER_NOT_IN_ALIAS = 1377;
+
+    /// <summary>ERROR_MEMBER_IN_ALIAS — adding a member that is already in the group.</summary>
+    public const int ERROR_MEMBER_IN_ALIAS = 1378;
+
+    [DllImport(Lib, CharSet = CharSet.Unicode, SetLastError = true)]
     public static extern int NetUserGetInfo(
         string? servername,
         string username,

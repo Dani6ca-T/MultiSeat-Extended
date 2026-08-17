@@ -40,6 +40,33 @@ public sealed class MultiSeatOptions
     /// </summary>
     public bool ApiBindLoopbackOnly { get; set; } = false;
 
+    // ── Seat account privileges ──────────────────────────────────────
+    /// <summary>
+    /// Put seat accounts in the local Administrators group. Default false.
+    ///
+    /// MultiSeat used to do this unconditionally, justified by a comment saying SudoVDA IPC
+    /// requires admin. That is not true, and both halves were checked before changing it:
+    ///
+    ///   - Apollo's SudoVDA client (third-party/sudovda/sudovda.h) opens the device with a plain
+    ///     CreateFileA for GENERIC_READ | GENERIC_WRITE. There is no admin or elevation check
+    ///     anywhere in it.
+    ///   - The driver's own INF ships the device SDDL
+    ///     D:P(A;;GA;;;SY)(A;;GA;;;BA)(A;;GRGW;;;WD) — Everyone is granted exactly the
+    ///     GENERIC_READ | GENERIC_WRITE the client asks for.
+    ///
+    /// Confirmed by experiment rather than by reading: a throwaway account in Users only, not in
+    /// Administrators, opened the SudoVDA interface successfully (last error 0).
+    ///
+    /// Seats therefore get Users + Remote Desktop Users instead. The Remote Desktop Users part is
+    /// not optional — administrators are implicitly allowed to log on over RDP, so an account that
+    /// loses admin without gaining that membership cannot start a session at all.
+    ///
+    /// Turn this on only if something in a specific setup genuinely needs it (an installer or a
+    /// game that demands elevation inside the seat). It hands every seat full control of the host,
+    /// including the ability to reach the credential store, which is the point of keeping it off.
+    /// </summary>
+    public bool GrantSeatAdministrator { get; set; } = false;
+
     // ── Audio ────────────────────────────────────────────────────────
     // How seat game audio reaches Moonlight. See AudioMode for the trade-off.
     // Default SharedHost — the historical behaviour; PerSession drops mic support.

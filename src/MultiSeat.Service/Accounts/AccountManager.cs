@@ -4,6 +4,8 @@ using System.Security.Cryptography;
 using System.Security.Principal;
 using System.Text;
 using System.Text.Json;
+using Microsoft.Extensions.Options;
+using MultiSeat.Service.Configuration;
 using MultiSeat.Service.Interop;
 using MultiSeat.Shared;
 using MultiSeat.Shared.Models;
@@ -45,11 +47,49 @@ public sealed class AccountManager
     /// <summary>Scope tag written by the current format — DPAPI CurrentUser, i.e. SYSTEM.</summary>
     private const string ScopeTagUser = "user";
 
-    public AccountManager(ILogger<AccountManager> logger)
+    private readonly bool _grantAdministrator;
+
+    // Builtin group names are LOCALISED — "Users" is "Usuarios" on a Spanish Windows and
+    // "Benutzer" on a German one — but NetLocalGroupAddMembers takes a name, not a SID. So the
+    // names are resolved from well-known SIDs at startup. The previous code passed the English
+    // literals, which silently did nothing outside an English install: the add fails, a warning is
+    // logged, and the account is left out of the group.
+    private static readonly string UsersGroup =
+        ResolveLocalGroupName(WellKnownSidType.BuiltinUsersSid, Constants.AccountGroup);
+
+    private static readonly string RemoteDesktopUsersGroup =
+        ResolveLocalGroupName(WellKnownSidType.BuiltinRemoteDesktopUsersSid, "Remote Desktop Users");
+
+    private static readonly string AdministratorsGroup =
+        ResolveLocalGroupName(WellKnownSidType.BuiltinAdministratorsSid, "Administrators");
+
+    public AccountManager(ILogger<AccountManager> logger, IOptions<MultiSeatOptions> options)
     {
         _logger = logger;
+        _grantAdministrator = options.Value.GrantSeatAdministrator;
         DiscoverExistingAccounts();
         LoadPersistedAccounts();
+    }
+
+    /// <summary>
+    /// Local name of a builtin group, resolved from its well-known SID so this works on a
+    /// non-English Windows. Falls back to the English literal if translation fails.
+    /// </summary>
+    internal static string ResolveLocalGroupName(WellKnownSidType wellKnown, string fallback)
+    {
+        try
+        {
+            var name = new SecurityIdentifier(wellKnown, null)
+                .Translate(typeof(NTAccount)).Value;
+
+            // Comes back as "BUILTIN\Users"; the Net* APIs want the bare group name.
+            var slash = name.IndexOf('\\');
+            return slash >= 0 ? name[(slash + 1)..] : name;
+        }
+        catch
+        {
+            return fallback;
+        }
     }
 
     public IReadOnlyCollection<AccountInfo> ListManagedAccounts() =>
@@ -95,9 +135,7 @@ public sealed class AccountManager
 
         _logger.LogInformation("Created Windows account: {User}", username);
 
-        // Add to Users group for interactive logon and Administrators for SudoVDA IPC
-        AddToGroup(username, Constants.AccountGroup);
-        AddToGroup(username, "Administrators");
+        ApplySeatGroupMembership(username);
 
         // Pre-create the user profile so the first RDP login doesn't stall
         // while Windows initializes the profile directory (can exceed the 15s timeout).
@@ -174,6 +212,72 @@ public sealed class AccountManager
         SavePersistedAccounts();
     }
 
+    /// <summary>
+    /// Put a seat account in the groups a seat actually needs, and take away the one it does not.
+    ///
+    /// A seat needs <c>Users</c> and <c>Remote Desktop Users</c>. The second is what makes the RDP
+    /// loopback logon work; it was never granted before because membership of Administrators
+    /// implies it, so removing admin without adding it would stop every seat from starting.
+    ///
+    /// It does NOT need Administrators. See <see cref="MultiSeatOptions.GrantSeatAdministrator"/>
+    /// for the evidence — the SudoVDA justification does not survive either reading the driver's
+    /// INF or trying it with a non-admin account.
+    ///
+    /// Idempotent, and called on provisioning as well as creation so a seat created by an older
+    /// build gets corrected rather than staying an administrator forever.
+    /// </summary>
+    public void ApplySeatGroupMembership(string username)
+    {
+        AddToGroup(username, UsersGroup);
+        AddToGroup(username, RemoteDesktopUsersGroup);
+
+        if (_grantAdministrator)
+        {
+            _logger.LogWarning(
+                "Seat account '{User}' is being added to {Group} because " +
+                "MultiSeat:GrantSeatAdministrator is enabled — the seat can control this host and " +
+                "read MultiSeat's own credential store.", username, AdministratorsGroup);
+            AddToGroup(username, AdministratorsGroup);
+            return;
+        }
+
+        // Only ever demote accounts MultiSeat created. A linked account is someone's real Windows
+        // login — quite possibly the operator's own — and stripping its privileges because it was
+        // pointed at a seat would be an unpleasant surprise.
+        if (_managedAccounts.TryGetValue(username, out var account) && !account.IsManaged)
+        {
+            _logger.LogDebug(
+                "Leaving group membership of linked account '{User}' alone — not MultiSeat-created.",
+                username);
+            return;
+        }
+
+        RemoveFromGroup(username, AdministratorsGroup);
+    }
+
+    /// <summary>
+    /// Bring every MultiSeat-created account's group membership in line with the current policy.
+    /// Called at service startup so an install upgraded from a build that made seats
+    /// administrators is corrected without waiting for the next provision.
+    /// </summary>
+    public void NormalizeManagedAccountPrivileges()
+    {
+        foreach (var account in _managedAccounts.Values.Where(a => a.IsManaged))
+        {
+            try
+            {
+                ApplySeatGroupMembership(account.Username);
+            }
+            catch (Exception ex)
+            {
+                // One bad account must not stop the service starting.
+                _logger.LogWarning(ex,
+                    "Could not normalise group membership for seat account '{User}'.",
+                    account.Username);
+            }
+        }
+    }
+
     private void AddToGroup(string username, string groupName)
     {
         var memberInfo = new NetApi.LocalGroupMembersInfo3
@@ -183,9 +287,35 @@ public sealed class AccountManager
 
         var result = NetApi.NetLocalGroupAddMembers(null, groupName, 3, ref memberInfo, 1);
 
-        if (result != NetApi.NERR_Success && result != 1378 /* already member */)
+        if (result != NetApi.NERR_Success && result != NetApi.ERROR_MEMBER_IN_ALIAS)
         {
             _logger.LogWarning("NetLocalGroupAddMembers({User} → {Group}) failed: {Err}",
+                username, groupName, result);
+        }
+    }
+
+    private void RemoveFromGroup(string username, string groupName)
+    {
+        var memberInfo = new NetApi.LocalGroupMembersInfo3
+        {
+            lgrmi3_domainandname = $"{Environment.MachineName}\\{username}"
+        };
+
+        var result = NetApi.NetLocalGroupDelMembers(null, groupName, 3, ref memberInfo, 1);
+
+        if (result == NetApi.NERR_Success)
+        {
+            // Worth an Information rather than a Debug: this is a privilege change to a Windows
+            // account, and it is the kind of thing someone reading the log after an upgrade should
+            // be able to find.
+            _logger.LogInformation(
+                "Removed seat account '{User}' from {Group} — seats do not need administrator " +
+                "rights (set MultiSeat:GrantSeatAdministrator if a specific setup does).",
+                username, groupName);
+        }
+        else if (result != NetApi.ERROR_MEMBER_NOT_IN_ALIAS)
+        {
+            _logger.LogWarning("NetLocalGroupDelMembers({User} → {Group}) failed: {Err}",
                 username, groupName, result);
         }
     }

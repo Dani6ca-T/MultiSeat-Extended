@@ -264,10 +264,17 @@ public sealed class SessionLauncher
     public SafeTokenHandle GetSessionToken(int sessionId, string accountName)
     {
         // Path 1: WTSQueryUserToken — fastest, uses existing session token.
-        // For admin users, WTSQueryUserToken returns a FILTERED (medium-integrity) token.
-        // SudoVDA IPC requires an ELEVATED token (admin integrity) to connect to the driver.
-        // We try to get the linked elevated token via TryGetLinkedElevatedToken.
-        // For standard (non-admin) users, no linked token exists and we use the filtered token.
+        // For admin users, WTSQueryUserToken returns a FILTERED (medium-integrity) token, so we
+        // ask for the linked elevated one; for standard users there is no linked token and the
+        // filtered token is used as-is. Both paths work.
+        //
+        // This used to say the elevated token was REQUIRED for SudoVDA IPC, and that claim is what
+        // justified making every seat account a local administrator. It is wrong. Apollo's SudoVDA
+        // client opens the device with a plain CreateFileA for GENERIC_READ | GENERIC_WRITE and
+        // checks nothing, and the driver's INF ships the SDDL
+        // D:P(A;;GA;;;SY)(A;;GA;;;BA)(A;;GRGW;;;WD) — which grants Everyone exactly that access.
+        // Verified rather than reasoned: an account in Users only opened the interface with last
+        // error 0. Seats are no longer administrators; see MultiSeatOptions.GrantSeatAdministrator.
         if (WtsApi.WTSQueryUserToken((uint)sessionId, out var rawToken))
         {
             _logger.LogDebug("Got session token via WTSQueryUserToken for session {Sid}", sessionId);
@@ -284,8 +291,8 @@ public sealed class SessionLauncher
                 Kernel32.CloseHandle(rawToken);
                 using var filteredToken = new SafeTokenHandle(dupToken);
 
-                // Try to get the elevated linked token (for admin accounts).
-                // SudoVDA IPC aborts if the connecting process doesn't have admin privileges.
+                // Try to get the elevated linked token (for admin accounts). Harmless when there
+                // isn't one — a seat account is a standard user now and takes the path below.
                 var elevatedToken = TryGetLinkedElevatedToken(filteredToken);
                 if (elevatedToken != null)
                 {

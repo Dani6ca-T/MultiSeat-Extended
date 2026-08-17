@@ -30,6 +30,7 @@ public sealed class MultiSeatWorker : BackgroundService
     private readonly FirewallManager _firewall;
     private readonly SeatPresetStore _presets;
     private readonly SharedLibraryProvisioner _sharedLibrary;
+    private readonly Accounts.AccountManager _accounts;
     private readonly IServiceProvider _services;
 
     private WebApplication? _apiApp;
@@ -46,8 +47,10 @@ public sealed class MultiSeatWorker : BackgroundService
         FirewallManager firewall,
         SeatPresetStore presets,
         SharedLibraryProvisioner sharedLibrary,
+        Accounts.AccountManager accounts,
         IServiceProvider services)
     {
+        _accounts = accounts;
         _logger = logger;
         _options = options.Value;
         _seatManager = seatManager;
@@ -74,6 +77,14 @@ public sealed class MultiSeatWorker : BackgroundService
         // Apollo the user runs separately (different install dir, no per-seat config)
         // and its ApolloService are left untouched, so MultiSeat coexists with it.
         KillOrphanedApolloProcesses();
+
+        // ── Step 0a: Take administrator rights back off seat accounts ──
+        // Seats created by an older build are local administrators, which was never needed (the
+        // SudoVDA justification does not hold — see MultiSeatOptions.GrantSeatAdministrator) and
+        // undoes MultiSeat's own protection of its credential store, since an administrator can
+        // become SYSTEM. Done at startup as well as at provisioning so an install that simply sits
+        // idle is corrected too. Managed accounts only; linked accounts are left alone.
+        _accounts.NormalizeManagedAccountPrivileges();
 
         // ── Step 0b: Set DWM frame interval for RDP sessions ────────
         // The Microsoft Remote Display Adapter's DWM composition rate defaults

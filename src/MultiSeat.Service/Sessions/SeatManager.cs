@@ -109,6 +109,11 @@ public sealed class SeatManager
         if (!_accounts.AccountExists(request.AccountName))
             throw new InvalidOperationException($"Account '{request.AccountName}' does not exist. Create it first via /api/accounts.");
 
+        // Correct the account's groups before the session is created, so a seat provisioned by an
+        // older build stops being a local administrator and gains the Remote Desktop Users
+        // membership the RDP loopback logon needs. Idempotent, and a no-op for linked accounts.
+        _accounts.ApplySeatGroupMembership(request.AccountName);
+
         var seat = new SeatInfo
         {
             AccountName = request.AccountName,
