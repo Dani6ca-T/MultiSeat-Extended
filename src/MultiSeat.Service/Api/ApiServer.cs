@@ -107,9 +107,7 @@ public static class ApiServer
 
             if (!authState.IsEnabled ||
                 !isProtected ||
-                // Auth status endpoint is always public — GET lets the dashboard
-                // show the toggle even when the key isn't stored yet.
-                (context.Request.Path.Equals("/api/system/auth") && context.Request.Method == "GET"))
+                IsAlwaysPublic(context.Request.Path, context.Request.Method))
             {
                 await next();
                 return;
@@ -207,6 +205,19 @@ public static class ApiServer
 
         return app;
     }
+
+    /// <summary>
+    /// The one request that bypasses the API key while authentication is enabled: reading the
+    /// auth state, so the dashboard can show the toggle before it holds a key.
+    ///
+    /// The method check is the load-bearing half. The same path also accepts POST, which is what
+    /// turns authentication OFF — exempting that would let anyone who can reach the port disable
+    /// the protection for every other endpoint. Note that the endpoint's own AllowAnonymous()
+    /// metadata grants nothing here; this predicate is the whole rule, which is why it is pinned
+    /// by tests rather than left inline.
+    /// </summary>
+    internal static bool IsAlwaysPublic(PathString path, string method) =>
+        path.Equals("/api/system/auth") && method == "GET";
 
     /// <summary>
     /// Returns the configured API key, or generates+persists a random one if none is set.

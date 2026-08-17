@@ -62,12 +62,30 @@ public static class SystemEndpoints
         });
 
         // GET /api/system/auth — returns current authentication state.
+        //
+        // Deliberately public: the dashboard has to be able to show the auth toggle before it
+        // holds a key. What actually makes it public is the exemption in ApiServer's own auth
+        // middleware, which matches this path AND the GET method — NOT the AllowAnonymous() below.
+        // There is no UseAuthorization() in this pipeline, so that call is inert; it is kept only
+        // to state intent, and to be correct if authorization middleware is ever added.
         group.MapGet("/auth", (ApiAuthState authState) =>
             Results.Ok(new { authEnabled = authState.IsEnabled }))
             .AllowAnonymous();
 
         // POST /api/system/auth — toggles API key authentication on/off.
         // Takes effect immediately (no restart needed); also persists to appsettings.json.
+        //
+        // This one REQUIRES the API key whenever auth is enabled, and must keep doing so: it is
+        // the endpoint that can turn authentication off, so an unauthenticated caller reaching it
+        // would be able to disable the protection for everything else. ApiServer's middleware
+        // exempts only GET on this path, so POST is gated — which is why the AllowAnonymous() that
+        // used to sit here has been removed rather than commented.
+        //
+        // It carried the note "must be reachable even when auth is currently disabled", which was
+        // confused twice over: when auth is disabled the middleware already lets every request
+        // through, so no exemption is needed, and the call could not have granted one anyway
+        // (nothing reads endpoint authorization metadata in this pipeline). Left in place it would
+        // have become a real hole the moment anyone added UseAuthorization().
         group.MapPost("/auth", async (ApiAuthState authState, AuthToggleRequest body, ILoggerFactory logFactory) =>
         {
             var log = logFactory.CreateLogger("MultiSeat.Auth");
@@ -98,8 +116,7 @@ public static class SystemEndpoints
                 body.Enabled ? "enabled" : "disabled");
 
             return Results.Ok(new { authEnabled = authState.IsEnabled });
-        })
-        .AllowAnonymous(); // must be reachable even when auth is currently disabled
+        });
     }
 
     private record AuthToggleRequest(bool Enabled);

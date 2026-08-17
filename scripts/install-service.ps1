@@ -68,6 +68,12 @@ if ($missing.Count -gt 0) {
 Write-Step "Verifying RDP configuration..."
 
 # Enable Remote Desktop (fDenyTSConnections = 0)
+#
+# Worth knowing: MultiSeat's own connections are to 127.0.0.2 and loopback is not filtered, so the
+# firewall rule enabled below is NOT needed for seats to work. It is turned on together with
+# fDenyTSConnections so that "Remote Desktop enabled" means what an operator would expect it to.
+# If this host should not accept RDP from the network — a good default, given NLA is turned off
+# further down — disable the "Remote Desktop" firewall group again and MultiSeat keeps working.
 $tsKey = "HKLM:\SYSTEM\CurrentControlSet\Control\Terminal Server"
 if ((Get-ItemProperty $tsKey -Name "fDenyTSConnections" -ErrorAction SilentlyContinue).fDenyTSConnections -ne 0) {
     Set-ItemProperty $tsKey -Name "fDenyTSConnections" -Value 0
@@ -81,6 +87,15 @@ if ((Get-ItemProperty $tsKey -Name "fDenyTSConnections" -ErrorAction SilentlyCon
 # SecurityLayer=2 makes TermService generate a self-signed TLS cert (SSLCertificateSHA1Hash),
 # which TrustRdpLoopbackServer reads and writes to the console user's HKCU trust store so
 # mstsc never shows "Do you trust this remote connection?" for 127.0.0.2.
+#
+# NLA cannot be left on: it is what makes the loopback logon MultiSeat depends on prompt, and
+# there is no listener-scoped way to keep it for real clients and drop it for 127.0.0.2 — the
+# setting belongs to the RDP-Tcp listener, which serves the network too. So this weakens RDP for
+# the WHOLE machine: without NLA, anyone who can reach port 3389 gets to the logon stage before
+# authenticating, which is exactly the pre-auth exposure NLA exists to remove.
+#
+# The mitigation is not in this script because it is a decision about the host, not about
+# MultiSeat: keep 3389 off the network. See the note printed below and docs/security-posture.md.
 $rdpTcpKey = "HKLM:\SYSTEM\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp"
 $rdpTcpProps = Get-ItemProperty $rdpTcpKey -ErrorAction SilentlyContinue
 $rdpChanged = $false
@@ -116,7 +131,15 @@ if ($rdpCert) {
 
 # Suppress the RDP client certificate trust dialog (AuthenticationLevel = 0 machine policy).
 # MultiSeat launches mstsc via CreateProcessAsUser with no interactive user to click dialogs.
-# This is safe because MultiSeat only ever connects to 127.0.0.2 (local loopback).
+#
+# This used to say it was "safe because MultiSeat only ever connects to 127.0.0.2". That reasoning
+# does not hold: the setting is a MACHINE POLICY, so it applies to every user on this host and to
+# every server they connect to, not only to the loopback connections MultiSeat makes. What it
+# costs is the warning you would otherwise get when a remote server's certificate does not match
+# — the one that would tell you a connection was being intercepted.
+#
+# It is applied anyway because there is no per-target form of it and nobody is present to click
+# the dialog, but the trade-off is real and is summarised at the end of this section.
 $rdpClientKey = "HKLM:\SOFTWARE\Policies\Microsoft\Windows NT\Terminal Services"
 if (-not (Test-Path $rdpClientKey)) { New-Item $rdpClientKey -Force | Out-Null }
 if ((Get-ItemProperty $rdpClientKey -Name "AuthenticationLevel" -ErrorAction SilentlyContinue).AuthenticationLevel -ne 0) {
@@ -169,6 +192,33 @@ if ($null -ne (Get-ItemProperty $mstscClientKey -Name "LocalDevices" -ErrorActio
     Remove-ItemProperty $mstscClientKey -Name "LocalDevices" -ErrorAction SilentlyContinue
     Write-Host "  Cleaned: removed the old no-op LocalDevices value" -ForegroundColor DarkGray
 }
+
+# -- State the RDP trade-off ------------------------------------------
+# These changes are machine-wide and outlive an uninstall, so they are worth one visible summary
+# rather than a row of green "Applied" lines that read like routine setup. An operator who never
+# reads the source should still learn that their host's RDP posture changed.
+$rdpExposed = $false
+try {
+    $rdpRules = Get-NetFirewallRule -DisplayGroup 'Remote Desktop' -ErrorAction SilentlyContinue |
+                Where-Object { $_.Enabled -eq 'True' -and $_.Direction -eq 'Inbound' }
+    $rdpExposed = [bool]$rdpRules
+} catch { }
+
+Write-Host ""
+Write-Host "  NOTE: MultiSeat changed this machine's RDP settings, not just its own:" -ForegroundColor Yellow
+Write-Host "    - Network Level Authentication is OFF for the RDP listener (all clients, not just" -ForegroundColor Yellow
+Write-Host "      loopback). The seat logon needs it off, and the setting is not per-target." -ForegroundColor Yellow
+Write-Host "    - mstsc no longer warns about server certificates or unsigned .rdp files, for" -ForegroundColor Yellow
+Write-Host "      every user on this host and every server they connect to." -ForegroundColor Yellow
+if ($rdpExposed) {
+    Write-Host "    - Inbound Remote Desktop firewall rules are ENABLED, so port 3389 is reachable" -ForegroundColor Yellow
+    Write-Host "      from the network. With NLA off, restrict it to loopback or trusted hosts." -ForegroundColor Yellow
+} else {
+    Write-Host "    - No inbound Remote Desktop firewall rule is enabled, so 3389 is not reachable" -ForegroundColor DarkGray
+    Write-Host "      from the network. That is the posture this design wants; keep it that way." -ForegroundColor DarkGray
+}
+Write-Host "    See docs/security-posture.md to undo any of it." -ForegroundColor Yellow
+Write-Host ""
 
 # NOTE: none of the settings above suppress mstsc's "Unknown remote connection / we could
 # not verify the publisher" security warning, which is a separate dialog. AllowUnsignedFiles

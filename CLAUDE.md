@@ -76,6 +76,31 @@ Reflects fixes shipped 2026-07-24 (GitHub issues #11 / #10 / #9a):
 - **Seat audio does not hijack the host default.** The seat's virtual audio device is written as Apollo's `virtual_sink` (not `audio_sink`) with `keep_sink_default = disabled` + `auto_capture_sink = disabled`, and MultiSeat no longer runs `--set-default-render`. Windows has a **single machine-wide default output** shared by the console + all seats; Apollo still points the game at the sink during an active stream and restores the previous default afterward, without re-asserting it. Keep the client's "Play audio on host PC" **off** so `virtual_sink` is used. Not full isolation — an active seat still suspends the console's playback and leaks onto its speakers (#12). **Real isolation is `AudioMode = PerSession`** (see "Audio: two modes" above); it arrived via RDP per-session endpoints, not the per-app routing (`IAudioPolicyConfigFactory::SetPersistedDefaultAudioEndpoint`) this note used to predict.
 - **Controller forwarding is native by default.** `EnableViGEmController` defaults **off** — Apollo forwards the Moonlight client's controller into the seat itself and MultiSeat creates no ViGEm pad. The dashboard shows the seat's Controller service as **"Native"** (not a down light) and the Input tab notes that XInput→seat assignment only applies when `EnableViGEmController` is on. `SeatServices.ControllerManaged` + `GET /api/input/mode` surface the mode.
 
+## Security posture — `docs/security-posture.md`
+
+Read it before changing anything about accounts, the API, or the install scripts. It records what
+MultiSeat changes about a host, what it deliberately does not protect against, and how to undo it.
+
+The parts most likely to surprise you:
+
+- **The install scripts weaken RDP machine-wide and the changes outlive an uninstall.** NLA is
+  turned **off** on the `RDP-Tcp` listener — for every client, not just loopback, because the
+  setting is not per-target and the seat logon cannot answer NLA's prompt. mstsc's certificate and
+  unsigned-`.rdp` warnings are suppressed by **machine policy**, affecting every user on the host
+  and every server they connect to. The mitigation is to keep 3389 off the network; MultiSeat needs
+  no inbound rule, since loopback is not filtered.
+- **Seat accounts are standard users**, not administrators (`Users` + `Remote Desktop Users`). The
+  Remote Desktop Users membership is load-bearing: admins are implicitly allowed to log on over
+  RDP, so without it a non-admin seat cannot start a session at all. The old belief that SudoVDA
+  IPC needs admin is **false** — the driver's INF grants Everyone the access Apollo's client asks
+  for. `MultiSeat:GrantSeatAdministrator` opts back in.
+- **An administrator on this host can still read everything**, including seat passwords — admins
+  can become SYSTEM. The file ACLs and DPAPI SYSTEM scope stop non-admin users and copies taken off
+  the machine, not a local administrator.
+- **`AllowAnonymous()` grants nothing** in this API — there is no `UseAuthorization()` in the
+  pipeline. `ApiServer.IsAlwaysPublic` is the entire rule, and it exempts only **GET**
+  `/api/system/auth`; POST on that path disables authentication and stays gated.
+
 ## Install / Deploy
 
 Two separate scripts — prereqs and service deploy are intentionally split:
