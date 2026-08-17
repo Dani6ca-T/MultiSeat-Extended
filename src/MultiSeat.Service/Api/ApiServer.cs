@@ -57,15 +57,6 @@ public static class ApiServer
         // Register CORS services (required before UseCors)
         builder.Services.AddCors();
 
-        // Resolve effective API key before Build() so ApiAuthState can be registered in DI.
-        // Key is saved to C:\ProgramData\MultiSeat\api-key.txt so the operator can
-        // copy it into the dashboard Settings page. It is never embedded in appsettings.json.
-        var apiKey = ResolveApiKey(options.ApiKey);
-        var authState = new ApiAuthState(!string.IsNullOrEmpty(apiKey), apiKey);
-        builder.Services.AddSingleton(authState);
-
-        var app = builder.Build();
-
         // Log through the HOST's logger, not app.Logger.
         //
         // ApiServer builds its own WebApplication, and that builder's logging has no Event Log
@@ -74,8 +65,20 @@ public static class ApiServer
         // ever appeared in the Event Log: not the port, not the key notice, and not "API
         // authentication is DISABLED", which is the loudest warning this service can raise.
         // Verified before changing it: three days of events contain no ApiServer-category entries.
+        //
+        // Created before Build() because ResolveApiKey needs somewhere to report a failure to
+        // restrict the key file's permissions.
         var log = hostServices.GetRequiredService<ILoggerFactory>()
                               .CreateLogger("MultiSeat.Service.Api.ApiServer");
+
+        // Resolve effective API key before Build() so ApiAuthState can be registered in DI.
+        // Key is saved to C:\ProgramData\MultiSeat\api-key.txt so the operator can
+        // copy it into the dashboard Settings page. It is never embedded in appsettings.json.
+        var apiKey = ResolveApiKey(options.ApiKey, log);
+        var authState = new ApiAuthState(!string.IsNullOrEmpty(apiKey), apiKey);
+        builder.Services.AddSingleton(authState);
+
+        var app = builder.Build();
 
         // ── Middleware ───────────────────────────────────────────────
         app.UseWebSockets();
@@ -209,7 +212,7 @@ public static class ApiServer
     /// Returns the configured API key, or generates+persists a random one if none is set.
     /// Reads an existing persisted key so the same key survives service restarts.
     /// </summary>
-    private static string ResolveApiKey(string configured)
+    private static string ResolveApiKey(string configured, ILogger log)
     {
         // "disabled" is an explicit opt-out — return empty so the auth middleware is skipped.
         if (configured.Equals("disabled", StringComparison.OrdinalIgnoreCase))
@@ -222,6 +225,12 @@ public static class ApiServer
 
         if (File.Exists(keyFile))
         {
+            // Harden on the read path as well as the write path. This file is written once and
+            // then read on every start, so an install created before this change would otherwise
+            // keep the inherited ProgramData ACL — which grants BUILTIN\Users read, i.e. every
+            // local account including every seat could read the key that guards the API.
+            HardenKeyFile(keyFile, log);
+
             var persisted = File.ReadAllText(keyFile).Trim();
             if (!string.IsNullOrWhiteSpace(persisted))
                 return persisted;
@@ -234,7 +243,14 @@ public static class ApiServer
 
         Directory.CreateDirectory(Path.GetDirectoryName(keyFile)!);
         File.WriteAllText(keyFile, generated);
+        HardenKeyFile(keyFile, log);
         return generated;
     }
+
+    private static void HardenKeyFile(string keyFile, ILogger log) =>
+        Storage.SecureFile.TryRestrictToSystemAndAdmins(keyFile, ex =>
+            log.LogWarning(ex,
+                "Could not restrict permissions on {Path} — the API key may still be readable by " +
+                "other local accounts on this host.", keyFile));
 }
 

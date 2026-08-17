@@ -29,7 +29,21 @@ public sealed class AccountManager
         Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),
             "MultiSeat", "accounts.json");
 
-    private record StoredAccount(string Username, string EncryptedPassword, bool IsManaged);
+    /// <param name="Scope">
+    /// Which DPAPI scope <see cref="EncryptedPassword"/> was written at. Absent in stores written
+    /// before the move to SYSTEM scope, and absence is exactly how a legacy entry is recognised.
+    ///
+    /// This has to be recorded because it cannot be detected: DPAPI takes the scope from the blob
+    /// itself and ignores the scope argument passed to Unprotect, so a machine-scoped blob decrypts
+    /// perfectly well when CurrentUser is requested. An earlier version of this code inferred
+    /// "legacy" from a decryption failure that never happens — the migration would have silently
+    /// never run, leaving the store machine-scoped forever. A unit test caught it.
+    /// </param>
+    private record StoredAccount(string Username, string EncryptedPassword, bool IsManaged,
+                                 string? Scope = null);
+
+    /// <summary>Scope tag written by the current format — DPAPI CurrentUser, i.e. SYSTEM.</summary>
+    private const string ScopeTagUser = "user";
 
     public AccountManager(ILogger<AccountManager> logger)
     {
@@ -213,9 +227,25 @@ public sealed class AccountManager
     }
 
     /// <summary>
-    /// Save all credentials to disk encrypted with DPAPI (machine-scope).
-    /// Survives service restarts; only decryptable on this machine.
+    /// Save all credentials to disk encrypted with DPAPI, scoped to the account the service runs
+    /// as (SYSTEM). Survives service restarts; decryptable only by SYSTEM on this machine.
     /// </summary>
+    /// <remarks>
+    /// The scope used to be <see cref="DataProtectionScope.LocalMachine"/>, which any process on
+    /// the box could decrypt regardless of which user it ran as — so the seat passwords were
+    /// protected by nothing but the file's ACL, and that ACL granted BUILTIN\Users read. CurrentUser
+    /// under SYSTEM ties the blob to SYSTEM's master key, so a copy of accounts.json is useless to
+    /// a non-SYSTEM reader.
+    ///
+    /// The honest limit: an Administrator can obtain SYSTEM, and today every seat account is in
+    /// Administrators, so this does not yet defend against a seat. It defends against every
+    /// non-admin local account, and against the file being read from a backup or copied off the
+    /// machine. Narrowing seat accounts is a separate open item.
+    ///
+    /// Consequence to be aware of: blobs are now bound to SYSTEM. If the service is ever
+    /// reconfigured to run as a different account, stored credentials become undecryptable and
+    /// seats must be re-provisioned. LoadPersistedAccounts logs that case explicitly.
+    /// </remarks>
     private void SavePersistedAccounts()
     {
         try
@@ -225,15 +255,22 @@ public sealed class AccountManager
             {
                 var encrypted = ProtectedData.Protect(
                     Encoding.UTF8.GetBytes(kv.Value),
-                    null, DataProtectionScope.LocalMachine);
+                    null, DataProtectionScope.CurrentUser);
                 var isManaged = _managedAccounts.TryGetValue(kv.Key, out var acc) && acc.IsManaged;
-                return new StoredAccount(kv.Key, Convert.ToBase64String(encrypted), isManaged);
+                return new StoredAccount(kv.Key, Convert.ToBase64String(encrypted), isManaged,
+                                         ScopeTagUser);
             }).ToList();
 
             // Write-then-rename so a crash mid-write can't corrupt the credential store.
             var tmp = StorePath + ".tmp";
             File.WriteAllText(tmp,
                 JsonSerializer.Serialize(entries, new JsonSerializerOptions { WriteIndented = true }));
+
+            // Restrict the temp file BEFORE the rename, so there is no window in which a
+            // world-readable copy of the credential store exists under ProgramData. Disabled
+            // inheritance is part of the file's own security descriptor and survives the move.
+            HardenStore(tmp);
+
             File.Move(tmp, StorePath, overwrite: true);
         }
         catch (Exception ex)
@@ -243,6 +280,16 @@ public sealed class AccountManager
     }
 
     /// <summary>
+    /// Strip the inherited BUILTIN\Users grant from the credential store so only SYSTEM and
+    /// Administrators can read it. Best-effort: a failure here is worth a warning, not a crash.
+    /// </summary>
+    private void HardenStore(string path) =>
+        Storage.SecureFile.TryRestrictToSystemAndAdmins(path, ex =>
+            _logger.LogWarning(ex,
+                "Could not restrict permissions on the credential store {Path} — it may still be " +
+                "readable by other local accounts.", path));
+
+    /// <summary>
     /// Load credentials from disk on startup.
     /// Restores both credentials and linked accounts that wouldn't be found by DiscoverExistingAccounts.
     /// </summary>
@@ -250,17 +297,39 @@ public sealed class AccountManager
     {
         if (!File.Exists(StorePath)) return;
 
+        // An install that predates the ACL tightening has a store the whole Users group can read.
+        // No write path would revisit it on a host where no seat is ever added or removed, so fix
+        // it on the read path — which runs on every service start.
+        HardenStore(StorePath);
+
         try
         {
             var entries = JsonSerializer.Deserialize<List<StoredAccount>>(File.ReadAllText(StorePath));
             if (entries == null) return;
 
+            // Set when any entry was still LocalMachine-scoped, so the store gets rewritten at
+            // CurrentUser scope once the whole file has been read.
+            var migrated = false;
+
             foreach (var entry in entries)
             {
-                var password = Encoding.UTF8.GetString(
-                    ProtectedData.Unprotect(
-                        Convert.FromBase64String(entry.EncryptedPassword),
-                        null, DataProtectionScope.LocalMachine));
+                string password;
+                try
+                {
+                    password = DecryptPassword(entry.EncryptedPassword);
+                    if (IsLegacyScope(entry.Scope)) migrated = true;
+                }
+                catch (Exception ex)
+                {
+                    // Per-entry, deliberately: this loop used to share one try block with the
+                    // whole method, so a single undecryptable entry silently discarded every
+                    // credential after it. One unreadable seat should cost that seat, not the rest.
+                    _logger.LogError(ex,
+                        "Could not decrypt the stored credential for '{User}' — that seat will " +
+                        "need re-provisioning. This is expected if the service now runs as a " +
+                        "different account than the one that saved it.", entry.Username);
+                    continue;
+                }
 
                 _credentials[entry.Username] = password;
 
@@ -281,12 +350,36 @@ public sealed class AccountManager
                     _logger.LogDebug("Restored credential for '{User}'", entry.Username);
                 }
             }
+
+            if (migrated)
+            {
+                _logger.LogInformation(
+                    "Re-encrypting the credential store at SYSTEM scope — it was written with " +
+                    "machine scope, which any local account could have decrypted.");
+                SavePersistedAccounts();
+            }
         }
         catch (Exception ex)
         {
             _logger.LogWarning(ex, "Failed to load persisted accounts from {Path}", StorePath);
         }
     }
+
+    /// <summary>
+    /// Decrypts a stored password. Reads both the current SYSTEM-scoped format and the legacy
+    /// machine-scoped one without being told which it is, because DPAPI recovers the scope from the
+    /// blob and ignores the argument — the scope passed here is only what a *new* blob would use.
+    /// </summary>
+    internal static string DecryptPassword(string encrypted) =>
+        Encoding.UTF8.GetString(ProtectedData.Unprotect(
+            Convert.FromBase64String(encrypted), null, DataProtectionScope.CurrentUser));
+
+    /// <summary>
+    /// True when an entry predates the move to SYSTEM scope and should be rewritten. Driven by the
+    /// recorded tag, never by a failed decryption — see <see cref="StoredAccount"/>.
+    /// </summary>
+    internal static bool IsLegacyScope(string? scopeTag) =>
+        !string.Equals(scopeTag, ScopeTagUser, StringComparison.OrdinalIgnoreCase);
 
     private void EnsureUserProfile(string username)
     {
