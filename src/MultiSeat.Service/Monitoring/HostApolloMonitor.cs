@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Management;
 using System.ServiceProcess;
+using System.Text.Json;
 using System.Text.RegularExpressions;
 using Microsoft.Extensions.Options;
 using MultiSeat.Service.Configuration;
@@ -64,6 +65,7 @@ public sealed partial class HostApolloMonitor
         var port = ResolvePort(host.Value.ExePath);
         info.Port = port;
         info.WebUiPort = port + 1;
+        info.PairedClientCount = CountPairedClients(host.Value.ExePath);
 
         await QueryServerInfoAsync(info, port, ct);
         return info;
@@ -152,6 +154,42 @@ public sealed partial class HostApolloMonitor
     }
 
     /// <summary>
+    /// How many clients are paired, from Apollo's own state file.
+    ///
+    /// serverinfo cannot answer this: its PairStatus is relative to the uniqueid in the request,
+    /// so a dashboard probe using its own id is always told "not paired" — which had this card
+    /// reporting no paired clients on a host with two.
+    ///
+    /// The state file also holds the web UI username, password hash and salt. Only
+    /// root.named_devices is read, and only its length is kept; nothing else from that file
+    /// enters MultiSeat, let alone the API.
+    /// </summary>
+    private int CountPairedClients(string? exePath)
+    {
+        try
+        {
+            var dir = Path.GetDirectoryName(exePath);
+            if (string.IsNullOrEmpty(dir)) return -1;
+
+            var statePath = Path.Combine(dir, "config", "sunshine_state.json");
+            if (!File.Exists(statePath)) return -1;
+
+            using var doc = JsonDocument.Parse(File.ReadAllText(statePath));
+            if (doc.RootElement.TryGetProperty("root", out var root)
+                && root.TryGetProperty("named_devices", out var devices)
+                && devices.ValueKind == JsonValueKind.Array)
+                return devices.GetArrayLength();
+
+            return 0; // state file present and readable, no devices in it
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "Could not read the standalone Apollo state file for pairing count");
+            return -1;
+        }
+    }
+
+    /// <summary>
     /// Ask Apollo the same question Moonlight asks. This is the difference between "a process
     /// exists" and "a client could actually use it", which is the part worth showing.
     /// </summary>
@@ -170,7 +208,6 @@ public sealed partial class HostApolloMonitor
         info.HostName = server.HostName;
         info.AppVersion = server.AppVersion;
         info.Streaming = server.Streaming;
-        info.Paired = server.Paired;
     }
 
     /// <summary>ApolloService state, or null when the service is not installed.</summary>

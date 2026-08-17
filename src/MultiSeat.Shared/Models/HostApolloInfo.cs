@@ -36,8 +36,14 @@ public sealed class HostApolloInfo
     /// <summary>True when Apollo reports a client actively streaming.</summary>
     public bool Streaming { get; set; }
 
-    /// <summary>True when at least one client is paired with this instance.</summary>
-    public bool Paired { get; set; }
+    /// <summary>
+    /// How many Moonlight clients are paired with this instance, read from Apollo's state file.
+    ///
+    /// NOT from serverinfo: its PairStatus answers "is the client asking this question paired?",
+    /// so a probe with its own uniqueid always gets 0 and the dashboard reported "no paired
+    /// clients" on a host with several. -1 when the state file could not be read.
+    /// </summary>
+    public int PairedClientCount { get; set; } = -1;
 
     /// <summary>State of the ApolloService Windows service, or null when it is not installed.</summary>
     public string? ServiceStatus { get; set; }

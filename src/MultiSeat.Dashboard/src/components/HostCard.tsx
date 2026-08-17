@@ -111,7 +111,7 @@ export function HostCard() {
           <div className="text-muted" style={{ fontSize: 12, marginTop: 8 }}>
             Moonlight: {window.location.hostname}:{info.port}
             {" · "}
-            {info.paired ? "paired" : "no paired clients"}
+            {describePairing(info.pairedClientCount)}
           </div>
         )}
 
@@ -154,6 +154,16 @@ export function HostCard() {
       </div>
     </div>
   );
+}
+
+/**
+ * -1 means Apollo's state file could not be read, which is not the same as "nobody is paired" —
+ * say so rather than assert zero.
+ */
+function describePairing(count: number): string {
+  if (count < 0) return "pairing unknown";
+  if (count === 0) return "no paired clients";
+  return count === 1 ? "1 paired client" : `${count} paired clients`;
 }
 
 function StatItem({ label, value }: { label: string; value: string }) {

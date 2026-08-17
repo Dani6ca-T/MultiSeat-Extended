@@ -6,8 +6,12 @@ namespace MultiSeat.Service.Monitoring;
 /// <param name="HostName">Server name Apollo advertises to clients.</param>
 /// <param name="AppVersion">Apollo's reported version.</param>
 /// <param name="Streaming">True when a client is actively streaming.</param>
-/// <param name="Paired">True when at least one client is paired.</param>
-public sealed record ApolloServerInfo(string? HostName, string? AppVersion, bool Streaming, bool Paired);
+/// <remarks>
+/// Deliberately carries no "paired" flag. serverinfo's PairStatus is answered relative to the
+/// uniqueid in the request, so any probe with its own id is told "not paired" no matter how many
+/// clients are actually paired. Pairing has to come from Apollo's state file instead.
+/// </remarks>
+public sealed record ApolloServerInfo(string? HostName, string? AppVersion, bool Streaming);
 
 /// <summary>
 /// Asks an Apollo instance the same question a Moonlight client asks — its <c>serverinfo</c>
@@ -53,8 +57,7 @@ public sealed class ApolloServerQuery
             return new ApolloServerInfo(
                 Tag(xml, "hostname"),
                 Tag(xml, "appversion"),
-                streaming,
-                Tag(xml, "PairStatus") == "1");
+                streaming);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {

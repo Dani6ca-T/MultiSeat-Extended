@@ -209,7 +209,10 @@ export interface HostApolloInfo {
   hostName: string | null;
   appVersion: string | null;
   streaming: boolean;
-  paired: boolean;
+  // How many clients are paired, from Apollo's state file. NOT from serverinfo, whose PairStatus
+  // is answered relative to the asking client's uniqueid — a probe with its own id is always told
+  // "not paired". -1 means the state file could not be read.
+  pairedClientCount: number;
   serviceStatus: string | null;
   consoleSessionId: number;
   note: string | null;
