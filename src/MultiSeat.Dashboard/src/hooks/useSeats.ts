@@ -52,7 +52,11 @@ export function useSeats() {
     if (!mountedRef.current) return;
 
     const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
-    const url = `${proto}//${window.location.host}/ws/seats`;
+    // /ws is authenticated like /api. A browser cannot set headers on a WebSocket handshake,
+    // so the key goes in the query string — the server accepts either.
+    const apiKey = localStorage.getItem("multiseat-api-key");
+    const auth = apiKey ? `?key=${encodeURIComponent(apiKey)}` : "";
+    const url = `${proto}//${window.location.host}/ws/seats${auth}`;
 
     const ws = new WebSocket(url);
     wsRef.current = ws;

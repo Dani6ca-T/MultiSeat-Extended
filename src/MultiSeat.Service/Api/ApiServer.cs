@@ -77,12 +77,19 @@ public static class ApiServer
         // API key auth — enforced for /api/ routes unless explicitly disabled.
         // Checks ApiAuthState.IsEnabled on every request so toggling via the dashboard
         // takes effect immediately without a service restart.
-        // Static files and WebSocket upgrades are exempt.
+        // Static files are exempt; /api and /ws are not.
+        //
+        // /ws USED TO BE EXEMPT, which was a hole rather than a convenience: /ws/seats
+        // broadcasts whole SeatInfo objects — account names, session ids, ports, Apollo PIDs,
+        // audio device ids — so with authentication switched on, anyone who could reach the
+        // port could still stream all of it by opening a socket instead of calling the API.
         app.Use(async (context, next) =>
         {
+            var isProtected = context.Request.Path.StartsWithSegments("/api")
+                              || context.Request.Path.StartsWithSegments("/ws");
+
             if (!authState.IsEnabled ||
-                !context.Request.Path.StartsWithSegments("/api") ||
-                context.Request.Path.StartsWithSegments("/ws") ||
+                !isProtected ||
                 // Auth status endpoint is always public — GET lets the dashboard
                 // show the toggle even when the key isn't stored yet.
                 (context.Request.Path.Equals("/api/system/auth") && context.Request.Method == "GET"))
@@ -91,8 +98,16 @@ public static class ApiServer
                 return;
             }
 
-            if (!context.Request.Headers.TryGetValue(Constants.ApiKeyHeader, out var key)
-                || key != authState.ApiKey)
+            // Browsers cannot set headers on a WebSocket handshake, so the key may also arrive
+            // as ?key=. That does put a secret in a URL; it is accepted because the alternative
+            // for a browser client is a post-upgrade handshake, and because this API is
+            // loopback/LAN with no request logging of query strings. Header is preferred and
+            // checked first — non-browser clients should use it.
+            var presented = context.Request.Headers.TryGetValue(Constants.ApiKeyHeader, out var header)
+                ? header.ToString()
+                : context.Request.Query["key"].ToString();
+
+            if (string.IsNullOrEmpty(presented) || presented != authState.ApiKey)
             {
                 context.Response.StatusCode = 401;
                 await context.Response.WriteAsJsonAsync(new { error = "Unauthorized" });
