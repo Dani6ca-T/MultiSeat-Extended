@@ -27,7 +27,7 @@ namespace MultiSeat.Service.Sessions;
 ///   session's user gets disconnected.
 ///
 /// Flow:
-///   1. Store seat account credentials via cmdkey (run in console session)
+///   1. Store seat account credentials in the console user's credential store
 ///   2. Launch mstsc.exe /v:127.0.0.2 in the console session
 ///   3. RDP connection triggers termsrv to create a new session
 ///   4. Poll WTS until the account's session appears
@@ -64,6 +64,12 @@ public sealed class SessionLauncher
     /// </summary>
     private readonly SemaphoreSlim _rdpFileGate = new(1, 1);
 
+    /// <summary>
+    /// Writes the transient RDP credential mstsc authenticates with. Was cmdkey.exe, which put the
+    /// seat password on a command line; see RdpCredentialStore.
+    /// </summary>
+    private readonly RdpCredentialStore _credentials;
+
     // RDP loopback address — use 127.0.0.2 to avoid conflicts with 127.0.0.1/localhost
     private const string RdpLoopbackAddress = "127.0.0.2";
 
@@ -75,6 +81,7 @@ public sealed class SessionLauncher
         _logger = logger;
         _options = options.Value;
         _accounts = accounts;
+        _credentials = new RdpCredentialStore(logger);
     }
 
     /// <summary>
@@ -462,7 +469,7 @@ public sealed class SessionLauncher
     ///
     /// Flow:
     ///   1. Get the active console session (where a user is logged in)
-    ///   2. Run cmdkey in the console session to store RDP credentials
+    ///   2. Store the RDP credential as the console user (CredWrite, impersonated)
     ///   3. Launch mstsc.exe in the console session targeting 127.0.0.2
     ///   4. Poll WTS until the seat account's session appears
     ///   5. Launch a keepalive process in the new session
@@ -504,20 +511,14 @@ public sealed class SessionLauncher
             // more, which is free head start.
             StartWindowHideWatcher(primaryConsoleToken, consoleSessionId);
 
-            // Step 1: Store credentials via cmdkey
+            // Step 1: Store the credential mstsc will use.
             _logger.LogDebug("Storing RDP credentials for {Account} (target: {Cred})...",
                 accountName, credTarget);
-            var cmdkeyExit = RunInConsoleSession(primaryConsoleToken, consoleSessionId,
-                $"cmdkey.exe /generic:{credTarget} /user:{machineName}\\{accountName} /pass:{password}",
-                waitForExit: true);
-            if (cmdkeyExit != 0)
-                _logger.LogWarning(
-                    "cmdkey exited with code {Code} for {Account} — credentials may not be stored. " +
-                    "mstsc will show a login prompt that no one can click, causing the timeout. " +
-                    "Verify the account password is correct in the MultiSeat dashboard.",
-                    cmdkeyExit, accountName);
-            else
-                _logger.LogDebug("cmdkey stored credentials for {Account}", accountName);
+            if (_credentials.Write(primaryConsoleToken, credTarget,
+                                   $"{machineName}\\{accountName}", password))
+            {
+                _logger.LogDebug("Stored RDP credential for {Account}", accountName);
+            }
 
             // Step 2: Write Default.rdp as the console user.
             // mstsc treats Default.rdp as a trusted user settings file — no "unknown
@@ -587,13 +588,11 @@ public sealed class SessionLauncher
             // Always clean up stored credentials
             try
             {
-                RunInConsoleSession(primaryConsoleToken, consoleSessionId,
-                    $"cmdkey.exe /delete:{credTarget}",
-                    waitForExit: true);
+                _credentials.Delete(primaryConsoleToken, credTarget);
             }
             catch (Exception ex)
             {
-                _logger.LogDebug(ex, "Failed to clean up cmdkey credential (non-critical)");
+                _logger.LogDebug(ex, "Failed to clean up the RDP credential (non-critical)");
             }
 
             // Kill mstsc only if we didn't hand it off to _pendingMstsc
@@ -633,13 +632,7 @@ public sealed class SessionLauncher
         try
         {
             var machineName = Environment.MachineName;
-            var cmdkeyExit = RunInConsoleSession(primaryToken, consoleSessionId,
-                $"cmdkey.exe /generic:{credTarget} /user:{machineName}\\{accountName} /pass:{password}",
-                waitForExit: true);
-            if (cmdkeyExit != 0)
-                _logger.LogWarning(
-                    "cmdkey exited with code {Code} during reconnect for {Account}",
-                    cmdkeyExit, accountName);
+            _credentials.Write(primaryToken, credTarget, $"{machineName}\\{accountName}", password);
 
             StartWindowHideWatcher(primaryToken, consoleSessionId);   // first — needs a head start
             EnsureDefaultRdp(primaryToken, consoleSessionId, geometry);
@@ -680,12 +673,11 @@ public sealed class SessionLauncher
 
             try
             {
-                RunInConsoleSession(primaryToken, consoleSessionId,
-                    $"cmdkey.exe /delete:{credTarget}", waitForExit: true);
+                _credentials.Delete(primaryToken, credTarget);
             }
             catch (Exception ex)
             {
-                _logger.LogDebug(ex, "Failed to clean up cmdkey credential (non-critical)");
+                _logger.LogDebug(ex, "Failed to clean up the RDP credential (non-critical)");
             }
 
             if (mstscProcess != null)
@@ -699,7 +691,7 @@ public sealed class SessionLauncher
     /// Tries WTSQueryUserToken first — works when a user is logged into the console.
     /// Falls back to the SYSTEM token when nobody is logged in (cold boot, lock screen).
     /// SYSTEM has full access to WinSta0\Default and its own credential store, so
-    /// cmdkey and mstsc both work correctly without a console user present.
+    /// the credential write and mstsc both work correctly without a console user present.
     /// </summary>
     private SafeTokenHandle GetConsoleSessionToken(uint consoleSessionId)
     {
@@ -734,7 +726,7 @@ public sealed class SessionLauncher
 
         // Fallback: use the SYSTEM token (the service's own process token).
         // SYSTEM can launch processes into WinSta0\Default and owns its own
-        // credential store, so cmdkey /generic and mstsc both work as expected.
+        // credential store, so the generic credential and mstsc both work as expected.
         if (!AdvApi.OpenProcessToken(
                 Kernel32.GetCurrentProcess(),
                 AdvApi.TOKEN_ALL_ACCESS,
