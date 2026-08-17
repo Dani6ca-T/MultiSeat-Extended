@@ -42,7 +42,10 @@ public static class ApiServer
 
         builder.WebHost.ConfigureKestrel(kestrel =>
         {
-            kestrel.ListenAnyIP(options.ApiPort);
+            if (options.ApiBindLoopbackOnly)
+                kestrel.ListenLocalhost(options.ApiPort);
+            else
+                kestrel.ListenAnyIP(options.ApiPort);
         });
 
         builder.Services.ConfigureHttpJsonOptions(opts =>
@@ -62,6 +65,17 @@ public static class ApiServer
         builder.Services.AddSingleton(authState);
 
         var app = builder.Build();
+
+        // Log through the HOST's logger, not app.Logger.
+        //
+        // ApiServer builds its own WebApplication, and that builder's logging has no Event Log
+        // provider — the service's does, via AddWindowsService. So everything written to
+        // app.Logger went to a console that a Windows Service does not have, and none of it has
+        // ever appeared in the Event Log: not the port, not the key notice, and not "API
+        // authentication is DISABLED", which is the loudest warning this service can raise.
+        // Verified before changing it: three days of events contain no ApiServer-category entries.
+        var log = hostServices.GetRequiredService<ILoggerFactory>()
+                              .CreateLogger("MultiSeat.Service.Api.ApiServer");
 
         // ── Middleware ───────────────────────────────────────────────
         app.UseWebSockets();
@@ -117,19 +131,42 @@ public static class ApiServer
             await next();
         });
 
+        // State the network posture rather than leaving it to be discovered. The API is plaintext
+        // HTTP; bound beyond loopback that means the key (and everything it protects) crosses the
+        // network in clear, which is exactly what the old RequireHttps option implied was handled.
+        if (options.ApiBindLoopbackOnly)
+        {
+            log.LogInformation(
+                "API bound to loopback only on port {Port} — reachable on this host, not from the network.",
+                options.ApiPort);
+        }
+        else
+        {
+            log.LogWarning(
+                "API is listening on ALL interfaces on port {Port} over plaintext HTTP — there is no " +
+                "HTTPS, so the API key is sent in clear to anyone who can see the traffic. Set " +
+                "MultiSeat:ApiBindLoopbackOnly to true if the dashboard is only opened on this host, " +
+                "or restrict the port with a firewall rule.",
+                options.ApiPort);
+        }
+
         if (!authState.IsEnabled)
         {
-            app.Logger.LogWarning(
+            log.LogWarning(
                 "API authentication is DISABLED — the dashboard is open to anyone on the network.");
         }
         else if (string.IsNullOrWhiteSpace(options.ApiKey))
         {
-            app.Logger.LogWarning(
+            log.LogWarning(
                 "No ApiKey set in appsettings.json — a key was auto-generated. " +
                 "Copy it from C:\\ProgramData\\MultiSeat\\api-key.txt into the dashboard Settings page.");
         }
 
-        // CORS — restrict to configured origins in production, permissive if none set
+        // CORS — the DEFAULT is restrictive. This used to send AllowAnyOrigin whenever
+        // CorsOrigins was empty, which is the out-of-the-box configuration, so every install
+        // shipped the most permissive policy available and only a deliberate edit narrowed it.
+        // The dashboard is served from this same origin and needs no CORS at all; cross-origin
+        // callers are the exception and now have to say so.
         if (options.CorsOrigins.Length > 0)
         {
             app.UseCors(policy => policy
@@ -140,8 +177,13 @@ public static class ApiServer
         }
         else
         {
+            // Loopback only, so a dashboard opened on the host itself keeps working while a page
+            // on some other machine cannot read this API from a browser. Set MultiSeat:CorsOrigins
+            // to allow specific remote origins.
             app.UseCors(policy => policy
-                .AllowAnyOrigin()
+                .WithOrigins(
+                    $"http://localhost:{options.ApiPort}",
+                    $"http://127.0.0.1:{options.ApiPort}")
                 .AllowAnyMethod()
                 .AllowAnyHeader());
         }
@@ -195,3 +237,4 @@ public static class ApiServer
         return generated;
     }
 }
+

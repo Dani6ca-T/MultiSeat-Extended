@@ -20,8 +20,25 @@ public sealed class MultiSeatOptions
     // ── API ──────────────────────────────────────────────────────────
     public int ApiPort { get; set; } = Shared.Constants.DefaultApiPort;
     public string ApiKey { get; set; } = string.Empty;  // set in appsettings or env
-    public bool RequireHttps { get; set; } = true;
+
+    // NOTE: there is deliberately no RequireHttps option. One existed, defaulted to true, and was
+    // never read by anything — so the config asserted that the API required HTTPS while it was
+    // served as plaintext HTTP on every interface, with the API key crossing the network in
+    // clear. A setting that claims a security property it does not implement is worse than no
+    // setting: it answers the question an operator would otherwise go and check.
+    //
+    // The API is HTTP only. ApiServer warns at startup when it is bound beyond loopback so the
+    // exposure is stated rather than implied. Restrict access with a firewall rule, or set
+    // ApiBindLoopbackOnly.
     public string[] CorsOrigins { get; set; } = [];
+
+    /// <summary>
+    /// Bind the API to loopback only, so the dashboard is reachable on the host itself and
+    /// nowhere else. Default false, which preserves the historical behaviour of listening on
+    /// every interface — turning it on is the right choice for any host whose dashboard is only
+    /// ever opened locally or over a remote-desktop tool.
+    /// </summary>
+    public bool ApiBindLoopbackOnly { get; set; } = false;
 
     // ── Audio ────────────────────────────────────────────────────────
     // How seat game audio reaches Moonlight. See AudioMode for the trade-off.
