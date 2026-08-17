@@ -133,11 +133,17 @@ if (args.Length == 2 && args[0] == "--enum-displays")
 // asked about — Session 0 sees no displays at all.
 // Pass "enable" to first ASK Windows to turn Advanced Color on for the active targets and then
 // re-read — the difference between "we asked and it refused" and "we never asked".
-// Usage: MultiSeat.Service.exe --advanced-color <output-json-file> [enable]
+// "disable" undoes an enable that succeeded — the console control genuinely switches a display
+// to 10-bit, so the probe must be reversible.
+// Usage: MultiSeat.Service.exe --advanced-color <output-json-file> [enable|disable]
 if (args.Length >= 2 && args[0] == "--advanced-color")
 {
-    var tryEnable = args.Length >= 3 && args[2].Equals("enable", StringComparison.OrdinalIgnoreCase);
-    return MultiSeat.Service.Display.AdvancedColorHelper.RunAndWriteToFile(args[1], tryEnable);
+    bool? setState = args.Length >= 3
+        ? args[2].Equals("enable", StringComparison.OrdinalIgnoreCase) ? true
+        : args[2].Equals("disable", StringComparison.OrdinalIgnoreCase) ? false
+        : null
+        : null;
+    return MultiSeat.Service.Display.AdvancedColorHelper.RunAndWriteToFile(args[1], setState);
 }
 
 // ── Set-default-capture helper mode ──────────────────────────────────

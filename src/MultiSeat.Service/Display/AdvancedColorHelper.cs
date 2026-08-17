@@ -40,7 +40,7 @@ internal static class AdvancedColorHelper
     /// </summary>
     private static readonly Dictionary<uint, uint> SetResults = [];
 
-    private static void TryEnableOnActiveTargets()
+    private static void TryEnableOnActiveTargets(bool enable = true)
     {
         var ret = User32.GetDisplayConfigBufferSizes(
             User32.QDC_ALL_PATHS, out var numPaths, out var numModes);
@@ -65,25 +65,33 @@ internal static class AdvancedColorHelper
                     adapterId = path.targetInfo.adapterId,
                     id = path.targetInfo.id,
                 },
-                value = 1, // bit 0 = enable
+                value = enable ? 1u : 0u, // bit 0 = advanced colour on/off
             };
 
             var rc = User32.DisplayConfigSetDeviceInfo(ref set);
             SetResults[path.targetInfo.id] = rc;
             Console.Out.WriteLine(
-                $"[AdvancedColor] SetAdvancedColorState(target {path.targetInfo.id}) returned {rc}" +
+                $"[AdvancedColor] SetAdvancedColorState(target {path.targetInfo.id}, " +
+                $"{(enable ? "enable" : "disable")}) returned {rc}" +
                 (rc == User32.ERROR_SUCCESS ? " (success)" : " (failed)"));
         }
     }
 
-    public static int RunAndWriteToFile(string outputPath, bool tryEnable = false)
+    /// <param name="setState">
+    /// null = read only; true = ask Windows to enable advanced colour on active targets first;
+    /// false = ask it to disable. Disable exists so a probe that succeeds can be undone — the
+    /// console control here really does switch a display to 10-bit.
+    /// </param>
+    public static int RunAndWriteToFile(string outputPath, bool? setState = null)
     {
         try
         {
-            if (tryEnable)
+            if (setState is not null)
             {
-                Console.Out.WriteLine("[AdvancedColor] Asking Windows to enable Advanced Color on active targets...");
-                TryEnableOnActiveTargets();
+                Console.Out.WriteLine(
+                    $"[AdvancedColor] Asking Windows to {(setState.Value ? "enable" : "disable")} " +
+                    "Advanced Color on active targets...");
+                TryEnableOnActiveTargets(setState.Value);
                 Thread.Sleep(1500); // let any mode change settle before re-reading
             }
 
