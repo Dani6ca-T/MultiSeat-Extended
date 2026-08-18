@@ -124,7 +124,22 @@ public sealed class MultiSeatWorker : BackgroundService
         // The dashboard must be reachable from LAN devices (e.g. ROG Ally).
         // Windows Firewall blocks inbound connections by default; no install
         // script adds this rule, so we ensure it exists on every startup.
-        await _firewall.EnsureApiPortOpenAsync(_options.ApiPort, stoppingToken);
+        //
+        // Skipped when the API is bound to loopback, because then nothing is listening on an
+        // address the rule could admit traffic to: the hole would be permanently useless, and an
+        // open inbound port that leads nowhere is exactly the sort of thing that reads as an
+        // exposure later. Flipping ApiBindLoopbackOnly back to false re-creates it on next start.
+        if (_options.ApiBindLoopbackOnly)
+        {
+            _logger.LogInformation(
+                "Skipping the firewall rule for API port {Port} — the API is bound to loopback, so " +
+                "an inbound rule would admit nothing. Any existing MultiSeat-API rule is now " +
+                "redundant and can be removed.", _options.ApiPort);
+        }
+        else
+        {
+            await _firewall.EnsureApiPortOpenAsync(_options.ApiPort, stoppingToken);
+        }
 
         // ── Step 3b: Provision the shared game library ───────────────
         // Create the shared Steam library + ROM folders (once, idempotent) and grant seat
