@@ -49,6 +49,37 @@
 .NOTES
     Exit codes match fix-host-audio.ps1: 0 healthy, 1 wedged, 2 no verdict.
 
+    VERIFIED END TO END on a real sleep/wake, 2026-08-18:
+
+        slept (S3)                  10:11:23
+        woke                        10:12:24  (~61 s, wake source: Realtek NIC)
+        Kernel-Power 107 logged     yes, 10:11:24
+        this task auto-launched      yes, 10:12:23, LastTaskResult 0
+        verdict after 45 s settle   HEALTHY - app 0.080048 = endpoint 0.080048 = loopback 0.080048
+
+    That run proves the INSTRUMENT, not the absence of the fault: the sleep was a minute long and no
+    Moonlight stream had run beforehand, and the suspected cause only fires at stream start. A
+    HEALTHY line here after a short unstreamed sleep says nothing about the overnight case.
+
+    TESTING THIS ON A HEADLESS HOST - read before sleeping a machine you cannot walk over to.
+    Sleeping a headless host with no way back strands it. Confirm all three first:
+
+        powercfg /a                     -> Standby (S3) available
+        powercfg -devicequery wake_armed -> a NIC is listed (wake on LAN can reach it)
+        powercfg /q <scheme> SUB_SLEEP RTCWAKE -> "Allow wake timers" index is 1
+
+    Then register a one-shot guaranteed return before sleeping, and remove it afterwards:
+
+        $t = New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(4)
+        $s = New-ScheduledTaskSettingsSet -WakeToRun -StartWhenAvailable
+        Register-ScheduledTask -TaskName 'WakeSafetyNet' -Action (New-ScheduledTaskAction -Execute 'cmd.exe' -Argument '/c exit') -Trigger $t -Settings $s -Principal (New-ScheduledTaskPrincipal -UserId 'SYSTEM' -LogonType ServiceAccount -RunLevel Highest) -Force
+
+    Sleep with the API rather than rundll32: rundll32 powrprof.dll,SetSuspendState hibernates when
+    hibernation is enabled, which is a different test.
+
+        Add-Type -MemberDefinition '[DllImport("powrprof.dll")] public static extern bool SetSuspendState(bool hibernate, bool forceCritical, bool disableWakeEvent);' -Name PowerState -Namespace Win32
+        [Win32.PowerState]::SetSuspendState($false, $false, $false)   # standby, wake events ENABLED
+
     ASCII only, same reason as fix-host-audio.ps1: PowerShell 5.1 reads these files as ANSI and
     non-ASCII punctuation becomes mojibake that breaks parsing.
 #>
