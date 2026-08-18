@@ -43,8 +43,26 @@ Disable-NetFirewallRule -DisplayGroup 'Remote Desktop'
 session created, Apollo up and answering, seat `Ready` in 12.7 s. Seats connect to `127.0.0.2`, and
 Windows Firewall does not filter loopback.
 
-Check afterwards that nothing *else* still admits 3389. A host can carry an ungrouped rule that the
-command above does not touch, and one enabled rule is enough to leave the port open:
+### ⚠️ RDPWrap reopens it, and the group command does not close it
+
+`RDPWInst.exe -i` — the RDP Wrapper installer, which `install-prerequisites.ps1` runs — creates its
+own firewall rule as part of installing:
+
+```
+netsh advfirewall firewall add rule name="Remote Desktop" dir=in protocol=tcp localport=3389 profile=any action=allow
+```
+
+That string is in the RDPWInst binary, and the rule it produces is **ungrouped**, so
+`Disable-NetFirewallRule -DisplayGroup 'Remote Desktop'` leaves it enabled and the port open.
+
+This matters because refreshing RDPWrap is routine: a Windows update to `termsrv.dll` breaks
+`rdpwrap.ini`, the documented remedy is to re-run the prerequisites script, and doing so **silently
+reopens 3389** on a host that had deliberately closed it. The prerequisites script now says so when
+it happens; it does not close the rule for you, because some hosts want RDP reachable.
+
+Check afterwards that nothing *else* still admits 3389. Besides the RDPWrap rule, a host can carry
+any other ungrouped rule the group command does not touch, and one enabled rule is enough to leave
+the port open:
 
 ```powershell
 Get-NetFirewallRule -Enabled True -Direction Inbound -Action Allow | ForEach-Object {

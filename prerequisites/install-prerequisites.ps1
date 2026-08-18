@@ -718,6 +718,30 @@ if ($existingDll) {
         $rdpInst = Get-ChildItem $rdpDir -Filter "RDPWInst.exe" | Select-Object -First 1
         if ($rdpInst) {
             Start-Process $rdpInst.FullName -ArgumentList "-i -o" -Wait -NoNewWindow
+
+            # RDPWInst opens 3389 to the network as part of installing, by running:
+            #   netsh advfirewall firewall add rule name="Remote Desktop" dir=in
+            #                     protocol=tcp localport=3389 profile=any action=allow
+            # (that string is in the RDPWInst binary). The rule it creates is ungrouped, so
+            # `Disable-NetFirewallRule -DisplayGroup 'Remote Desktop'` does NOT turn it off and a
+            # host that deliberately closed RDP gets it silently reopened by a routine RDPWrap
+            # refresh — which is the normal remedy after a Windows update breaks rdpwrap.ini.
+            #
+            # Not disabled here: some hosts genuinely want RDP reachable, and this script should not
+            # quietly decide otherwise. It is said instead, because being reopened without being
+            # told is the part that actually costs someone.
+            $rdpRule = Get-NetFirewallRule -Enabled True -Direction Inbound -Action Allow -ErrorAction SilentlyContinue |
+                       Where-Object { ($_ | Get-NetFirewallPortFilter -ErrorAction SilentlyContinue).LocalPort -contains '3389' }
+            if ($rdpRule) {
+                Write-Host "  NOTE: RDPWInst opened inbound TCP/3389 to the network (rule 'Remote Desktop')." -ForegroundColor Yellow
+                Write-Host "        MultiSeat does NOT need it — seats connect over loopback, which is not" -ForegroundColor Yellow
+                Write-Host "        filtered, and this is verified. With NLA off (see docs/security-posture.md)" -ForegroundColor Yellow
+                Write-Host "        an open 3389 is worth closing deliberately:" -ForegroundColor Yellow
+                foreach ($r in $rdpRule) {
+                    Write-Host ("          Disable-NetFirewallRule -Name '{0}'   # {1}" -f $r.Name, $r.DisplayName) -ForegroundColor Yellow
+                }
+            }
+
             $installedDll = Get-RdpWrapperDllPath
             if ($installedDll) {
                 Write-OK "Installed (dll: $installedDll)"
