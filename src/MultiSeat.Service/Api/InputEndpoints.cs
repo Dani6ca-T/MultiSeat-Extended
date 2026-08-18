@@ -78,6 +78,12 @@ public static class InputEndpoints
         });
 
         // ── Hook status ──────────────────────────────────────────────
+        //
+        // "Installed" means SetWindowsHookEx returned a handle. It does NOT mean input is being
+        // filtered, and it never has: the hooks run in session 0 where the filter always passes
+        // (see InputHookManager.Start). Reported as-is, with Filtering alongside it, because a
+        // caller reading only "Installed: true" concludes isolation is working — which is what
+        // happened in #18.
         group.MapGet("/hooks/status", (SeatManager mgr) =>
         {
             var hookMgr = mgr.InputHookManager;
@@ -85,7 +91,16 @@ public static class InputEndpoints
             {
                 Installed = hookMgr.IsInstalled,
                 TargetSessionId = hookMgr.CurrentSessionId,
-                Enabled = hookMgr.CurrentSessionId != 0xFFFFFFFF
+                Enabled = hookMgr.CurrentSessionId != 0xFFFFFFFF,
+
+                // Always false. Kept as an explicit field rather than left to be inferred, so the
+                // dashboard and any script can show the truth instead of implying the opposite.
+                Filtering = false,
+                FilteringNote =
+                    "Hooks install successfully but filter nothing: they run in session 0, where " +
+                    "GetForegroundWindow() returns NULL and the filter passes every event. Seats " +
+                    "need no keyboard/mouse isolation — Moonlight input is injected inside the " +
+                    "seat's own session."
             });
         });
     }

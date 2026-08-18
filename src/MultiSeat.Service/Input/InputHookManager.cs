@@ -61,11 +61,30 @@ public sealed class InputHookManager : IDisposable
     {
         if (!_enabled) return;
 
+        // Warned BEFORE the DLL check, so it is said whether or not the DLL is present. Otherwise
+        // someone without the DLL is told only that isolation is "unavailable", which implies it
+        // would work once they build it — and sends them off to install a C++ toolchain for a
+        // feature that cannot filter either way.
+        //
+        // Every other signal says this worked: the DLL loads, SetWindowsHookEx succeeds, and the
+        // dashboard shows hooks installed against the right session. A reporter followed exactly
+        // that evidence and went looking for the cause in his virtual display setup (#18).
+        _logger.LogWarning(
+            "EnableKeyboardMouseIsolation is ON, but it filters NOTHING and cannot as built. The " +
+            "low-level hooks run in this service, which lives in session 0, where " +
+            "GetForegroundWindow() returns NULL — so the filter's 'unknown foreground session' " +
+            "branch passes every event through. Low-level hooks also only observe the active input " +
+            "desktop, which session 0 is not. Nothing is wrong with your configuration or your " +
+            "build. Seats do not need this anyway: physical input goes to the console session, and " +
+            "Moonlight input is injected inside the seat's own session, so there is no cross-session " +
+            "bleed for it to prevent. If input from a client is reaching the console, look at which " +
+            "session that client's Apollo is running in, not at this setting.");
+
         if (!File.Exists(_dllPath))
         {
             _logger.LogWarning(
-                "MultiSeatInputHook.dll not found at {Path} — keyboard/mouse isolation unavailable. " +
-                "Build MultiSeat.InputHook (CMake) and re-run install-service.ps1.",
+                "MultiSeatInputHook.dll not found at {Path}. Building it will not change the " +
+                "behaviour described above — the hooks install but never filter.",
                 _dllPath);
             return;
         }
