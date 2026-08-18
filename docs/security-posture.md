@@ -33,11 +33,28 @@ it — so there is no way to keep NLA for real clients and drop it only for the 
 
 **The mitigation is to keep 3389 off the network**, which is a decision about the host rather than
 about MultiSeat, so the scripts do not make it for you. MultiSeat needs no inbound firewall rule at
-all: loopback traffic is not filtered. Disabling the group is safe:
+all: loopback traffic is not filtered.
 
 ```powershell
 Disable-NetFirewallRule -DisplayGroup 'Remote Desktop'
 ```
+
+**Verified, not assumed**: with all inbound 3389 rules disabled, a seat still provisions normally —
+session created, Apollo up and answering, seat `Ready` in 12.7 s. Seats connect to `127.0.0.2`, and
+Windows Firewall does not filter loopback.
+
+Check afterwards that nothing *else* still admits 3389. A host can carry an ungrouped rule that the
+command above does not touch, and one enabled rule is enough to leave the port open:
+
+```powershell
+Get-NetFirewallRule -Enabled True -Direction Inbound -Action Allow | ForEach-Object {
+    $pf = $_ | Get-NetFirewallPortFilter
+    if ($pf.LocalPort -contains '3389') { "$($_.DisplayName)  [$($_.Name)]" }
+}
+```
+
+Leave `fDenyTSConnections = 0` and TermService running — the firewall rules are what expose RDP to
+the network; the service and the setting are what make loopback seats possible.
 
 ### Undoing the rest
 
