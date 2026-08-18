@@ -96,54 +96,10 @@ $ErrorActionPreference = 'Stop'
 $TaskName  = 'MultiSeat-WakeAudioCheck'
 $Root      = 'C:\ProgramData\MultiSeat\wake-audio'
 $LogPath   = Join-Path $Root 'wake-audio.log'
-$TonePath  = Join-Path $Root 'quiet-tone.wav'
 $Diagnoser = Join-Path $PSScriptRoot 'fix-host-audio.ps1'
 
 function Write-Log($text) {
     Add-Content -LiteralPath $LogPath -Value $text -Encoding ASCII
-}
-
-# A soft 220 Hz sine. The diagnoser's thresholds are 0.001 and this peaks near 0.08, so it sits
-# roughly 80x above the floor while staying easy to ignore if it lands in a live stream.
-function New-QuietToneWav {
-    if (Test-Path $TonePath) { return }
-    $rate    = 44100
-    $seconds = 2
-    $freq    = 220.0
-    $amp     = 0.08
-    $count   = $rate * $seconds
-    $fade    = 441
-    $ms = New-Object System.IO.MemoryStream
-    $bw = New-Object System.IO.BinaryWriter($ms)
-    try {
-        $dataBytes = $count * 2
-        $bw.Write([System.Text.Encoding]::ASCII.GetBytes('RIFF'))
-        $bw.Write([int](36 + $dataBytes))
-        $bw.Write([System.Text.Encoding]::ASCII.GetBytes('WAVE'))
-        $bw.Write([System.Text.Encoding]::ASCII.GetBytes('fmt '))
-        $bw.Write([int]16)
-        $bw.Write([int16]1)
-        $bw.Write([int16]1)
-        $bw.Write([int]$rate)
-        $bw.Write([int]($rate * 2))
-        $bw.Write([int16]2)
-        $bw.Write([int16]16)
-        $bw.Write([System.Text.Encoding]::ASCII.GetBytes('data'))
-        $bw.Write([int]$dataBytes)
-        for ($i = 0; $i -lt $count; $i++) {
-            $envelope = 1.0
-            if ($i -lt $fade) { $envelope = $i / $fade }
-            elseif ($i -gt ($count - $fade)) { $envelope = ($count - $i) / $fade }
-            $sample = [math]::Sin(2.0 * [math]::PI * $freq * $i / $rate) * $amp * $envelope
-            $bw.Write([int16][math]::Round($sample * 32767))
-        }
-        $bw.Flush()
-        [System.IO.File]::WriteAllBytes($TonePath, $ms.ToArray())
-    }
-    finally {
-        $bw.Dispose()
-        $ms.Dispose()
-    }
 }
 
 function Get-LastResumeTime {
@@ -163,7 +119,6 @@ function Get-ApolloContext {
 
 function Invoke-Check {
     New-Item -ItemType Directory -Force -Path $Root | Out-Null
-    New-QuietToneWav
 
     $resume = Get-LastResumeTime
     if ($SettleSeconds -gt 0) { Start-Sleep -Seconds $SettleSeconds }
@@ -172,7 +127,7 @@ function Invoke-Check {
     # *>&1, not 2>&1: the diagnoser reports through Write-Host, which goes to the information
     # stream. With 2>&1 this captured NOTHING and the log recorded a verdict with no evidence
     # under it - measured, not theorised.
-    $out    = & $Diagnoser -DiagnoseOnly -ToneWav $TonePath *>&1 | ForEach-Object { "$_" }
+    $out    = & $Diagnoser -DiagnoseOnly *>&1 | ForEach-Object { "$_" }
     $code   = $LASTEXITCODE
 
     switch ($code) {

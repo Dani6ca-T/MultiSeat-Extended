@@ -19,7 +19,11 @@
 
     The script generates its own audio so a reading always has a known-positive behind it. Silence
     measured with nothing playing means nothing at all - that mistake cost an hour on 2026-08-18,
-    twice.
+    twice. The probe is a 19 kHz tone: loud enough for the meters, inaudible in practice, which
+    matters because the default endpoint is usually the one a Moonlight client is listening to.
+
+    Nothing here is specific to one machine. The device behind the default endpoint is resolved at
+    runtime through its SWD\MMDEVAPI node, so this runs on any host - including a reporter's.
 
     It then walks the repair levers cheapest-first, re-measuring after each, and stops the moment
     audio flows. It reports which lever worked, because that is the evidence needed to fix the
@@ -35,9 +39,20 @@
     Do not generate audio. Use when you are already playing something and would rather measure that.
 
 .PARAMETER ToneWav
-    The .wav to loop while measuring. Defaults to a Windows system sound. The unattended wake check
-    passes a quiet generated tone instead, so an automatic run does not blast a system alert into a
-    live Moonlight stream.
+    Loop this .wav instead of the generated probe tone. Only needed if you want a specific signal.
+
+.PARAMETER ToneHz
+    Frequency of the generated probe tone, default 19000 - high enough to be inaudible to most
+    listeners, and measured to travel this path with no attenuation (0.080017 at 19 kHz vs 0.080048
+    at 220 Hz). Drop it to something audible if you want to hear the probe yourself.
+
+.PARAMETER ToneAmplitude
+    Probe amplitude, default 0.08. The healthy/wedged thresholds are 0.001, so this sits about 80x
+    above the floor.
+
+.PARAMETER CableInstanceId
+    Force a PnP device instance for the device-state checks. By default the script asks Windows which
+    device backs the current default endpoint, so it needs no per-machine configuration.
 
 .EXAMPLE
     .\fix-host-audio.ps1 -DiagnoseOnly
@@ -54,13 +69,17 @@
 param(
     [switch] $DiagnoseOnly,
     [switch] $SkipToneGenerator,
-    [string] $ToneWav = 'C:\Windows\Media\Alarm03.wav'
+    [string] $ToneWav,
+    [int]    $ToneHz = 19000,
+    [double] $ToneAmplitude = 0.08,
+    [string] $CableInstanceId
 )
 
 $ErrorActionPreference = 'Stop'
 
 $Exe         = 'C:\Program Files\MultiSeat\MultiSeat.Service.exe'
-$CableInstId = 'ROOT\MEDIA\0003'      # VB-Audio Virtual Cable on this host
+$script:CableInstId = $CableInstanceId   # resolved from the default endpoint when not given
+$script:ToneFile    = $ToneWav
 
 function Write-Head($t) { Write-Host "`n=== $t ===" -ForegroundColor Cyan }
 function Write-Ok($t)   { Write-Host "  OK    $t" -ForegroundColor Green }
@@ -74,13 +93,57 @@ if (-not (Test-Path $Exe)) {
 # ---- Tone generator ---------------------------------------------------------
 # SoundPlayer does NOT render when called inline from a non-interactive host; it works fine in a
 # SEPARATE process. Learned the hard way - see the audio-instrument notes.
+# Which PnP device backs the default endpoint? Windows answers this itself: every endpoint has a
+# SWD\MMDEVAPI node whose parent IS the device. That removes the last host-specific constant - the
+# script used to carry one machine's 'ROOT\MEDIA\0003' and would have inspected the wrong device,
+# or none, anywhere else.
+function Resolve-EndpointDevice($endpointId) {
+    if (-not $endpointId) { return $null }
+    try {
+        return (Get-PnpDeviceProperty -InstanceId "SWD\MMDEVAPI\$endpointId" -KeyName 'DEVPKEY_Device_Parent' -ErrorAction Stop).Data
+    }
+    catch { return $null }
+}
+
+# An INAUDIBLE probe. A loopback measurement needs real signal - silence cannot prove audio comes
+# out - but it does not need to be heard. The meters are broadband, and 19 kHz measures identical to
+# a 220 Hz tone through this path (0.080017 vs 0.080048, verified 2026-08-18) while being inaudible
+# to most listeners. It matters because this runs unattended and the default endpoint is usually the
+# one a Moonlight client is listening to.
+function New-ToneFile {
+    $path = Join-Path $env:TEMP ("fix-host-audio-{0}hz.wav" -f $ToneHz)
+    if (Test-Path $path) { return $path }
+    $rate = 48000; $count = $rate * 2; $fade = 480
+    $ms = New-Object System.IO.MemoryStream
+    $bw = New-Object System.IO.BinaryWriter($ms)
+    try {
+        $data = $count * 2
+        $bw.Write([System.Text.Encoding]::ASCII.GetBytes('RIFF')); $bw.Write([int](36 + $data))
+        $bw.Write([System.Text.Encoding]::ASCII.GetBytes('WAVE')); $bw.Write([System.Text.Encoding]::ASCII.GetBytes('fmt '))
+        $bw.Write([int]16); $bw.Write([int16]1); $bw.Write([int16]1); $bw.Write([int]$rate)
+        $bw.Write([int]($rate * 2)); $bw.Write([int16]2); $bw.Write([int16]16)
+        $bw.Write([System.Text.Encoding]::ASCII.GetBytes('data')); $bw.Write([int]$data)
+        for ($i = 0; $i -lt $count; $i++) {
+            $e = 1.0
+            if ($i -lt $fade) { $e = $i / $fade }
+            elseif ($i -gt ($count - $fade)) { $e = ($count - $i) / $fade }
+            $bw.Write([int16][math]::Round([math]::Sin(2.0 * [math]::PI * $ToneHz * $i / $rate) * $ToneAmplitude * $e * 32767))
+        }
+        $bw.Flush()
+        [System.IO.File]::WriteAllBytes($path, $ms.ToArray())
+    }
+    finally { $bw.Dispose(); $ms.Dispose() }
+    return $path
+}
+
 function Start-Tone {
     if ($SkipToneGenerator) { return $null }
-    if (-not (Test-Path $ToneWav)) {
-        Write-Info "tone file missing ($ToneWav) - measuring whatever is already playing"
+    if (-not $script:ToneFile) { $script:ToneFile = New-ToneFile }
+    if (-not (Test-Path $script:ToneFile)) {
+        Write-Info "tone file missing ($script:ToneFile) - measuring whatever is already playing"
         return $null
     }
-    $cmd = '$p = New-Object System.Media.SoundPlayer ' + "'$ToneWav'" + '; $p.PlayLooping(); Start-Sleep -Seconds 600'
+    $cmd = '$p = New-Object System.Media.SoundPlayer ' + "'$script:ToneFile'" + '; $p.PlayLooping(); Start-Sleep -Seconds 600'
     $p = Start-Process powershell.exe -PassThru -WindowStyle Hidden `
             -ArgumentList '-NoProfile','-ExecutionPolicy','Bypass','-Command',$cmd
     Start-Sleep -Seconds 3
@@ -161,21 +224,26 @@ function Show-Snapshot($s) {
 }
 
 function Show-DeviceState($healthy) {
-    Write-Head 'VB-CABLE device state'
-    $d = Get-PnpDevice -InstanceId $CableInstId -ErrorAction SilentlyContinue
-    if (-not $d) { Write-Bad "device $CableInstId not found"; return $false }
+    Write-Head 'Endpoint device state'
+    if (-not $script:CableInstId) {
+        Write-Info 'could not resolve the PnP device behind the default endpoint - skipping device checks'
+        return $false
+    }
+    Write-Info ("device      : {0}" -f $script:CableInstId)
+    $d = Get-PnpDevice -InstanceId $script:CableInstId -ErrorAction SilentlyContinue
+    if (-not $d) { Write-Bad "device $script:CableInstId not found"; return $false }
 
     Write-Info ("status      : {0}" -f $d.Status)
-    $cf = (Get-PnpDeviceProperty -InstanceId $CableInstId -KeyName 'DEVPKEY_Device_ConfigFlags' -ErrorAction SilentlyContinue).Data
+    $cf = (Get-PnpDeviceProperty -InstanceId $script:CableInstId -KeyName 'DEVPKEY_Device_ConfigFlags' -ErrorAction SilentlyContinue).Data
     if ($cf -eq 1) {
         Write-Bad 'ConfigFlags = 1 (CONFIGFLAG_DISABLED) - this device would come back DISABLED after a reboot. Fixing.'
-        Enable-PnpDevice -InstanceId $CableInstId -Confirm:$false -ErrorAction SilentlyContinue
+        Enable-PnpDevice -InstanceId $script:CableInstId -Confirm:$false -ErrorAction SilentlyContinue
     }
     else {
         Write-Info ("ConfigFlags : {0}" -f $cf)
     }
 
-    $out = pnputil /restart-device "$CableInstId" 2>&1 | ForEach-Object { "$_" }
+    $out = pnputil /restart-device "$script:CableInstId" 2>&1 | ForEach-Object { "$_" }
     $pending = ($out -match 'pending system reboot').Count -gt 0
     if ($pending) {
         # Measured 2026-08-18, 30 minutes after a clean reboot, with the audio path fully healthy:
@@ -208,9 +276,9 @@ function Invoke-Lever2 {
     Stop-Service Audiosrv -Force
     Start-Sleep -Seconds 2
     try {
-        Disable-PnpDevice -InstanceId $CableInstId -Confirm:$false -ErrorAction Stop
+        Disable-PnpDevice -InstanceId $script:CableInstId -Confirm:$false -ErrorAction Stop
         Start-Sleep -Seconds 3
-        Enable-PnpDevice -InstanceId $CableInstId -Confirm:$false -ErrorAction Stop
+        Enable-PnpDevice -InstanceId $script:CableInstId -Confirm:$false -ErrorAction Stop
         Write-Ok 'device disabled and re-enabled'
     }
     catch {
@@ -218,10 +286,10 @@ function Invoke-Lever2 {
     }
     finally {
         # NEVER leave the disable flag set.
-        $cf = (Get-PnpDeviceProperty -InstanceId $CableInstId -KeyName 'DEVPKEY_Device_ConfigFlags' -ErrorAction SilentlyContinue).Data
+        $cf = (Get-PnpDeviceProperty -InstanceId $script:CableInstId -KeyName 'DEVPKEY_Device_ConfigFlags' -ErrorAction SilentlyContinue).Data
         if ($cf -eq 1) {
             Write-Bad 'ConfigFlags still 1 - clearing so the device is not disabled at next boot'
-            Enable-PnpDevice -InstanceId $CableInstId -Confirm:$false -ErrorAction SilentlyContinue
+            Enable-PnpDevice -InstanceId $script:CableInstId -Confirm:$false -ErrorAction SilentlyContinue
         }
         Start-Service Audiosrv
         Start-Sleep -Seconds 6
@@ -259,6 +327,7 @@ function Invoke-Main {
     Write-Head 'Baseline'
     $snap = Get-AudioSnapshot
     Show-Snapshot $snap
+    if (-not $script:CableInstId) { $script:CableInstId = Resolve-EndpointDevice $snap.DefaultId }
     $pending = Show-DeviceState $snap.Healthy
 
     if ($snap.Healthy) {
