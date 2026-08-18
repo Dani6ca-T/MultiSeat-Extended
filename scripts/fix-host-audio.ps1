@@ -34,6 +34,11 @@
 .PARAMETER SkipToneGenerator
     Do not generate audio. Use when you are already playing something and would rather measure that.
 
+.PARAMETER ToneWav
+    The .wav to loop while measuring. Defaults to a Windows system sound. The unattended wake check
+    passes a quiet generated tone instead, so an automatic run does not blast a system alert into a
+    live Moonlight stream.
+
 .EXAMPLE
     .\fix-host-audio.ps1 -DiagnoseOnly
     .\fix-host-audio.ps1
@@ -48,14 +53,14 @@
 [CmdletBinding()]
 param(
     [switch] $DiagnoseOnly,
-    [switch] $SkipToneGenerator
+    [switch] $SkipToneGenerator,
+    [string] $ToneWav = 'C:\Windows\Media\Alarm03.wav'
 )
 
 $ErrorActionPreference = 'Stop'
 
 $Exe         = 'C:\Program Files\MultiSeat\MultiSeat.Service.exe'
 $CableInstId = 'ROOT\MEDIA\0003'      # VB-Audio Virtual Cable on this host
-$ToneWav     = 'C:\Windows\Media\Alarm03.wav'
 
 function Write-Head($t) { Write-Host "`n=== $t ===" -ForegroundColor Cyan }
 function Write-Ok($t)   { Write-Host "  OK    $t" -ForegroundColor Green }
