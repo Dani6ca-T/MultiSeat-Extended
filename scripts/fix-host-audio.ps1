@@ -37,6 +37,13 @@
 .EXAMPLE
     .\fix-host-audio.ps1 -DiagnoseOnly
     .\fix-host-audio.ps1
+
+.NOTES
+    Exit codes (safe to test in a wrapper or a scheduled task):
+
+        0   audio path healthy - already, or repaired by a lever
+        1   measured unhealthy and not repaired (also -DiagnoseOnly on an unhealthy host)
+        2   no verdict - nothing was playing to measure, or the script itself failed
 #>
 [CmdletBinding()]
 param(
@@ -148,7 +155,7 @@ function Show-Snapshot($s) {
     }
 }
 
-function Show-DeviceState {
+function Show-DeviceState($healthy) {
     Write-Head 'VB-CABLE device state'
     $d = Get-PnpDevice -InstanceId $CableInstId -ErrorAction SilentlyContinue
     if (-not $d) { Write-Bad "device $CableInstId not found"; return $false }
@@ -166,7 +173,16 @@ function Show-DeviceState {
     $out = pnputil /restart-device "$CableInstId" 2>&1 | ForEach-Object { "$_" }
     $pending = ($out -match 'pending system reboot').Count -gt 0
     if ($pending) {
-        Write-Bad 'device reports PENDING SYSTEM REBOOT - in-place resets cannot work; a reboot is required'
+        # Measured 2026-08-18, 30 minutes after a clean reboot, with the audio path fully healthy:
+        # this device reports pending-reboot ANYWAY. A control on another audio device restarted
+        # cleanly, so the message is specific to this device, not a pnputil quirk. It therefore says
+        # 'lever 2 cannot restart this device' - it does NOT say the cable is currently wedged.
+        if ($healthy) {
+            Write-Info 'note: device reports PENDING SYSTEM REBOOT, but audio is healthy - so this is a standing state of this device, not a fault. It only means an in-place device restart is unavailable.'
+        }
+        else {
+            Write-Bad 'device reports PENDING SYSTEM REBOOT - it cannot be restarted in place; a reboot is required'
+        }
     }
     return $pending
 }
@@ -227,24 +243,32 @@ function Invoke-Lever3 {
 }
 
 # ---- Main -------------------------------------------------------------------
-Write-Host "`nHost audio diagnosis" -ForegroundColor White
-$tone = Start-Tone
-try {
+# Exit codes are set explicitly and are the only thing this script exits with.
+# Without them the script exited with whatever $LASTEXITCODE the last native
+# instrument call happened to leave behind (a healthy run exited 194), so any
+# caller checking the exit code read a healthy host as a failure.
+#   0 - audio path healthy (already, or repaired by a lever)
+#   1 - measured unhealthy and not repaired
+#   2 - no verdict: nothing was playing, or the script failed
+function Invoke-Main {
     Write-Head 'Baseline'
     $snap = Get-AudioSnapshot
     Show-Snapshot $snap
-    $pending = Show-DeviceState
+    $pending = Show-DeviceState $snap.Healthy
 
     if ($snap.Healthy) {
         Write-Host "`nAudio path is healthy - nothing to repair." -ForegroundColor Green
+        $script:ExitCode = 0
         return
     }
     if (-not $snap.SourceAudible) {
         Write-Host "`nCannot proceed: no audio is playing, so a silent reading proves nothing." -ForegroundColor Yellow
+        $script:ExitCode = 2
         return
     }
     if ($DiagnoseOnly) {
         Write-Host "`n-DiagnoseOnly set - stopping before any repair." -ForegroundColor Yellow
+        $script:ExitCode = 1
         return
     }
 
@@ -254,14 +278,15 @@ try {
         if ($lever -eq 2) { Invoke-Lever2 }
         if ($lever -eq 3) { if (-not (Invoke-Lever3)) { continue } }
 
-        Stop-Tone $tone
-        $tone = Start-Tone          # a rebuilt endpoint needs a NEW stream
+        Stop-Tone $script:Tone
+        $script:Tone = Start-Tone    # a rebuilt endpoint needs a NEW stream
         $snap = Get-AudioSnapshot
         Show-Snapshot $snap
 
         if ($snap.Healthy) {
             Write-Host "`nFIXED by lever $lever - no reboot needed." -ForegroundColor Green
             Write-Host "Record which lever worked; that is the evidence needed to fix the cause." -ForegroundColor Green
+            $script:ExitCode = 0
             return
         }
     }
@@ -274,7 +299,20 @@ try {
         & $Exe --set-default-render $originalDefault | Out-Null
         Write-Info 'default render device restored'
     }
+    $script:ExitCode = 1
+}
+
+$script:ExitCode = 2       # no verdict until something measures one
+Write-Host "`nHost audio diagnosis" -ForegroundColor White
+$script:Tone = Start-Tone
+try {
+    Invoke-Main
+}
+catch {
+    Write-Bad "unexpected error: $($_.Exception.Message)"
+    $script:ExitCode = 2
 }
 finally {
-    Stop-Tone $tone
+    Stop-Tone $script:Tone
 }
+exit $script:ExitCode
