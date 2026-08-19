@@ -84,6 +84,27 @@ public static class RdpFileBuilder
         // mic-access security dialog that DismissMstscSecurityDialog cannot catch, hanging the
         // RDP connection. Mic under SharedHost is handled via the VAC pair instead; PerSession
         // has no mic path at all (see AudioMode.PerSession).
+        //
+        // ── SharedHost's cost, measured 2026-08-19: i:1 WEDGES THE HOST'S AUDIO ──────────────
+        //
+        // Provisioning a seat under i:1 collapses the host's SWD\MMDEVAPI endpoint nodes from 27
+        // to 1. Host audio goes silent — audio still enters CABLE In 16ch (app meter 0.08) but
+        // nothing comes out (endpoint 0.00003, loopback 100% silent) — and it STAYS that way
+        // after the seat is torn down. Repair is `scripts\fix-host-audio.ps1`, whose lever 1
+        // restarts AudioEndpointBuilder and rebuilds the nodes. No reboot needed, despite years
+        // of believing otherwise.
+        //
+        // i:2 ("do not play") was tried as a fix and REJECTED. It does avoid the wedge — a full
+        // provision + teardown left all 27 nodes and healthy audio — but it also makes the host's
+        // audio devices invisible inside the session, which is the one thing SharedHost needs:
+        //
+        //     endpoints enumerated inside the seat session, --audio-peaks
+        //       i:1  → 14, including CABLE In 16ch   (and the host wedges)
+        //       i:2  →  0                             (and the host is fine)
+        //
+        // So the mechanism that makes SharedHost work IS the mechanism that wedges the host, and
+        // no audiomode value gives both. The escape is PerSession (i:0), which uses the session's
+        // own Remote Audio endpoint and never touches the host's — at the cost of the microphone.
         var audio = audioMode == AudioMode.PerSession ? 0 : 1;
 
         var content =

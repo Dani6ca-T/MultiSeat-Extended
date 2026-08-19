@@ -75,6 +75,10 @@ public class RdpFileBuilderTests
     // ── Audio mode must keep working alongside the new keys ───────────
 
     [Theory]
+    // SharedHost stays i:1 even though i:1 is what wedges the host's audio endpoint stack: i:2
+    // avoids the wedge but hides the host's audio devices from the session, and SharedHost has
+    // nothing to capture without them (measured 2026-08-19 — 14 endpoints visible under i:1,
+    // 0 under i:2). See the trade-off documented in RdpFileBuilder.
     [InlineData(AudioMode.SharedHost, "audiomode:i:1")]
     [InlineData(AudioMode.PerSession, "audiomode:i:0")]
     public void KeepsAudioModeIndependentOfGeometry(AudioMode mode, string expected)
