@@ -300,36 +300,66 @@ if ($vddSvc) {
 
 # -- VoiceMeeter start ---------------------------------------------------------
 # VoiceMeeter Potato must be running for its virtual audio devices (VoiceMeeter
-# Input, Aux Input, VAIO3) to route audio. It is registered in HKLM\Run so it
-# auto-starts at user login, but may not be running if the session just booted or
-# if the service is being re-deployed without a user login in between.
+# Input, Aux Input, VAIO3) to route audio. Nothing auto-starts it: it is NOT in
+# HKLM\Run on the reference host, despite what this comment used to claim, so
+# between a boot and the first seat provision there is no VoiceMeeter process.
 # Start it here (from the admin session, NOT Session 0) before the MultiSeat
 # service begins — the service's AudioRouter will also try to start it, but
 # launching a GUI app from SYSTEM/Session 0 is unreliable.
+# Editions in preference order, 64-bit variant of each first. This used to look for
+# voicemeeterpro.exe only - which is BANANA - while every message here said "Potato",
+# so a host with Potato installed got Banana started and was told otherwise. Seat 3 is
+# assigned the VAIO3 device and only Potato provides it, so Potato has to win.
+# Same order as AudioRouter.VoiceMeeterExeNames; keep the two in step.
+$vmNames = @(
+    "voicemeeter8x64.exe",      # Potato, 64-bit
+    "voicemeeter8.exe",         # Potato
+    "voicemeeterpro_x64.exe",   # Banana, 64-bit
+    "voicemeeterpro.exe",       # Banana
+    "voicemeeter_x64.exe",      # basic, 64-bit
+    "voicemeeter.exe"           # basic
+)
+# The installer uses the 32-bit tree, so look there first.
+$vmRoots = @("C:\Program Files (x86)\VB\Voicemeeter", "C:\Program Files\VB\Voicemeeter")
+
 $vmExe = $null
-foreach ($candidate in @(
-    "C:\Program Files\VB\Voicemeeter\voicemeeterpro.exe",
-    "C:\Program Files (x86)\VB\Voicemeeter\voicemeeterpro.exe"
-)) {
-    if (Test-Path $candidate) { $vmExe = $candidate; break }
+foreach ($root in $vmRoots) {
+    foreach ($name in $vmNames) {
+        $candidate = Join-Path $root $name
+        if (Test-Path $candidate) { $vmExe = $candidate; break }
+    }
+    if ($vmExe) { break }
 }
+
+function Get-RunningVoiceMeeter {
+    param([string[]]$Names)
+    foreach ($n in $Names) {
+        $proc = Get-Process -Name ([System.IO.Path]::GetFileNameWithoutExtension($n)) -ErrorAction SilentlyContinue
+        if ($proc) { return $proc[0].ProcessName }
+    }
+    return $null
+}
+
 if ($vmExe) {
-    $vmRunning = Get-Process -Name "voicemeeterpro" -ErrorAction SilentlyContinue
+    $vmRunning = Get-RunningVoiceMeeter -Names $vmNames
     if ($vmRunning) {
-        Write-Host "  OK: VoiceMeeter Potato already running" -ForegroundColor DarkGray
+        Write-Host "  OK: VoiceMeeter already running ($vmRunning)" -ForegroundColor DarkGray
     } else {
-        Write-Step "Starting VoiceMeeter Potato (audio routing)..."
+        Write-Step "Starting VoiceMeeter (audio routing)..."
         Start-Process $vmExe -WindowStyle Minimized
         Start-Sleep -Seconds 3
-        $vmRunning = Get-Process -Name "voicemeeterpro" -ErrorAction SilentlyContinue
+        $vmRunning = Get-RunningVoiceMeeter -Names $vmNames
         if ($vmRunning) {
-            Write-Host "  OK: VoiceMeeter Potato started" -ForegroundColor Green
+            # Name what actually started - claiming Potato while running Banana is how
+            # seat 3's VAIO3 device could look present and still carry no audio.
+            Write-Host "  OK: VoiceMeeter started ($(Split-Path $vmExe -Leaf))" -ForegroundColor Green
         } else {
             Write-Host "  WARNING: VoiceMeeter may not have started. Check manually." -ForegroundColor Yellow
         }
     }
 } else {
-    Write-Host "  NOTE: VoiceMeeter not found - audio isolation unavailable. Run prerequisites\install-prerequisites.ps1." -ForegroundColor Yellow
+    Write-Host "  NOTE: VoiceMeeter not found under VB\Voicemeeter in either Program Files tree -" -ForegroundColor Yellow
+    Write-Host "        seats using its devices will have no audio. Run prerequisites\install-prerequisites.ps1." -ForegroundColor Yellow
 }
 
 # -- Standalone Apollo coexistence --------------------------------------------
