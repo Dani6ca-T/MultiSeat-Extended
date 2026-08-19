@@ -128,7 +128,11 @@ public class StreamingTests
         try
         {
             var logger = new TestLogger<ApolloConfigBuilder>();
-            var builder = new ApolloConfigBuilder(logger, Options.Create(new MultiSeatOptions()));
+            // SharedHost explicitly: this case covers the audio keys that only that mode emits
+            // (virtual_sink, stream_mic). It used to rely on SharedHost being the default, which
+            // it stopped being on 2026-08-19 — see ApolloConfigBuilder_PerSessionIsTheDefault.
+            var options = new MultiSeatOptions { AudioMode = AudioMode.SharedHost };
+            var builder = new ApolloConfigBuilder(logger, Options.Create(options));
 
             var seat = new SeatInfo
             {
@@ -221,8 +225,12 @@ public class StreamingTests
         }
     }
 
+    // The default flipped to PerSession on 2026-08-19: SharedHost wedges the host's audio endpoint
+    // stack on every seat provision (nodes collapse 27 -> 1, measured), which is a worse default
+    // than losing the mic path. This asserts the flip in both places it has to hold — the C# default
+    // and the emitted Apollo config — because a mismatch between them would be invisible.
     [Fact]
-    public void ApolloConfigBuilder_SharedHostRemainsTheDefault()
+    public void ApolloConfigBuilder_PerSessionIsTheDefault()
     {
         var tempDir = Path.Combine(Path.GetTempPath(), $"multiseat-test-{Guid.NewGuid():N}");
 
@@ -232,7 +240,50 @@ public class StreamingTests
             // Default options — no AudioMode set anywhere.
             var builder = new ApolloConfigBuilder(logger, Options.Create(new MultiSeatOptions()));
 
-            Assert.Equal(AudioMode.SharedHost, new MultiSeatOptions().AudioMode);
+            Assert.Equal(AudioMode.PerSession, new MultiSeatOptions().AudioMode);
+
+            var seat = new SeatInfo
+            {
+                AccountName = "MultiSeatSeat01",
+                PortBase = 47984,
+                // Set deliberately: even when a cable is present on the seat, the default mode must
+                // not name it. Naming a sink is what broke loopback for every client in issue #15.
+                AudioGameRenderFriendlyName = "CABLE In 16ch (VB-Audio Virtual Cable)",
+            };
+
+            var content = File.ReadAllText(builder.BuildConfig(seat, tempDir));
+
+            // Assert on assignment LINES, not on the substring: the config deliberately explains
+            // itself in a comment that says "Both audio_sink and virtual_sink are deliberately
+            // UNSET", so a naive DoesNotContain fails against the very comment proving the point.
+            var settings = content
+                .Split('\n')
+                .Select(l => l.Trim())
+                .Where(l => !l.StartsWith('#'))
+                .ToList();
+
+            Assert.DoesNotContain(settings, l => l.StartsWith("virtual_sink ="));
+            Assert.DoesNotContain(settings, l => l.StartsWith("audio_sink ="));
+            // And the comment IS expected — it is how a reader knows the omission is deliberate.
+            Assert.Contains("deliberately UNSET", content);
+        }
+        finally
+        {
+            DeleteTestDir(tempDir);
+        }
+    }
+
+    // The old default still has to work for anyone who sets it explicitly to keep the microphone.
+    [Fact]
+    public void ApolloConfigBuilder_SharedHostStillNamesTheCableWhenAskedFor()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), $"multiseat-test-{Guid.NewGuid():N}");
+
+        try
+        {
+            var logger = new TestLogger<ApolloConfigBuilder>();
+            var options = new MultiSeatOptions { AudioMode = AudioMode.SharedHost };
+            var builder = new ApolloConfigBuilder(logger, Options.Create(options));
 
             var seat = new SeatInfo
             {
@@ -243,8 +294,6 @@ public class StreamingTests
 
             var content = File.ReadAllText(builder.BuildConfig(seat, tempDir));
 
-            // Existing installs must be untouched by the new mode: the seat's cable is still
-            // named and the mic path is still on.
             Assert.Contains("virtual_sink = CABLE In 16ch (VB-Audio Virtual Cable)", content);
             Assert.Contains("stream_mic = enabled", content);
         }

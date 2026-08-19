@@ -218,8 +218,8 @@ builder.Configuration.AddJsonFile(Path.Combine(exeDir, "appsettings.json"), opti
 //
 // appsettings.local.json is not in the repo and is gitignored, so publish never touches it and
 // it cannot be committed by accident. Use it for anything true of THIS machine rather than of
-// MultiSeat — e.g. running the reference host on "AudioMode": "PerSession" while the shipped
-// default stays SharedHost.
+// MultiSeat — e.g. pinning "AudioMode": "SharedHost" on a host that needs the microphone more
+// than it needs its own audio to survive a seat provision.
 builder.Configuration.AddJsonFile(Path.Combine(exeDir, "appsettings.local.json"), optional: true, reloadOnChange: true);
 builder.Services.Configure<MultiSeatOptions>(builder.Configuration.GetSection(MultiSeatOptions.SectionName));
 

@@ -35,7 +35,7 @@ Each seat reserves a block of 30 ports: `PortBase + (seat_index × 30)`. Default
 
 ## Audio: two modes (`MultiSeat:AudioMode`)
 
-| | `SharedHost` (default) | `PerSession` |
+| | `SharedHost` | `PerSession` **(default)** |
 |---|---|---|
 | RDP | `audiomode:i:1` — play on host | `audiomode:i:0` — play on client |
 | Endpoint | a host virtual cable per seat | the session's own **Remote Audio** (created by Windows) |
@@ -57,7 +57,13 @@ not optional (both learned the hard way in issue #15):
   speakers. Verify with `MultiSeat.Service.exe --audio-peaks` in the console session — the `mstsc`
   APP line must read `0.000000` while a seat streams.
 
-Default stays `SharedHost` because `PerSession` has no mic path. See `docs/design/per-session-audio.md`.
+The default is `PerSession` as of 2026-08-19. `SharedHost` was the historical default, but it
+**wedges the host's audio on every seat provision** - measured, the host's `SWD\MMDEVAPI` endpoint
+nodes collapse from 27 to 1 and playback stays silent after the seat is gone until
+`AudioEndpointBuilder` is restarted (`scripts\fix-host-audio.ps1` lever 1). That is what the
+"no audio after sleep, only a reboot fixes it" reports were. `PerSession` does not do it.
+**Choosing `SharedHost` explicitly is still supported and is the only way to get the microphone** -
+accept the wedge and keep the repair script handy. See `docs/design/per-session-audio.md`.
 
 ## Audio Device Layout (`SharedHost` mode only)
 

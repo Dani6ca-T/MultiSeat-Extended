@@ -69,8 +69,17 @@ public sealed class MultiSeatOptions
 
     // ── Audio ────────────────────────────────────────────────────────
     // How seat game audio reaches Moonlight. See AudioMode for the trade-off.
-    // Default SharedHost — the historical behaviour; PerSession drops mic support.
-    public AudioMode AudioMode { get; set; } = AudioMode.SharedHost;
+    //
+    // Default flipped to PerSession on 2026-08-19. SharedHost was the historical behaviour, but it
+    // WEDGES THE HOST'S AUDIO on every seat provision — measured: the host's SWD\MMDEVAPI endpoint
+    // nodes collapse from 27 to 1, host playback goes silent, and it stays that way after the seat
+    // is gone until AudioEndpointBuilder is restarted. That is a fault every user hits every time
+    // they start a seat, and it is what the "no audio after sleep, only a reboot fixes it" reports
+    // were. PerSession does not do it (same test, nodes stayed at 27), and it also closes #10/#12.
+    //
+    // The cost is real and one-way: PerSession has NO microphone path. Set SharedHost explicitly if
+    // the mic matters more than the host's audio, and see scripts\fix-host-audio.ps1 for the repair.
+    public AudioMode AudioMode { get; set; } = AudioMode.PerSession;
 
     // ── Virtual Audio Cable ──────────────────────────────────────────
     // Only used when AudioMode = SharedHost. PerSession needs no virtual cables at all.

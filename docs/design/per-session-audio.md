@@ -1,6 +1,6 @@
 # Design: Per-session audio isolation
 
-Status: **Implemented behind `AudioMode = PerSession`; default remains `SharedHost`** · Fixes: #10, #12 · Related: #11 (display-side twin)
+Status: **Shipped, and the DEFAULT since 2026-08-19** (`SharedHost` remains available and is the only mode with a mic path) · Fixes: #10, #12 · Related: #11 (display-side twin)
 
 > **R1 is answered — twice.** Our own spike (2026-08-07) measured a clean WASAPI loopback capture of a
 > seat session's Remote Audio endpoint (`packets=600, silent=0`, peak 0.356) and confirmed that muting
