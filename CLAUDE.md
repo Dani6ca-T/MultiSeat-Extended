@@ -66,7 +66,11 @@ Default stays `SharedHost` because `PerSession` has no mic path. See `docs/desig
 - Seat 2 → VoiceMeeter "VoiceMeeter Aux Input"
 - Seat 3 → VoiceMeeter "VoiceMeeter VAIO3 Input"
 
-VoiceMeeter must be running — `AudioRouter` auto-starts it. Registered in `HKLM\Run` for auto-start at boot.
+VoiceMeeter must be running — `AudioRouter.EnsureVoiceMeeterRunning` starts it in the console session
+when a seat needs one of its devices. It looks under `VB\Voicemeeter` in **both** Program Files trees
+(the installer uses the 32-bit one) and prefers **Potato**, since seat 3's VAIO3 device exists only
+there. It is **not** registered for auto-start on the reference host — despite what this line used to
+claim — so between boot and the first seat provision there is no VoiceMeeter process.
 
 ## Streaming behavior — resolution, audio, controller
 

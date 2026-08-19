@@ -34,7 +34,75 @@ public sealed class AudioRouter
     private readonly AudioDeviceEnumerator _deviceEnumerator;
     private readonly ProcessInjector _processInjector;
 
-    private const string VoiceMeeterExe = @"C:\Program Files\VB\Voicemeeter\voicemeeterpro.exe";
+    // VoiceMeeter's installer puts everything under the 32-bit Program Files tree and ships all
+    // three editions side by side, so a single hardcoded 64-bit path finds nothing. It used to be
+    // "C:\Program Files\VB\Voicemeeter\voicemeeterpro.exe", which does not exist on the reference
+    // host — the file is under "Program Files (x86)". Because the miss was logged at Debug (which a
+    // Windows Service never writes anywhere), VoiceMeeter silently never started.
+    //
+    // Preference order is Potato first: seat 3 is assigned the VAIO3 device, and only Potato
+    // provides it. Banana and basic are accepted as fallbacks so a host with a lesser edition still
+    // gets its seats 1–2 rather than nothing.
+    internal static readonly string[] VoiceMeeterExeNames =
+    [
+        "voicemeeter8x64.exe",     // Potato, 64-bit
+        "voicemeeter8.exe",        // Potato
+        "voicemeeterpro_x64.exe",  // Banana, 64-bit
+        "voicemeeterpro.exe",      // Banana
+        "voicemeeter_x64.exe",     // basic, 64-bit
+        "voicemeeter.exe",         // basic
+    ];
+
+    /// <summary>
+    /// First VoiceMeeter executable that actually exists, searched in edition-preference order
+    /// under each given root. Returns null when none is installed.
+    /// </summary>
+    internal static string? FindVoiceMeeterExe(IEnumerable<string> roots)
+    {
+        foreach (var root in roots)
+        {
+            if (string.IsNullOrWhiteSpace(root))
+                continue;
+
+            var dir = Path.Combine(root, "VB", "Voicemeeter");
+            foreach (var name in VoiceMeeterExeNames)
+            {
+                var full = Path.Combine(dir, name);
+                if (File.Exists(full))
+                    return full;
+            }
+        }
+
+        return null;
+    }
+
+    private static IEnumerable<string> VoiceMeeterSearchRoots =>
+    [
+        // 32-bit tree first: that is where the installer puts it, whatever the edition.
+        Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86),
+        Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles),
+    ];
+
+    private static bool IsVoiceMeeterRunning()
+    {
+        foreach (var name in VoiceMeeterExeNames)
+        {
+            var processes = System.Diagnostics.Process
+                .GetProcessesByName(Path.GetFileNameWithoutExtension(name));
+            try
+            {
+                if (processes.Length > 0)
+                    return true;
+            }
+            finally
+            {
+                foreach (var p in processes)
+                    p.Dispose();
+            }
+        }
+
+        return false;
+    }
 
     // Available audio seat pairs (populated at startup or on-demand)
     private readonly List<AudioSeatPair> _vacPairs = [];
@@ -212,26 +280,29 @@ public sealed class AudioRouter
     /// </summary>
     private void EnsureVoiceMeeterRunning()
     {
-        var running = System.Diagnostics.Process
-            .GetProcessesByName("voicemeeterpro")
-            .Length > 0;
-
-        if (!running)
+        if (!IsVoiceMeeterRunning())
         {
-            if (!File.Exists(VoiceMeeterExe))
+            var exe = FindVoiceMeeterExe(VoiceMeeterSearchRoots);
+            if (exe is null)
             {
-                _logger.LogDebug(
-                    "VoiceMeeter not installed at {Path} — skipping startup", VoiceMeeterExe);
+                // Warning, not Debug: a Windows Service writes only to the Event Log, and Debug
+                // never reaches it — so the old message was invisible on every deployed host,
+                // including the one where the path was wrong.
+                _logger.LogWarning(
+                    "VoiceMeeter not found under VB\\Voicemeeter in either Program Files tree — " +
+                    "seats assigned a VoiceMeeter device will have no audio. " +
+                    "VB-CABLE seats are unaffected. Looked for: {Names}",
+                    string.Join(", ", VoiceMeeterExeNames));
                 return;
             }
 
             try
             {
                 _ = _processInjector.LaunchInConsoleSessionAsync(
-                    VoiceMeeterExe, null, CancellationToken.None);
+                    exe, null, CancellationToken.None);
 
                 _logger.LogInformation(
-                    "Started VoiceMeeter Potato in console session for audio routing");
+                    "Started VoiceMeeter ({Exe}) in console session for audio routing", exe);
 
                 // Wait for VoiceMeeter to register its audio devices before scanning
                 System.Threading.Thread.Sleep(3000);
@@ -239,14 +310,14 @@ public sealed class AudioRouter
             catch (Exception ex)
             {
                 _logger.LogWarning(ex,
-                    "Could not start VoiceMeeter Potato in console session. " +
-                    "Audio routing for seats using VoiceMeeter virtual devices may not work.");
+                    "Could not start VoiceMeeter ({Exe}) in console session. " +
+                    "Audio routing for seats using VoiceMeeter virtual devices may not work.", exe);
                 return;
             }
         }
         else
         {
-            _logger.LogDebug("VoiceMeeter Potato is running");
+            _logger.LogDebug("VoiceMeeter is running");
         }
 
         // Ensure B1 is enabled on all virtual input strips so mic audio routed

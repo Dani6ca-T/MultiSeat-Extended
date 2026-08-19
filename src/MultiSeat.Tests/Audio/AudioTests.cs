@@ -235,4 +235,96 @@ public class AudioTests
     {
         // This would test setting the default audio device
     }
+
+    // ── VoiceMeeter discovery ───────────────────────────────────────
+    // AudioRouter used to hardcode "C:\Program Files\VB\Voicemeeter\voicemeeterpro.exe". The
+    // installer puts VoiceMeeter under the 32-bit tree, so that path exists on no host we have
+    // seen, and the miss was logged at Debug — which a Windows Service never writes anywhere.
+    // These cover the resolution rules so the same silence cannot come back.
+
+    private static string MakeVoiceMeeterRoot(params string[] exeNames)
+    {
+        var root = Path.Combine(Path.GetTempPath(), "ms-vm-" + Guid.NewGuid().ToString("N"));
+        var dir = Path.Combine(root, "VB", "Voicemeeter");
+        Directory.CreateDirectory(dir);
+        foreach (var name in exeNames)
+            File.WriteAllText(Path.Combine(dir, name), string.Empty);
+        return root;
+    }
+
+    [Fact]
+    public void FindVoiceMeeterExe_PrefersPotato_OverBananaAndBasic()
+    {
+        // All three editions ship side by side in one directory; seat 3 needs VAIO3, which only
+        // Potato provides, so Potato has to win when several are present.
+        var root = MakeVoiceMeeterRoot("voicemeeter.exe", "voicemeeterpro.exe", "voicemeeter8x64.exe");
+        try
+        {
+            var found = AudioRouter.FindVoiceMeeterExe([root]);
+            Assert.NotNull(found);
+            Assert.Equal("voicemeeter8x64.exe", Path.GetFileName(found));
+        }
+        finally { Directory.Delete(root, recursive: true); }
+    }
+
+    [Fact]
+    public void FindVoiceMeeterExe_FallsBackToBanana_WhenPotatoAbsent()
+    {
+        var root = MakeVoiceMeeterRoot("voicemeeter.exe", "voicemeeterpro.exe");
+        try
+        {
+            var found = AudioRouter.FindVoiceMeeterExe([root]);
+            Assert.Equal("voicemeeterpro.exe", Path.GetFileName(found));
+        }
+        finally { Directory.Delete(root, recursive: true); }
+    }
+
+    [Fact]
+    public void FindVoiceMeeterExe_SearchesLaterRoots_WhenFirstHasNothing()
+    {
+        // The real call passes Program Files (x86) then Program Files; an install in only one of
+        // them must still be found.
+        var empty = Path.Combine(Path.GetTempPath(), "ms-vm-empty-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(empty);
+        var populated = MakeVoiceMeeterRoot("voicemeeterpro.exe");
+        try
+        {
+            var found = AudioRouter.FindVoiceMeeterExe([empty, populated]);
+            Assert.NotNull(found);
+            Assert.StartsWith(populated, found);
+        }
+        finally
+        {
+            Directory.Delete(empty, recursive: true);
+            Directory.Delete(populated, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void FindVoiceMeeterExe_ReturnsNull_WhenNotInstalled()
+    {
+        // The case that must fail loudly rather than launch something arbitrary.
+        var root = MakeVoiceMeeterRoot();     // directory exists, no executables in it
+        try
+        {
+            Assert.Null(AudioRouter.FindVoiceMeeterExe([root]));
+        }
+        finally { Directory.Delete(root, recursive: true); }
+    }
+
+    [Fact]
+    public void FindVoiceMeeterExe_IgnoresMissingAndBlankRoots()
+    {
+        var missing = Path.Combine(Path.GetTempPath(), "ms-vm-missing-" + Guid.NewGuid().ToString("N"));
+        Assert.Null(AudioRouter.FindVoiceMeeterExe([missing, "", "   "]));
+    }
+
+    [Fact]
+    public void VoiceMeeterExeNames_CoverAllThreeEditions()
+    {
+        // A regression here means some edition silently stops being discoverable.
+        Assert.Contains("voicemeeter8x64.exe", AudioRouter.VoiceMeeterExeNames);   // Potato
+        Assert.Contains("voicemeeterpro.exe", AudioRouter.VoiceMeeterExeNames);    // Banana
+        Assert.Contains("voicemeeter.exe", AudioRouter.VoiceMeeterExeNames);       // basic
+    }
 }

@@ -282,11 +282,17 @@ function Show-DeviceState($healthy) {
         # this device reports pending-reboot ANYWAY. A control on another audio device restarted
         # cleanly, so the message is specific to this device, not a pnputil quirk. It therefore says
         # 'lever 2 cannot restart this device' - it does NOT say the cable is currently wedged.
+        #
+        # And it does NOT mean a reboot is needed. This block used to end with 'a reboot is
+        # required' whenever the audio was unhealthy; on 2026-08-19 it printed exactly that, and
+        # lever 1 then repaired the wedge seconds later without one. All pending-reboot licenses is
+        # the claim that THIS DEVICE cannot be reset in place - the endpoint stack above it can
+        # still be rebuilt, which is what actually fixes this failure.
         if ($healthy) {
             Write-Info 'note: device reports PENDING SYSTEM REBOOT, but audio is healthy - so this is a standing state of this device, not a fault. It only means an in-place device restart is unavailable.'
         }
         else {
-            Write-Bad 'device reports PENDING SYSTEM REBOOT - it cannot be restarted in place; a reboot is required'
+            Write-Info 'device reports PENDING SYSTEM REBOOT - it cannot be reset in place, so lever 2 is unavailable. This does NOT mean a reboot is needed: lever 1 rebuilds the endpoints instead, and that has repaired this exact failure.'
         }
     }
     return $pending
@@ -399,7 +405,12 @@ function Invoke-Main {
 
     Write-Host "`nNone of the in-place levers restored audio." -ForegroundColor Red
     if ($pending) {
-        Write-Host "The device reported PENDING SYSTEM REBOOT, so a reboot is genuinely required." -ForegroundColor Yellow
+        # Careful with this one. Pending-reboot is a STANDING state of this device - it reads the
+        # same on a perfectly healthy host - so it is not evidence that a reboot will help. What is
+        # true is that every in-place repair has now been tried and failed, and a reboot has cleared
+        # this failure before. Say that, and nothing stronger.
+        Write-Host "Every in-place repair failed. A reboot has cleared this before and is the next thing to try -" -ForegroundColor Yellow
+        Write-Host "though PENDING SYSTEM REBOOT on this device is not itself evidence for that; it reads the same when audio is fine." -ForegroundColor Yellow
     }
     if ($originalDefault) {
         & $Exe --set-default-render $originalDefault | Out-Null
