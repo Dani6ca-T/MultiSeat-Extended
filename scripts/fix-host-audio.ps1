@@ -93,12 +93,43 @@ if (-not (Test-Path $Exe)) {
 # ---- Tone generator ---------------------------------------------------------
 # SoundPlayer does NOT render when called inline from a non-interactive host; it works fine in a
 # SEPARATE process. Learned the hard way - see the audio-instrument notes.
-# Which PnP device backs the default endpoint? Windows answers this itself: every endpoint has a
-# SWD\MMDEVAPI node whose parent IS the device. That removes the last host-specific constant - the
-# script used to carry one machine's 'ROOT\MEDIA\0003' and would have inspected the wrong device,
-# or none, anywhere else.
+# Which PnP device backs the default endpoint? Ask Windows, rather than carrying one machine's
+# 'ROOT\MEDIA\0003' - that constant made the device checks meaningless on any other host.
+#
+# The obvious route is the endpoint's SWD\MMDEVAPI node and its DEVPKEY_Device_Parent, and that is
+# what this script shipped with. It resolves NOTHING: Get-PnpDevice / Get-PnpDeviceProperty query
+# Win32_PnPEntity, which does not enumerate those software device nodes. Measured 2026-08-19 on the
+# reference host - 245 PnP devices, 31 SWD\* among them, and exactly ONE SWD\MMDEVAPI node
+# (MICROSOFTGSWAVETABLESYNTH). So the lookup failed for every real endpoint, and because it failed
+# soft the entire device-state block silently skipped itself from 4618217 until now.
+#
+# What does work is the endpoint's own registry properties: every endpoint under
+# MMDevices\Audio\{Render,Capture}\<guid>\Properties carries the backing device's instance path in
+# '{b3f8fa53-0004-438e-9003-51a46e139bfc},2', prefixed with '{1}.'. Verified across all 46 endpoints
+# on this host - HDAUDIO, ROOT\MEDIA and ROOT\STEAMSTREAMING*, render and capture alike, with none
+# missing the property.
 function Resolve-EndpointDevice($endpointId) {
     if (-not $endpointId) { return $null }
+
+    $pkey = '{b3f8fa53-0004-438e-9003-51a46e139bfc},2'
+
+    # An endpoint id looks like '{0.0.0.00000000}.{d2293c54-...}'; the LAST brace group is the key
+    # name under MMDevices. A render endpoint is the normal case, but check both flows so this is
+    # usable for capture endpoints too.
+    if ($endpointId -match '(\{[^{}]+\})\s*$') {
+        $guid = $Matches[1]
+        foreach ($flow in @('Render', 'Capture')) {
+            $key = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\MMDevices\Audio\$flow\$guid\Properties"
+            $prop = Get-ItemProperty -Path $key -Name $pkey -ErrorAction SilentlyContinue
+            if ($prop) {
+                $val = $prop.$pkey
+                if ($val) { return ($val -replace '^\{\d+\}\.', '') }
+            }
+        }
+    }
+
+    # Secondary: the SWD route, in case a host does enumerate those nodes. Kept because it costs
+    # nothing and this script runs on machines we cannot inspect.
     try {
         return (Get-PnpDeviceProperty -InstanceId "SWD\MMDEVAPI\$endpointId" -KeyName 'DEVPKEY_Device_Parent' -ErrorAction Stop).Data
     }
@@ -227,6 +258,7 @@ function Show-DeviceState($healthy) {
     Write-Head 'Endpoint device state'
     if (-not $script:CableInstId) {
         Write-Info 'could not resolve the PnP device behind the default endpoint - skipping device checks'
+        Write-Info '  (tried its MMDevices registry properties, then its SWD\MMDEVAPI parent)'
         return $false
     }
     Write-Info ("device      : {0}" -f $script:CableInstId)
