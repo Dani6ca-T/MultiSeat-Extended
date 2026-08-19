@@ -1,4 +1,4 @@
-#Requires -RunAsAdministrator
+﻿#Requires -RunAsAdministrator
 <#
 .SYNOPSIS
     Installs the MultiSeat Service as a Windows Service.
@@ -410,9 +410,32 @@ $InputHookSrc = Join-Path $PSScriptRoot "..\src\MultiSeat.InputHook"
 $Bash = "C:\msys64\usr\bin\bash.exe"
 if (Test-Path $Bash) {
     Write-Step "Building MultiSeatInputHook.dll..."
-    $srcUnix = ($InputHookSrc -replace '\\', '/') -replace '^([A-Z]):', { "/$(([string]$_[0]).ToLower())" }
+
+    # Windows path -> MSYS path, without a scriptblock -replace: scriptblock substitution is
+    # PowerShell 7 only and does NOT fail loudly on 5.1 - it stringifies the block into the
+    # result, producing a path like ' "/$(([string]C:/...[0]).ToLower())" /Users/...' and a
+    # CMake error about a directory that does not exist. Resolve-Path also drops the '..'.
+    $srcFull = (Resolve-Path $InputHookSrc).Path
+    $srcUnix = '/' + $srcFull.Substring(0, 1).ToLower() + ($srcFull.Substring(2) -replace '\\', '/')
+
     $buildScript = "export PATH='/ucrt64/bin:`$PATH'; cmake -B '$srcUnix/build/Release' -S '$srcUnix' -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_COMPILER=/ucrt64/bin/g++.exe -DCMAKE_MAKE_PROGRAM=/ucrt64/bin/ninja.exe && cmake --build '$srcUnix/build/Release'"
-    & $Bash -lc $buildScript 2>&1 | Out-Null
+
+    # This step is optional and must never abort the install. With $ErrorActionPreference =
+    # 'Stop' at the top of the file, anything the compiler writes to stderr surfaces as a
+    # NativeCommandError and kills the whole script - which on 5.1 left the service STOPPED
+    # mid-deploy, publish done and nothing restarted. Contain it here.
+    $prevEap = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+        & $Bash -lc $buildScript 2>&1 | Out-Null
+    }
+    catch {
+        $global:LASTEXITCODE = 1
+    }
+    finally {
+        $ErrorActionPreference = $prevEap
+    }
+
     if ($LASTEXITCODE -ne 0) {
         Write-Host "  Note: InputHook build failed -- skipping (optional, off by default)" -ForegroundColor DarkGray
     }
@@ -440,7 +463,12 @@ if (Test-Path (Join-Path $DashboardDir "package.json")) {
         $viteMarker  = Join-Path $nodeModules "vite\bin\vite.js"
         if (-not (Test-Path $viteMarker)) {
             Write-Step "Installing dashboard npm dependencies..."
-            $nodeExe = (Get-Command node -ErrorAction SilentlyContinue)?.Source
+            # Not (Get-Command ...)?.Source - the null-conditional operator is PowerShell 7 only,
+            # and a parse error is fatal for the WHOLE file, so this one line made the documented
+            # ".\scripts\install-service.ps1" fail on Windows PowerShell 5.1 before it ran a
+            # single step. Keep this script 5.1-clean; that is the shell the docs imply.
+            $nodeCmd = Get-Command node -ErrorAction SilentlyContinue
+            $nodeExe = if ($nodeCmd) { $nodeCmd.Source } else { $null }
             if (-not $nodeExe) { $nodeExe = "C:\Program Files\nodejs\node.exe" }
             if (-not (Test-Path $nodeExe)) { throw "node.exe not found. Install Node.js first." }
             $result = Start-Process $nodeExe -ArgumentList "install.cjs" `
