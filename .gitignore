@@ -34,6 +34,8 @@ Desktop.ini
 
 # Secrets
 appsettings.Development.json
+# Covers appsettings.local.json — host-local config overrides, loaded last by Program.cs so they
+# outrank the shipped appsettings.json. Deliberately never committed: they describe one machine.
 appsettings.*.json
 !appsettings.json
 *.pfx

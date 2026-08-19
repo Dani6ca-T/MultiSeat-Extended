@@ -132,6 +132,25 @@ Two separate scripts — prereqs and service deploy are intentionally split:
 | `C:\ProgramData\MultiSeat\logs\` | `audio-helper.log` only — **not** the service log (see below) |
 | `C:\ProgramData\MultiSeat\apollo\` | Per-seat Apollo config dirs (incl. per-seat `apollo.log`) |
 
+### Host-local config: `appsettings.local.json`
+
+Put anything true of **this machine** rather than of MultiSeat in
+`C:\Program Files\MultiSeat\appsettings.local.json`. `Program.cs` loads it **last**, so it outranks
+the shipped `appsettings.json` in the same folder; it is gitignored and absent from the repo, so
+`dotnet publish` never overwrites it.
+
+```jsonc
+{ "MultiSeat": { "AudioMode": "PerSession" } }
+```
+
+This exists because editing the deployed `appsettings.json` is **durable right up until it isn't**.
+The csproj marks it `PreserveNewest`, so `dotnet publish` leaves a newer host copy alone — but the
+moment anyone touches the repo's copy, the next deploy silently overwrites the host's settings.
+Verified both halves: five deploys left a host edit intact, then one `touch` on the repo file
+reverted it. Environment variables and `appsettings.{Environment}.json` are no escape either — the
+explicit exe-dir `AddJsonFile` is registered after `Host.CreateApplicationBuilder`'s sources and
+outranks both.
+
 ## Where the service logs actually go
 
 **The service writes no log files.** It's hosted via `AddWindowsService()`, whose default logging provider is the **Windows Event Log** — so service logs are in the Application log under two sources:

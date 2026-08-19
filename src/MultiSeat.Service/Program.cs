@@ -200,6 +200,27 @@ var builder = Host.CreateApplicationBuilder(args);
 // Ensure we load config from the exe's directory, not the working directory
 var exeDir = AppContext.BaseDirectory;
 builder.Configuration.AddJsonFile(Path.Combine(exeDir, "appsettings.json"), optional: true, reloadOnChange: true);
+
+// Host-local overrides, added LAST so they outrank everything above — including the shipped
+// appsettings.json in this same folder.
+//
+// This exists because there was previously no durable way to make a host differ from the
+// shipped defaults. Editing the deployed appsettings.json usually survives a deploy — the csproj
+// marks it PreserveNewest, so publish leaves the newer host copy alone — but only until someone
+// touches the repo's copy. The moment that file is newer, publish overwrites the host's settings
+// silently. Measured: with a host edit in place, `touch` on the repo copy plus one deploy
+// reverted it.
+//
+// Environment variables and appsettings.{Environment}.json are no escape either — the explicit
+// AddJsonFile above is registered after Host.CreateApplicationBuilder's sources, so it outranks
+// both. That left the deployed appsettings.json as the single effective source, and one that any
+// config commit can wipe.
+//
+// appsettings.local.json is not in the repo and is gitignored, so publish never touches it and
+// it cannot be committed by accident. Use it for anything true of THIS machine rather than of
+// MultiSeat — e.g. running the reference host on "AudioMode": "PerSession" while the shipped
+// default stays SharedHost.
+builder.Configuration.AddJsonFile(Path.Combine(exeDir, "appsettings.local.json"), optional: true, reloadOnChange: true);
 builder.Services.Configure<MultiSeatOptions>(builder.Configuration.GetSection(MultiSeatOptions.SectionName));
 
 // ── Windows Service support ──────────────────────────────────────────
