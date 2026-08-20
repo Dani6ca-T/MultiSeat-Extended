@@ -30,11 +30,23 @@ namespace MultiSeat.Service.Input;
 ///   --cloak-on / --cloak-off          Enable/disable cloaking globally
 ///   --dev-gaming                       List gaming (gamepad) devices
 ///   --dev-all                          List all HID devices
-///   --dev-hide --id "HID\VID_..."     Add device to blacklist
-///   --dev-unhide --id "HID\VID_..."   Remove device from blacklist
-///   --app-reg --path "C:\...\app.exe" Whitelist an application
-///   --app-unreg --path "C:\...\app.exe" Remove app from whitelist
+///   --dev-hide     "HID\VID_..."       Add device to blacklist
+///   --dev-unhide   "HID\VID_..."       Remove device from blacklist
+///   --app-reg      "C:\...\app.exe"    Whitelist an application
+///   --app-unreg    "C:\...\app.exe"    Remove app from whitelist
 ///   --app-list                         List whitelisted applications
+///   --cancel                           Exit WITHOUT saving configuration changes
+///
+/// ⚠️ The value goes DIRECTLY after the switch. There is no --id and no --path form.
+/// This code used to pass "--dev-hide --id &lt;path&gt;", so HidHide received the literal string
+/// "--id" as the device instance path, matched no device, and exited 0. Every hide, unhide
+/// and whitelist call was a silent no-op while HidHide sat installed and healthy — the same
+/// shape of bug as the VoiceMeeter path. Verified against HidHideCLI --help on a real
+/// install after @jmlopezdona reported it in issue #19.
+///
+/// ⚠️ Read-only queries append --cancel. HidHideCLI SAVES ITS CONFIGURATION ON EXIT even
+/// when the invocation only listed something, so a bare --dev-gaming rewrites the very
+/// config it was asked to report on. That is what the CLI's own --cancel switch documents.
 ///
 /// Requires HidHide v1.4+:
 ///   https://github.com/nefarius/HidHide/releases
@@ -85,7 +97,7 @@ public sealed class HidHideConfigurator
             var gamingDevices = ListGamingDevices();
             foreach (var deviceId in gamingDevices)
             {
-                RunCli($"--dev-unhide --id \"{deviceId}\"");
+                RunCli(UnhideDeviceArgs(deviceId));
                 _logger.LogDebug("Startup cleanup: unhid device {DeviceId}", deviceId);
             }
 
@@ -110,7 +122,7 @@ public sealed class HidHideConfigurator
     {
         if (!_driverAvailable) return [];
 
-        var output = RunCli("--dev-gaming");
+        var output = RunCli(ListGamingDevicesArgs);
         return ParseDeviceList(output);
     }
 
@@ -121,7 +133,7 @@ public sealed class HidHideConfigurator
     {
         if (!_driverAvailable) return [];
 
-        var output = RunCli("--app-list");
+        var output = RunCli(ListAppsArgs);
         return output
             .Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
             .Where(l => !string.IsNullOrWhiteSpace(l) && !l.StartsWith("--"))
@@ -158,7 +170,7 @@ public sealed class HidHideConfigurator
             // (This is a system-wide operation — all physical gamepads get hidden)
             foreach (var deviceId in gamingDevices)
             {
-                var result = RunCli($"--dev-hide --id \"{deviceId}\"");
+                var result = RunCli(HideDeviceArgs(deviceId));
                 state.HiddenDevices.Add(deviceId);
                 _logger.LogDebug("Hidden device: {DeviceId}", deviceId);
             }
@@ -168,7 +180,7 @@ public sealed class HidHideConfigurator
             var apolloPath = GetApolloExePath();
             if (apolloPath is not null)
             {
-                RunCli($"--app-reg --path \"{apolloPath}\"");
+                RunCli(RegisterAppArgs(apolloPath));
                 state.WhitelistedApps.Add(apolloPath);
                 _logger.LogDebug("Whitelisted Apollo: {Path}", apolloPath);
             }
@@ -206,7 +218,7 @@ public sealed class HidHideConfigurator
             // Remove app whitelist entries we added
             foreach (var appPath in state.WhitelistedApps)
             {
-                RunCli($"--app-unreg --path \"{appPath}\"");
+                RunCli(UnregisterAppArgs(appPath));
                 _logger.LogDebug("Unwhitelisted: {Path}", appPath);
             }
 
@@ -215,7 +227,7 @@ public sealed class HidHideConfigurator
             {
                 foreach (var deviceId in state.HiddenDevices)
                 {
-                    RunCli($"--dev-unhide --id \"{deviceId}\"");
+                    RunCli(UnhideDeviceArgs(deviceId));
                     _logger.LogDebug("Unhidden device: {DeviceId}", deviceId);
                 }
 
@@ -244,7 +256,7 @@ public sealed class HidHideConfigurator
     {
         if (!_driverAvailable) return;
 
-        RunCli($"--app-reg --path \"{exePath}\"");
+        RunCli(RegisterAppArgs(exePath));
         _logger.LogInformation("Whitelisted application: {Path}", exePath);
     }
 
@@ -255,13 +267,34 @@ public sealed class HidHideConfigurator
     {
         if (!_driverAvailable) return;
 
-        RunCli($"--app-unreg --path \"{exePath}\"");
+        RunCli(UnregisterAppArgs(exePath));
         _logger.LogInformation("Unwhitelisted application: {Path}", exePath);
     }
 
     // ═══════════════════════════════════════════════════════════════════
     //  PRIVATE
     // ═══════════════════════════════════════════════════════════════════
+
+    // ---- Argument construction -------------------------------------------------------
+    // Centralised because these were wrong at ELEVEN call sites and nothing noticed. Every
+    // switch takes its value directly, quoted; there is no --id and no --path form. Covered
+    // by HidHideArgumentTests, which asserts those forms can never come back.
+
+    internal static string HideDeviceArgs(string deviceInstancePath) =>
+        $"--dev-hide \"{deviceInstancePath}\"";
+
+    internal static string UnhideDeviceArgs(string deviceInstancePath) =>
+        $"--dev-unhide \"{deviceInstancePath}\"";
+
+    internal static string RegisterAppArgs(string exePath) =>
+        $"--app-reg \"{exePath}\"";
+
+    internal static string UnregisterAppArgs(string exePath) =>
+        $"--app-unreg \"{exePath}\"";
+
+    // --cancel on reads: HidHideCLI saves its config on exit even for a pure listing.
+    internal const string ListGamingDevicesArgs = "--dev-gaming --cancel";
+    internal const string ListAppsArgs          = "--app-list --cancel";
 
     private string RunCli(string arguments)
     {
