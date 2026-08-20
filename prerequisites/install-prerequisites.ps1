@@ -499,26 +499,67 @@ if ($cableInstalled) {
 # ----------------------------------------------------------------
 Write-Step "VoiceMeeter Potato (virtual audio devices for seats 1-3)"
 
-# Locate VoiceMeeter: check registry first, then common paths
-$vmExe = $null
-$vmRegPath = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\VB:Voicemeeter\",
-             "HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\VB:Voicemeeter\"
-foreach ($rp in $vmRegPath) {
-    if (Test-Path $rp) {
-        $loc = (Get-ItemProperty $rp -ErrorAction SilentlyContinue).InstallLocation
-        if ($loc) { $vmExe = Join-Path $loc "voicemeeterpro.exe"; break }
-    }
-}
-if (-not $vmExe) {
-    foreach ($candidate in @(
-        "C:\Program Files\VB\Voicemeeter\voicemeeterpro.exe",
-        "C:\Program Files (x86)\VB\Voicemeeter\voicemeeterpro.exe"
+# VoiceMeeter editions, Potato first. This section exists for Potato's THREE VAIO devices
+# (VoiceMeeter Input, AUX Input, VAIO3) which seats 1-3 use; Banana provides only two and
+# basic only one.
+#
+# This used to detect VoiceMeeter by looking for voicemeeterpro.exe, which is BANANA, and
+# that was wrong in both directions: on a host with only Banana it reported Potato present
+# and skipped the install, and on a host with Potato it launched Banana to "activate" the
+# devices -- including VAIO3, which Banana does not have -- so the 3-device check below
+# could fail and re-run the installer for nothing. Keep this list in step with
+# AudioRouter.VoiceMeeterExeNames and the copy in scripts\install-service.ps1.
+$vmNames = @(
+    "voicemeeter8x64.exe",      # Potato, 64-bit
+    "voicemeeter8.exe",         # Potato
+    "voicemeeterpro_x64.exe",   # Banana, 64-bit
+    "voicemeeterpro.exe",       # Banana
+    "voicemeeter_x64.exe",      # basic, 64-bit
+    "voicemeeter.exe"           # basic
+)
+
+function Find-VoiceMeeterExe {
+    param([string[]]$Names)
+
+    $roots = @()
+    foreach ($rp in @(
+        "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\VB:Voicemeeter\",
+        "HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\VB:Voicemeeter\"
     )) {
-        if (Test-Path $candidate) { $vmExe = $candidate; break }
+        if (Test-Path $rp) {
+            $loc = (Get-ItemProperty $rp -ErrorAction SilentlyContinue).InstallLocation
+            if ($loc) { $roots += $loc }
+        }
     }
+    # The installer uses the 32-bit tree; check it first, and keep the 64-bit one as a fallback.
+    $roots += "C:\Program Files (x86)\VB\Voicemeeter"
+    $roots += "C:\Program Files\VB\Voicemeeter"
+
+    foreach ($root in $roots) {
+        foreach ($name in $Names) {
+            $candidate = Join-Path $root $name
+            if (Test-Path $candidate) { return $candidate }
+        }
+    }
+    return $null
 }
-# Fallback default (used as install target when not yet present)
-if (-not $vmExe) { $vmExe = "C:\Program Files\VB\Voicemeeter\voicemeeterpro.exe" }
+
+function Get-RunningVoiceMeeterName {
+    param([string[]]$Names)
+    foreach ($n in $Names) {
+        $proc = Get-Process -Name ([System.IO.Path]::GetFileNameWithoutExtension($n)) -ErrorAction SilentlyContinue
+        if ($proc) { return $proc[0].ProcessName }
+    }
+    return $null
+}
+
+$vmExe = Find-VoiceMeeterExe -Names $vmNames
+# Potato is what this section is actually for -- anything else counts as "not installed yet".
+$vmIsPotato = $vmExe -and ((Split-Path $vmExe -Leaf) -match '^voicemeeter8')
+if ($vmExe -and -not $vmIsPotato) {
+    Write-Host "  Found $(Split-Path $vmExe -Leaf), which is not Potato -- seats 1-3 need Potato's" -ForegroundColor Yellow
+    Write-Host "  three VAIO devices, so Potato will be installed alongside it." -ForegroundColor Yellow
+}
 
 # Helper: re-run the VoiceMeeter installer to repair/register its audio drivers.
 # Downloading the zip if it is no longer in the script directory.
@@ -546,7 +587,9 @@ function Register-VoiceMeeterDrivers {
         Start-Process $setup.FullName -ArgumentList "/S" -Wait -NoNewWindow
         Write-OK "Installer re-run -- reboot required for audio devices to appear"
         # The main installer only registers VAIO1.  Explicitly install AUX VAIO + VAIO3.
-        if (Test-Path $vmExe) {
+        # Re-resolve: $vmExe was computed BEFORE this install, so it may be stale or null.
+        $vmExe = Find-VoiceMeeterExe -Names $vmNames
+        if ($vmExe) {
             Install-VoiceMeeterPotatoVAIOs $vmExe
         }
     } else {
@@ -557,15 +600,31 @@ function Register-VoiceMeeterDrivers {
     $script:NeedsReboot = $true
 }
 
-if (Test-Path $vmExe) {
+if ($vmIsPotato) {
     # VoiceMeeter's VAIO2 and VAIO3 devices only appear after VoiceMeeter has been
     # launched at least once.  Start it now (idempotent -- second instance exits) and
     # wait a moment so the WDM driver entries settle before we count.
-    $vmRunning = Get-Process -Name "voicemeeterpro" -ErrorAction SilentlyContinue
+    # Launch the POTATO executable specifically: VAIO3 is a Potato device, so starting
+    # Banana here would never register it, and the count below would stay at 2.
+    $vmRunning = Get-RunningVoiceMeeterName -Names $vmNames
     if (-not $vmRunning) {
-        Write-Host "  Starting VoiceMeeter to activate virtual audio devices..." -ForegroundColor White
+        Write-Host "  Starting VoiceMeeter Potato ($(Split-Path $vmExe -Leaf)) to activate virtual audio devices..." -ForegroundColor White
         Start-Process $vmExe -ErrorAction SilentlyContinue
         Start-Sleep -Seconds 8
+    } elseif ($vmRunning -notmatch '^voicemeeter8') {
+        # A different edition is already running. Do not start Potato alongside it -- VB's
+        # editions share one audio engine and are not meant to run at once.
+        #
+        # Note what this does and does not mean, because it is easy to overstate: the VAIO
+        # devices are registered by the INSTALLERS, so they are present whichever edition is
+        # running (measured: 3/3 registered with Banana running). What needs Potato running is
+        # the mixing itself -- seat audio routed through its VAIO devices has no engine behind
+        # it while a lesser edition holds the driver.
+        Write-Host "  NOTE: $vmRunning is running, which is not Potato. The VAIO devices stay" -ForegroundColor Yellow
+        Write-Host "  registered, but seat audio through them needs Potato to be the running" -ForegroundColor Yellow
+        Write-Host "  mixer -- close it and start $(Split-Path $vmExe -Leaf)." -ForegroundColor Yellow
+    } else {
+        Write-Host "  VoiceMeeter Potato already running ($vmRunning)" -ForegroundColor DarkGray
     }
 
     Write-AudioDiagnostics
@@ -598,7 +657,8 @@ if (Test-Path $vmExe) {
         if ($setup) {
             Write-Host "  Installing VoiceMeeter Potato..."
             Start-Process $setup.FullName -ArgumentList "/S" -Wait -NoNewWindow
-            if (Test-Path $vmExe) {
+            $vmExe = Find-VoiceMeeterExe -Names $vmNames
+            if ($vmExe) {
                 # Register auto-start at Windows boot (system-wide)
                 $runKey = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run"
                 Set-ItemProperty -Path $runKey -Name "VoiceMeeter" -Value "`"$vmExe`""
@@ -609,7 +669,8 @@ if (Test-Path $vmExe) {
             } else {
                 Write-Host "  Silent install may not have worked -- launching interactive installer..." -ForegroundColor Yellow
                 Start-Process $setup.FullName -Wait
-                if (Test-Path $vmExe) {
+                $vmExe = Find-VoiceMeeterExe -Names $vmNames
+                if ($vmExe) {
                     $runKey = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run"
                     Set-ItemProperty -Path $runKey -Name "VoiceMeeter" -Value "`"$vmExe`""
                     Write-OK "Installed and registered to auto-start at boot"
