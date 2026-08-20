@@ -1,0 +1,67 @@
+name: CI
+
+# The project had no CI at all until 2026-08-20, and the cost of that was concrete: a
+# PowerShell 7 only operator in install-service.ps1 shipped in the FIRST public release and
+# survived four more, making the documented install command fail before its first step on the
+# default shell of every Windows host. Nothing ever checked. These two jobs are the cheapest
+# things that would have caught it.
+
+on:
+  push:
+    branches: [ master ]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-test:
+    name: Build + test
+    runs-on: windows-latest   # net9.0-windows10.0.19041.0 / win-x64, and the tests use Windows APIs
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '9.0.x'
+
+      - name: Restore
+        run: dotnet restore src/MultiSeat.slnx
+
+      - name: Build
+        run: dotnet build src/MultiSeat.slnx -c Release --no-restore
+
+      - name: Test
+        run: >
+          dotnet test src/MultiSeat.slnx -c Release --no-build
+          --logger "trx;LogFileName=test-results.trx"
+          --results-directory ${{ github.workspace }}/test-results
+
+      - name: Upload test results
+        if: always()          # the results are most interesting exactly when the step failed
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results
+          path: test-results/
+          if-no-files-found: warn
+
+  lint-scripts:
+    name: Script lint (PowerShell 5.1 + 7)
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # Both engines, deliberately. They disagree, and 5.1 is the one a user gets by typing
+      # "powershell" - a script can parse perfectly under 7 and be dead on arrival under 5.1,
+      # which is exactly what shipped in April. Proven against controls: a file using
+      # (Get-Command x)?.Source fails here under 5.1 and passes under 7.
+      - name: Windows PowerShell 5.1
+        shell: powershell
+        run: .\scripts\lint-scripts.ps1
+
+      - name: PowerShell 7
+        shell: pwsh
+        run: .\scripts\lint-scripts.ps1
