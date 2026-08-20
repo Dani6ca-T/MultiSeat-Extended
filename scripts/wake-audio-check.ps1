@@ -103,11 +103,36 @@ function Write-Log($text) {
 }
 
 function Get-LastResumeTime {
-    try {
-        $e = Get-WinEvent -FilterHashtable @{LogName='System'; ProviderName='Microsoft-Windows-Kernel-Power'; Id=107} -MaxEvents 1 -ErrorAction Stop
-        return $e.TimeCreated
+    # 107 does NOT fire on every resume. Measured twice - 2026-08-19 and 2026-08-20 - where a real
+    # S3 resume logged only the firmware events 130/131 and no 107 at all, leaving this header line
+    # stale by 14 and 16 hours while the verdict beneath it was seconds fresh. Take the newest of
+    # either source so the log stops misattributing when the machine woke.
+    $newest = $null
+    foreach ($id in 107, 131) {
+        try {
+            $e = Get-WinEvent -FilterHashtable @{LogName='System'; ProviderName='Microsoft-Windows-Kernel-Power'; Id=$id} -MaxEvents 1 -ErrorAction Stop
+            if ($e -and ($null -eq $newest -or $e.TimeCreated -gt $newest.Time)) {
+                $newest = [pscustomobject]@{ Time = $e.TimeCreated; Id = $id }
+            }
+        }
+        catch { }
     }
-    catch { return $null }
+    return $newest
+}
+
+function Get-EndpointNodeCount {
+    # Every audio endpoint has an SWD\MMDEVAPI device node: 27 on this host when healthy, 1 when the
+    # endpoint stack has collapsed. It is the cheapest wedge signal available and, unlike the tone
+    # probe, it needs nothing playing.
+    #
+    # Added 2026-08-20 because the first WEDGED verdict this task ever produced was UNDECIDABLE
+    # without it: it reported wedged 45 s after a resume, and half an hour later the host was healthy
+    # with AudioEndpointBuilder never having restarted. Nodes = 1 would have meant a real collapse;
+    # nodes = 27 would have meant a stack still settling. The log recorded neither.
+    try {
+        return @(Get-PnpDevice -ErrorAction Stop | Where-Object { $_.InstanceId -like 'SWD\MMDEVAPI*' }).Count
+    }
+    catch { return -1 }
 }
 
 function Get-ApolloContext {
@@ -121,7 +146,12 @@ function Invoke-Check {
     New-Item -ItemType Directory -Force -Path $Root | Out-Null
 
     $resume = Get-LastResumeTime
+
+    # Count nodes BEFORE the settle as well as after: if the stack is merely coming back up, the
+    # count climbs between the two readings. A genuine collapse stays low in both.
+    $nodesAtStart = Get-EndpointNodeCount
     if ($SettleSeconds -gt 0) { Start-Sleep -Seconds $SettleSeconds }
+    $nodesAtCheck = Get-EndpointNodeCount
 
     $apollo = Get-ApolloContext
     # *>&1, not 2>&1: the diagnoser reports through Write-Host, which goes to the information
@@ -137,12 +167,30 @@ function Invoke-Check {
         default { $verdict = "UNEXPECTED - diagnoser exited $code" }
     }
 
-    if ($resume) { $resumeText = $resume.ToString('yyyy-MM-dd HH:mm:ss') } else { $resumeText = 'unknown' }
+    if ($resume) {
+        $resumeText = '{0}  (Kernel-Power {1})' -f $resume.Time.ToString('yyyy-MM-dd HH:mm:ss'), $resume.Id
+        $age = [int]((Get-Date) - $resume.Time).TotalMinutes
+        # A resume the task did not actually fire on means this run is a StartWhenAvailable catch-up
+        # of an older missed trigger, so the verdict is fresh but the attribution is not.
+        if ($age -gt 10) { $resumeText += ' - {0} min ago, so this run is NOT that resume' -f $age }
+    }
+    else { $resumeText = 'unknown' }
+
+    if ($nodesAtStart -lt 0 -or $nodesAtCheck -lt 0) {
+        $nodeText = 'could not enumerate'
+    }
+    else {
+        $nodeText = '{0} at start, {1} at check' -f $nodesAtStart, $nodesAtCheck
+        if ($nodesAtCheck -le 1)               { $nodeText += '  <- COLLAPSED, this is a real wedge' }
+        elseif ($nodesAtCheck -gt $nodesAtStart) { $nodeText += '  <- still rising, stack was settling' }
+    }
+
     $header = @(
         '================================================================'
         ('{0}  wake-audio-check' -f (Get-Date).ToString('yyyy-MM-dd HH:mm:ss'))
-        ('  last resume  : {0}  (Kernel-Power 107)' -f $resumeText)
+        ('  last resume  : {0}' -f $resumeText)
         ('  settle wait  : {0} s' -f $SettleSeconds)
+        ('  endpoint nodes: {0}' -f $nodeText)
         ('  apollo       : {0}' -f $apollo)
         ('  VERDICT      : {0}  (exit {1})' -f $verdict, $code)
         '----------------------------------------------------------------'
