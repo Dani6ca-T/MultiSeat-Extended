@@ -21,9 +21,9 @@ jobs:
     runs-on: windows-latest   # net9.0-windows10.0.19041.0 / win-x64, and the tests use Windows APIs
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-dotnet@v4
+      - uses: actions/setup-dotnet@v5
         with:
           dotnet-version: '9.0.x'
 
@@ -41,7 +41,7 @@ jobs:
 
       - name: Upload test results
         if: always()          # the results are most interesting exactly when the step failed
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: test-results
           path: test-results/
@@ -52,7 +52,7 @@ jobs:
     runs-on: windows-latest
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       # Both engines, deliberately. They disagree, and 5.1 is the one a user gets by typing
       # "powershell" - a script can parse perfectly under 7 and be dead on arrival under 5.1,
