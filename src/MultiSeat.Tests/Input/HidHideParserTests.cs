@@ -199,6 +199,6 @@ public class HidHideParserTests
 
         Assert.Equal(3, hidden.Count);
         Assert.Equal(2, hidden.Count(e => HidHideSessionJail.Split(e).SessionId is not null));
-        Assert.Single(hidden.Where(e => HidHideSessionJail.Split(e).SessionId is null));
+        Assert.Single(hidden, e => HidHideSessionJail.Split(e).SessionId is null);
     }
 }
