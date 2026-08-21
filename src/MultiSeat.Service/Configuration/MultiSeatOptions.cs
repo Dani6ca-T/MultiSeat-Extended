@@ -88,6 +88,54 @@ public sealed class MultiSeatOptions
     // ── HidHide ──────────────────────────────────────────────────────
     public string HidHideCliPath { get; set; } = @"C:\Program Files\Nefarius Software Solutions\HidHide\x64\HidHideCLI.exe";
 
+    // Per-seat gamepad isolation, via HidHide's undocumented session jail: a blacklist entry
+    // suffixed with !<sessionId> is visible only inside that session (HidHide >= 1.4.181.0,
+    // Logic.c:817, documented nowhere). See HidHideSessionJail and GitHub issue #19.
+    //
+    // Default OFF, and deliberately so. It writes into HidHide's persistent, kernel-side
+    // blacklist, and on a host where a console-side Apollo also runs, its pad is
+    // indistinguishable from a seat's - so the wrong pad can be confined to a seat while the
+    // dashboard reports a healthy jail and a player's controller simply stops working.
+    //
+    // Turning it on REPLACES the old global-hide-plus-whitelist approach, which could not isolate
+    // seats from each other even in principle: the whitelist is global, cannot pair an app with a
+    // device, and every seat runs the same Apollo binary.
+    public bool EnableHidHideCloaking { get; set; } = false;
+
+    // Write a seat's jail rules BEFORE its Apollo creates a pad.
+    //
+    // Correctness, not optimisation. HidHide filters at open time, so a rule written afterwards is
+    // late by definition - measured, a pad appeared at 13:27:33 and its rule landed at 13:27:39.9.
+    // Inside that window dwm, explorer and GameInputSvc of EVERY session open the new pad and keep
+    // handles that never expire, and releasing the rule later does not hand the pad back.
+    //
+    // A rule for an absent device matches nothing, so pre-writing is inert and free. It only does
+    // anything for a seat whose pad path is known by evidence - see SeatPadDevicePaths.
+    public bool EnablePadRulePreWrite { get; set; } = false;
+
+    // After writing a jail rule, check from session 0 that it took effect.
+    //
+    // The driver requires sessionId != 0 for a jail to match, so this service can never be the
+    // jailed session and must be refused a device that is genuinely confined. That makes it a live
+    // probe of an undocumented behaviour a future HidHide release could drop without a word. Cheap
+    // (one CreateFile), on by default, and it only reports.
+    public bool VerifyHidHideJail { get; set; } = true;
+
+    // Known pad device instance paths per seat account, e.g.
+    //   "SeatPadDevicePaths": { "MultiSeat01": [ "USB\\VID_045E&PID_028E\\01" ] }
+    //
+    // This is the "identity" leg of attribution. Without it a seat's pad can only be picked out by
+    // elimination, which is refused whenever more than one unconfined emulated pad exists - and
+    // which is never remembered when it is used, because a placement made by elimination that gets
+    // written down outlives the situation that produced it.
+    //
+    // These paths are not stable by nature: the last section of a ViGEm XUSB path is a serial that
+    // ViGEmClient picks in USER MODE by sweeping free slots from 1, so where a seat's pad is born
+    // is decided by whoever connects first. Pinning it properly needs a patched Apollo
+    // (gamepad_serial_no / gamepad_vid / gamepad_pid), which is a fork of a fork and deliberately
+    // not taken on yet.
+    public Dictionary<string, string[]> SeatPadDevicePaths { get; set; } = new(StringComparer.OrdinalIgnoreCase);
+
     // ── Input Isolation ──────────────────────────────────────────────
     public string InputHookDllPath { get; set; } = @"MultiSeatInputHook.dll";
 

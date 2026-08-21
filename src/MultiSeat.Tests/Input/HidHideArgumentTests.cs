@@ -69,11 +69,29 @@ public class HidHideArgumentTests
 
     // HidHideCLI saves its configuration on exit even when the invocation only listed
     // something, so a read that omits --cancel rewrites the config it was asked to report on.
-    [Theory]
-    [InlineData(HidHideConfigurator.ListGamingDevicesArgs)]
-    [InlineData(HidHideConfigurator.ListAppsArgs)]
-    public void ReadOnlyQueriesCancelInsteadOfSaving(string args)
+    // HidHideCLI saves its configuration on exit even when the invocation only listed
+    // something, so a read that omits --cancel rewrites the config it was asked to report on.
+    //
+    // Reads also carry --cloak-state, and that is not decoration either: back-to-back invocations
+    // of this CLI come back EMPTY, which reads exactly like "nothing is configured". The cloak
+    // line is the only thing that separates a failed read from an empty one.
+    [Fact]
+    public void ReadOnlyQueriesCancelInsteadOfSaving()
     {
-        Assert.Contains("--cancel", args);
+        foreach (var args in new[] { HidHideConfigurator.ListGamingDevicesArgs, HidHideConfigurator.ListAppsArgs })
+        {
+            Assert.Contains("--cancel", args);
+            Assert.Contains("--cloak-state", args);
+        }
+    }
+
+    // The CLI's own help says commands "can be sequenced reducing the overall overhead involved".
+    // That matters for correctness, not speed: each invocation costs ~800 ms, and a pad is only
+    // confined once its rule lands.
+    [Fact]
+    public void SequenceJoinsCommandsAndDropsEmptyOnes()
+    {
+        Assert.Equal("--cloak-state --dev-list --cancel",
+            HidHideCli.Sequence("--cloak-state", "", "--dev-list", null!, "  ", "--cancel"));
     }
 }

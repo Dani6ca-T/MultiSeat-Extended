@@ -206,6 +206,16 @@ public sealed class SeatManager
                     "Seat {Id}: could not suppress RustDesk audio (non-critical)", seat.Id);
             }
 
+            // ── 2.7. Pre-write gamepad jail rules ───────────────
+            // Before Apollo exists, on purpose. HidHide filters at OPEN time, so a rule
+            // written after the pad is created is late by definition - and dwm, explorer and
+            // GameInputSvc of every session open each new pad inside that window and keep
+            // handles that never expire. A rule for an absent device matches nothing, so this
+            // is inert when the seat has no known pad path. No-op unless
+            // EnableHidHideCloaking + EnablePadRulePreWrite are both on.
+            try { _hidHide.PreWriteRules(seat); }
+            catch (Exception ex) { _logger.LogWarning(ex, "Seat {Id}: pre-writing gamepad jail rules failed (non-critical)", seat.Id); }
+
             // ── 3. Virtual display ────────────────────────────────────
             await _displayManager.CreateDisplayAsync(seat, ct);
             _logger.LogDebug("Seat {Id}: VDA ready ({W}x{H}@{F})",

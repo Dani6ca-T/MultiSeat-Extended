@@ -3,6 +3,7 @@ using MultiSeat.Service.Accounts;
 using MultiSeat.Service.Api;
 using MultiSeat.Service.Audio;
 using MultiSeat.Service.Configuration;
+using MultiSeat.Service.Diagnostics;
 using MultiSeat.Service.Display;
 using MultiSeat.Service.Emulators;
 using MultiSeat.Service.Input;
@@ -54,6 +55,18 @@ if (args.Length >= 2 && args[0] == "--mute-audio" && int.TryParse(args[1], out v
 // Session-scoped like --mute-audio: run it INSIDE the session you want to measure
 // (console session for host audio, a seat/RDP session for that session's audio).
 // Usage: MultiSeat.Service.exe --audio-peaks [seconds]
+// -- HidHide inspection mode -------------------------------------------
+// Reports what HidHide sees on THIS host and what a session jail would write, then exits.
+// Every part of this feature has at some point been wrong while reporting success, so the
+// habit is to ask the machine: MultiSeat.Service.exe --hidhide
+// Read-only (every call carries --cancel). Exit 0 = per-seat isolation could work here.
+if (args.Contains("--hidhide"))
+{
+    var hidHidePath = Environment.GetEnvironmentVariable("MULTISEAT_HIDHIDE_CLI")
+        ?? new MultiSeatOptions().HidHideCliPath;
+    return HidHideInspector.Report(hidHidePath);
+}
+
 if (args.Length >= 1 && args[0] == "--audio-peaks")
 {
     var window = args.Length >= 2 && double.TryParse(args[1], out var secs) ? secs : 5.0;

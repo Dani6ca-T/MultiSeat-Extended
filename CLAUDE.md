@@ -21,7 +21,7 @@ MultiSeat runs multiple simultaneous Moonlight game-streaming sessions on one Wi
 | `VirtualDisplayManager` | SudoVDA virtual display attach/detach |
 | `AudioRouter` | Virtual audio device assignment per seat |
 | `InputRouter` | XInput/ViGEm controller routing |
-| `HidHideConfigurator` | Controller cloaking via HidHide |
+| `HidHideConfigurator` | Per-seat gamepad isolation via HidHide's session jail (off by default) |
 | `InputHookManager` | Keyboard/mouse session isolation (InputHook DLL) |
 | `AccountManager` | Windows local account CRUD |
 | `ApiServer` | ASP.NET Core HTTP API + WebSocket |
@@ -247,6 +247,62 @@ Config lives in `appsettings.json` under `MultiSeat` — **empty by default (fea
 ```
 
 Apps launch into the seat session via `ProcessInjector.LaunchInSessionAsync`. The list is global (applies to every seat). When the array is empty the watcher returns immediately — zero I/O, no overhead.
+
+## Per-seat gamepad isolation (HidHide session jail)
+
+`MultiSeat:EnableHidHideCloaking`, **off by default**. Turning it on confines each seat's pad to
+that seat's session using an **undocumented** HidHide feature: append `!<sessionId>` to a device
+instance path in the ordinary, persistent blacklist and the device is visible **only** in that
+session. Shipped in HidHide v1.4.181.0 (commit `3934d9a`); `Logic.c:817` is the whole decision and
+it is byte-identical in v1.5.230.0. In no README, no CLI help, no release note. Contributed by
+@jmlopezdona in issue #19 after a week of measurements, verified here against HidHide's source.
+
+**Ask the host rather than reason about it:**
+
+```powershell
+& 'C:\Program Files\MultiSeat\MultiSeat.Service.exe' --hidhide
+```
+
+Prints the cloak state, the whitelist (flagging foreign entries), existing rules with their jailed
+session, and every present gamepad with both nodes, both parents, the emulated verdict and the
+exact rules a jail would write. Read-only, exits 0 when isolation could work here.
+
+Four things about this feature are counter-intuitive and each one has already caused a silent
+failure somewhere:
+
+- **A pad is not one device, and XInput reads the node you would not think to hide.** The HID node
+  is the obvious target; XInput reads the **XUSB** (`baseContainerDeviceInstancePath`) node. Hiding
+  only the HID node leaves the pad fully visible. Both get a rule.
+- **HidHide filters at OPEN time**, so a rule written after the pad exists is late by definition —
+  and `dwm`, `explorer` and `GameInputSvc` **of every session** open each new pad inside that
+  window and keep handles that never expire. Releasing a wrong rule does **not** hand the pad back;
+  recovery takes a client reconnect. Hence `EnablePadRulePreWrite`, which writes a seat's rules
+  before Apollo starts. A rule for an absent device matches nothing, so it is inert and free.
+- **Ownership is derived, never named.** Nothing in the device tree says "ViGEm" — measured here, a
+  ViGEm pad's XUSB node is called "Xbox 360 Controller for Windows" and its path starts `USB\`.
+  The test is the **parent**: `ROOT\...` means emulated, a hardware bus means physical. Note the
+  **HID** node's parent is the USB composite interface and looks physical even for an emulated pad,
+  so the XUSB node is the one that answers. Attribution order is identity
+  (`MultiSeat:SeatPadDevicePaths`), then elimination — and elimination is **refused** when more
+  than one unconfined emulated pad exists, logged at Warning when used, and never remembered.
+- **The application whitelist must stay empty.** It is global and cannot pair an app with a device,
+  so one entry sees **every** confined pad. HidHide's own binaries are permanently whitelisted and
+  `--app-unreg` on them does not stick, so the check reports *foreign* entries rather than a
+  non-empty list.
+
+⚠️ **The CLI has five traps and none of them had ever fired here**, because the old parser matched
+nothing so `HidHideCLI.exe` was never actually invoked. `HidHideCli` handles them: it never gives
+the tool stdout/stderr (it hangs — redirect through `cmd.exe` to a file), enforces an ~800 ms gap
+with a fresh transcript per call and a retry, treats an **empty read as a failure rather than an
+empty configuration** (the tell is that a healthy run always replays its cloak state), retries the
+`0x0005 Access denied` that the driver's single-caller control device returns, and puts the value
+directly after each switch. Reads carry `--cancel`, without which a pure listing saves over the
+configuration it was asked to report on.
+
+⚠️ **A console-side Apollo makes a seat's pad ambiguous.** Its ViGEm pad is created the same way
+with the same VID/PID and is indistinguishable from a seat's. That is what makes the elimination
+path dangerous — a free seat can be handed the console player's controller while everything reports
+a healthy jail — and it is why this is off by default. Set `SeatPadDevicePaths` on such a host.
 
 ## Known Constraints
 
