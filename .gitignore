@@ -63,6 +63,17 @@ prerequisites/VirtualDisplayDriver/
 # Continue.dev local data
 .continue/
 
-# Accidentally created scratch files
+# Scratch and probe output.
+# Diagnosing this project means writing one-off probes and staging copies of scripts to run
+# them; the output describes a single run on a single host and is worthless the next day, but
+# it sits in the tree looking plausible enough to commit by accident. Logs are covered by
+# *.log above. Keep real scratch work in the session scratchpad outside the repo.
+scratch/
+scratchpad/
+*.out
+*.tmp
+*.bak
+
+# Accidentally created scratch files - shell redirection mistakes, not deliberate output
 null
 queryex
