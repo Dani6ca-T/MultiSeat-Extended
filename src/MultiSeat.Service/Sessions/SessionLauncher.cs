@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.ComponentModel;
 using System.Diagnostics;
+using System.Security.Principal;
 using System.Runtime.InteropServices;
 using Microsoft.Extensions.Options;
 using MultiSeat.Service.Accounts;
@@ -285,6 +286,20 @@ public sealed class SessionLauncher
         if (WtsApi.WTSQueryUserToken((uint)sessionId, out var rawToken))
         {
             _logger.LogDebug("Got session token via WTSQueryUserToken for session {Sid}", sessionId);
+
+            // ⚠️ WTSQueryUserToken takes a SESSION, not an account. It returns whoever occupies that
+            // session, and nothing downstream notices: the token's session id equals the one we
+            // asked for, so the session check in ProcessInjector passes and the process launches
+            // happily as the wrong user in the wrong session.
+            //
+            // That is not hypothetical. If sessionId is ever the console session, this hands back
+            // the CONSOLE user's token, and a seat's Apollo then runs in the console session with
+            // the seat's config, ports and log file — looking healthy from every angle while its
+            // SendInput lands on the console desktop. Which is exactly what issue #18 reports.
+            //
+            // So verify the token belongs to the account we were asked for, and refuse if not.
+            // Guessing here is worse than failing: the caller can retry, a mis-targeted seat cannot.
+            EnsureTokenBelongsTo(rawToken, accountName, sessionId);
 
             // Duplicate to a primary token first
             if (AdvApi.DuplicateTokenEx(
@@ -1423,6 +1438,61 @@ public sealed class SessionLauncher
     /// primary token targeted at a specific existing session.
     /// Used by ProcessInjector for launching apps in an already-running session.
     /// </summary>
+    /// <summary>
+    /// Throw unless the token really belongs to <paramref name="accountName"/>.
+    ///
+    /// The comparison is by SID, not by name: names are ambiguous across machine and domain
+    /// scopes, get localised, and were already the cause of one silent failure in this project
+    /// (the English-literal group names in account provisioning).
+    ///
+    /// If the account cannot be resolved to a SID at all, this does NOT block the launch — an
+    /// unresolvable name is a different fault and blocking on it would turn a working host into a
+    /// broken one. It logs loudly instead, which is the honest signal.
+    /// </summary>
+    private void EnsureTokenBelongsTo(IntPtr rawToken, string accountName, int sessionId)
+    {
+        var tokenSid = AdvApi.TryGetTokenUserSid(rawToken);
+        if (tokenSid is null)
+        {
+            _logger.LogWarning(
+                "Session {Sid}: could not read the token's user SID, so it was NOT verified to " +
+                "belong to '{Account}'. Proceeding, but if this seat behaves as though its input " +
+                "lands elsewhere, start here.",
+                sessionId, accountName);
+            return;
+        }
+
+        SecurityIdentifier expected;
+        try
+        {
+            expected = (SecurityIdentifier)new NTAccount(accountName)
+                .Translate(typeof(SecurityIdentifier));
+        }
+        catch (Exception ex) when (ex is IdentityNotMappedException or SystemException)
+        {
+            _logger.LogWarning(ex,
+                "Session {Sid}: '{Account}' could not be resolved to a SID, so the session token " +
+                "was not verified. Proceeding.", sessionId, accountName);
+            return;
+        }
+
+        if (tokenSid == expected) return;
+
+        // Name the user we actually got — "wrong user" without saying who is a dead end for whoever
+        // reads this in a bug report.
+        string actual;
+        try { actual = tokenSid.Translate(typeof(NTAccount)).Value; }
+        catch (Exception) { actual = tokenSid.Value; }
+
+        Kernel32.CloseHandle(rawToken);
+
+        throw new InvalidOperationException(
+            $"Session {sessionId} belongs to '{actual}', not to '{accountName}'. Refusing to launch, " +
+            "because WTSQueryUserToken returns whoever occupies a session and the resulting token " +
+            "would pass every downstream check while running the wrong user in the wrong session. " +
+            "The seat's recorded session id is stale or wrong — re-provision the seat.");
+    }
+
     private SafeTokenHandle LogonAndCreatePrimaryToken(
         string accountName, string password, int targetSessionId)
     {

@@ -47,7 +47,8 @@ public sealed class ProcessInjector
         string exePath,
         string? arguments = null,
         string? workingDir = null,
-        CancellationToken ct = default)
+        CancellationToken ct = default,
+        bool allowConsoleSession = false)
     {
         _logger.LogInformation(
             "Launching '{Exe}' in session {Sid} (account: {Account})",
@@ -60,6 +61,10 @@ public sealed class ProcessInjector
             _logger.LogDebug("Executable not found at absolute path: {Exe} — " +
                 "assuming it's in PATH or will resolve at runtime", exePath);
         }
+
+        // A seat never lives in the console session, so refuse before doing anything else.
+        var consoleSessionId = (int)Kernel32.WTSGetActiveConsoleSessionId();
+        EnsureNotConsoleSession(sessionId, consoleSessionId, exePath, allowConsoleSession);
 
         // Step 1: Get a primary token for the target session
         using var token = _sessionLauncher.GetSessionToken(sessionId, accountName);
@@ -84,6 +89,16 @@ public sealed class ProcessInjector
                         $"SetTokenInformation(TokenSessionId={sessionId}) failed");
                 }
             }
+        }
+        else
+        {
+            // This used to fall through in silence, so a token that was never checked looked
+            // exactly like a token that passed. Say so — the post-launch check below is what
+            // actually catches the consequence.
+            _logger.LogWarning(
+                "Could not read the token's session id ({Err}), so it was NOT verified against " +
+                "session {Sid} before launching '{Exe}'.",
+                Marshal.GetLastWin32Error(), sessionId, exePath);
         }
 
         // Step 2: Create the environment block for the user
@@ -135,9 +150,11 @@ public sealed class ProcessInjector
             // Close handles we don't need
             Kernel32.CloseHandle(pi.hThread);
 
-            _logger.LogInformation(
-                "Process launched: '{Exe}' PID {Pid} in session {Sid}",
-                exePath, pi.dwProcessId, sessionId);
+            // ⚠️ Ask the OS where the process actually landed. This log line used to report the
+            // session we ASKED for, which is a claim about our intent rather than about the world —
+            // so a process running in the wrong session produced a perfectly reassuring log. Seven
+            // rounds of issue #18 went past exactly that line.
+            VerifyLandedInSession(pi, exePath, sessionId, consoleSessionId);
 
             try
             {
@@ -180,6 +197,77 @@ public sealed class ProcessInjector
             apolloExePath, arguments,
             Path.GetDirectoryName(configPath),
             ct);
+    }
+
+    /// <summary>
+    /// Refuse to launch a seat's process into the console session.
+    ///
+    /// This is the cheapest of the session guards and the one that would have caught issue #18 at
+    /// provisioning time. A seat's process in the console session still runs, still serves the
+    /// seat's ports, and still writes a healthy-looking log — while its input lands on the console
+    /// desktop. There is no configuration in which that is what someone wanted, so it is an error
+    /// rather than a warning.
+    ///
+    /// Deliberate console launches exist and go through <c>LaunchInConsoleSessionAsync</c>;
+    /// <paramref name="allowConsoleSession"/> is the explicit opt-out for anything else.
+    /// </summary>
+    internal static void EnsureNotConsoleSession(
+        int sessionId, int consoleSessionId, string exePath, bool allowConsoleSession)
+    {
+        if (allowConsoleSession || sessionId != consoleSessionId) return;
+
+        throw new InvalidOperationException(
+            $"Refusing to launch '{exePath}' into session {sessionId}, which is the CONSOLE " +
+            "session. A seat's process belongs in the seat's own session; launching it here would " +
+            "put its input on the console desktop. The seat's recorded session id is stale or " +
+            "wrong — re-provision the seat. (Console launches go through LaunchInConsoleSessionAsync.)");
+    }
+
+    /// <summary>
+    /// Confirm the process is in the session we aimed at, and kill it if not.
+    ///
+    /// A process in the wrong session is worse than no process: it runs, it looks healthy, it
+    /// serves clients on the seat's ports, and it injects its input into somebody else's desktop.
+    /// Killing it turns a silent seven-round mystery into one loud line at provisioning time.
+    ///
+    /// <see cref="Kernel32.ProcessIdToSessionId"/> was declared in this codebase and never called
+    /// once — the capability to notice this existed the whole time.
+    /// </summary>
+    private void VerifyLandedInSession(
+        Kernel32.ProcessInformation pi, string exePath, int expectedSessionId, int consoleSessionId)
+    {
+        if (!Kernel32.ProcessIdToSessionId((uint)pi.dwProcessId, out var actualSessionId))
+        {
+            _logger.LogWarning(
+                "Process launched: '{Exe}' PID {Pid}, but its session could NOT be read ({Err}), " +
+                "so it is unverified. Expected session {Sid}.",
+                exePath, pi.dwProcessId, Marshal.GetLastWin32Error(), expectedSessionId);
+            return;
+        }
+
+        if ((int)actualSessionId == expectedSessionId)
+        {
+            _logger.LogInformation(
+                "Process launched: '{Exe}' PID {Pid} in session {Sid} (verified)",
+                exePath, pi.dwProcessId, actualSessionId);
+            return;
+        }
+
+        var landedOnConsole = (int)actualSessionId == consoleSessionId;
+        _logger.LogError(
+            "Process '{Exe}' PID {Pid} landed in session {Actual}, NOT the requested {Expected}{Console}. " +
+            "Killing it: left running it would serve the seat's ports while injecting input into " +
+            "another session's desktop, and every log it wrote would look correct.",
+            exePath, pi.dwProcessId, actualSessionId, expectedSessionId,
+            landedOnConsole ? " — that is the CONSOLE session" : "");
+
+        try { Kernel32.TerminateProcess(pi.hProcess, 1); }
+        catch (Exception ex) { _logger.LogWarning(ex, "Could not kill the mis-targeted process"); }
+
+        throw new InvalidOperationException(
+            $"'{exePath}' launched into session {actualSessionId} instead of {expectedSessionId}" +
+            (landedOnConsole ? " (the console session)" : "") +
+            ". The process was killed. The seat's recorded session id is stale or wrong.");
     }
 
     /// <summary>

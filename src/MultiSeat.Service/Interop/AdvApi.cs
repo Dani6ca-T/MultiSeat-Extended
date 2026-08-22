@@ -1,3 +1,4 @@
+using System.Security.Principal;
 using System.Runtime.InteropServices;
 
 namespace MultiSeat.Service.Interop;
@@ -186,6 +187,46 @@ internal static partial class AdvApi
         IntPtr tokenInformation,
         int tokenInformationLength,
         out int returnLength);
+
+    /// <summary>
+    /// The SID of the user a token belongs to, or null if it cannot be read.
+    ///
+    /// Exists because <c>WTSQueryUserToken(sessionId)</c> hands back whoever occupies that session,
+    /// with no reference to the account we meant. If the session id is wrong, the caller silently
+    /// gets a stranger's token — one whose session id matches what was asked for, so every
+    /// downstream check passes. See <c>SessionLauncher.GetSessionToken</c>.
+    ///
+    /// TOKEN_USER is variable length (it ends in a SID), so this is the two-call form: ask for the
+    /// size, then read it.
+    /// </summary>
+    public static SecurityIdentifier? TryGetTokenUserSid(IntPtr tokenHandle)
+    {
+        GetTokenInformationRaw(tokenHandle, TokenInformationClass.TokenUser,
+            IntPtr.Zero, 0, out var needed);
+
+        if (needed <= 0) return null;
+
+        var buffer = Marshal.AllocHGlobal(needed);
+        try
+        {
+            if (!GetTokenInformationRaw(tokenHandle, TokenInformationClass.TokenUser,
+                    buffer, needed, out _))
+                return null;
+
+            // TOKEN_USER is a SID_AND_ATTRIBUTES: the first pointer-sized field points at the SID.
+            var sidPtr = Marshal.ReadIntPtr(buffer);
+            return sidPtr == IntPtr.Zero ? null : new SecurityIdentifier(sidPtr);
+        }
+        catch (ArgumentException)
+        {
+            // Malformed SID — treat as unreadable rather than throwing out of a check.
+            return null;
+        }
+        finally
+        {
+            Marshal.FreeHGlobal(buffer);
+        }
+    }
 
     [LibraryImport(Lib, SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
