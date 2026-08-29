@@ -104,7 +104,9 @@ Alternatively, download it manually: https://github.com/itsmikethetech/Virtual-D
 
 ### Virtual Audio Devices — VB-CABLE + VoiceMeeter Potato
 
-Each seat needs its own virtual audio device so audio is routed to the correct Moonlight client. MultiSeat uses VB-CABLE basic (seat 0) and VoiceMeeter Potato (seats 1–3). Both are free and auto-downloaded by the prerequisites script.
+**Only under `MultiSeat:AudioMode = SharedHost`.** The default, `PerSession`, gives every seat its own RDP "Remote Audio" endpoint and needs **neither** of these; `install-prerequisites.ps1` skips them unless you pass `-AudioMode SharedHost`. `SharedHost` remains the only mode with a microphone path.
+
+Under `SharedHost`, each seat needs its own virtual audio device so audio is routed to the correct Moonlight client. MultiSeat uses VB-CABLE basic (seat 0) and VoiceMeeter Potato (seats 1–3). Both are free and auto-downloaded by the prerequisites script.
 
 | Requirement | Details |
 |-------------|---------|

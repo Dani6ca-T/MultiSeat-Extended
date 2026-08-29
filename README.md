@@ -33,7 +33,7 @@ See [REQUIREMENTS.md](REQUIREMENTS.md) for the full hardware and software requir
 - .NET 9 Runtime
 - Apollo (Sunshine fork with multi-instance support)
 - SudoVDA virtual display driver (one virtual display per seat)
-- VB-CABLE virtual audio (one per seat)
+- VB-CABLE virtual audio (one per seat) — only under `SharedHost` audio; the default `PerSession` mode needs none
 - HidHide (controller isolation)
 - ViGEmBus (virtual controller driver)
 - RDPWrap (multi-session RDP on Windows Home/Pro)
@@ -74,8 +74,8 @@ This script automatically downloads and installs everything:
 |----------|---------|
 | ViGEmBus | Virtual Xbox controller driver |
 | HidHide | Hides physical controllers from the host |
-| VB-CABLE (basic) | Virtual audio device for seat 0 (free, auto-downloaded) |
-| VoiceMeeter Potato | 3 additional virtual audio devices for seats 1–3 (free, auto-downloaded) |
+| VB-CABLE (basic) | Virtual audio device for seat 0 — **`SharedHost` audio only**, skipped by default (free, auto-downloaded) |
+| VoiceMeeter Potato | 3 additional virtual audio devices for seats 1–3 — **`SharedHost` audio only**, skipped by default (free, auto-downloaded) |
 | RDPWrap + rdpwrap.ini | Enables concurrent RDP sessions on Windows Home/Pro |
 | Apollo | Sunshine fork with multi-instance streaming support |
 | SudoVDA | Virtual display driver (one display per seat) |

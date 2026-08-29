@@ -121,6 +121,11 @@ Two separate scripts — prereqs and service deploy are intentionally split:
 # Reboot if prompted, then re-run to confirm clean.
 # Log: prerequisites\prereq.log
 
+# VB-CABLE + VoiceMeeter are installed ONLY for SharedHost audio. With no switch the script
+# reads the deployed appsettings.local.json / appsettings.json and falls back to PerSession,
+# which skips them - and skips the reboot VoiceMeeter forces. Force either way with:
+.\prerequisites\install-prerequisites.ps1 -AudioMode SharedHost
+
 # Step 2: Build and deploy the MultiSeat service (run from scripts\)
 .\scripts\install-service.ps1
 

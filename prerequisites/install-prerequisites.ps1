@@ -12,12 +12,27 @@
     Skip downloading missing files; only install what is already present.
 .PARAMETER Seats
     Number of seats to provision audio cables for. Defaults to 4.
-    Each seat needs one VB-CABLE device.
+    Each seat needs one VB-CABLE device. Only meaningful under SharedHost audio.
+.PARAMETER AudioMode
+    Which audio mode this host will run, which decides whether the virtual audio
+    cables are installed at all.
+
+      PerSession  (default) Each seat uses its own RDP "Remote Audio" endpoint.
+                  VB-CABLE and VoiceMeeter are NOT installed - they are not used,
+                  and VoiceMeeter is the one prerequisite that forces a reboot.
+      SharedHost  Seats render onto host virtual cables. Installs VB-CABLE and
+                  VoiceMeeter Potato. This is the only mode with a microphone path.
+
+    When omitted, the deployed service configuration decides
+    (appsettings.local.json, then appsettings.json); failing that, PerSession -
+    which is the service's own default.
 #>
 param(
     [switch]$SkipReboot,
     [switch]$SkipDownload,
-    [int]$Seats = 4
+    [int]$Seats = 4,
+    [ValidateSet('PerSession', 'SharedHost')]
+    [string]$AudioMode
 )
 
 $ErrorActionPreference = "Stop"
@@ -45,6 +60,7 @@ if (-not [Environment]::Is64BitProcess -and [Environment]::Is64BitOperatingSyste
         $Fwd = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $PSCommandPath)
         if ($SkipReboot)   { $Fwd += '-SkipReboot' }
         if ($SkipDownload) { $Fwd += '-SkipDownload' }
+        if ($AudioMode)    { $Fwd += @('-AudioMode', $AudioMode) }
         $Fwd += @('-Seats', $Seats)
         & $NativeHost @Fwd
         if ($null -eq $LASTEXITCODE) { exit 0 } else { exit $LASTEXITCODE }
@@ -470,237 +486,291 @@ if ($hidhide) {
 }
 
 # ----------------------------------------------------------------
-# 3a. VB-CABLE Basic  --  virtual audio device for seat 0
+# 3. Virtual audio cables  --  SharedHost audio only
 # ----------------------------------------------------------------
-Write-Step "VB-CABLE Basic (virtual audio device for seat 0)"
-
-$cableInstalled = [bool]@(Get-CimInstance Win32_SoundDevice |
-    Where-Object { $_.Name -match "\bCABLE\b" })
-
-if ($cableInstalled) {
-    Write-OK "Already installed"
-} else {
-    $zip = Get-ChildItem $ScriptDir -Filter "VBCABLE_Driver_Pack45.zip" | Select-Object -First 1
-    if (-not $zip) {
-        $f = Get-Prerequisite "VBCABLE_Driver_Pack45.zip" `
-            "https://download.vb-audio.com/Download_CABLE/VBCABLE_Driver_Pack45.zip" `
-            "VB-CABLE (basic)"
-        if ($f) { $zip = Get-Item $f }
-    }
-    if ($zip) {
-        Install-VbCablePack $zip.FullName "VB-CABLE (basic)"
-    } else {
-        Write-Skip "VB-CABLE  --  get from https://vb-audio.com/Cable/"
-    }
-}
-
-# ----------------------------------------------------------------
-# 3b. VoiceMeeter Potato  --  3 virtual audio devices for seats 1-3
-# ----------------------------------------------------------------
-Write-Step "VoiceMeeter Potato (virtual audio devices for seats 1-3)"
-
-# VoiceMeeter editions, Potato first. This section exists for Potato's THREE VAIO devices
-# (VoiceMeeter Input, AUX Input, VAIO3) which seats 1-3 use; Banana provides only two and
-# basic only one.
+# Under PerSession (the service default since 2026-08-19) every seat renders into its own
+# RDP "Remote Audio" endpoint, so no host virtual cable is involved at any point. Installing
+# them anyway costs the user a reboot -- VoiceMeeter's drivers only register after one -- and
+# leaves devices behind that nothing reads. That is not hypothetical tidiness: on the
+# reference host a leftover VoiceMeeter device had become the machine's default RECORDING
+# device, which silently broke the microphone for an unrelated stream.
 #
-# This used to detect VoiceMeeter by looking for voicemeeterpro.exe, which is BANANA, and
-# that was wrong in both directions: on a host with only Banana it reported Potato present
-# and skipped the install, and on a host with Potato it launched Banana to "activate" the
-# devices -- including VAIO3, which Banana does not have -- so the 3-device check below
-# could fail and re-run the installer for nothing. Keep this list in step with
-# AudioRouter.VoiceMeeterExeNames and the copy in scripts\install-service.ps1.
-$vmNames = @(
-    "voicemeeter8x64.exe",      # Potato, 64-bit
-    "voicemeeter8.exe",         # Potato
-    "voicemeeterpro_x64.exe",   # Banana, 64-bit
-    "voicemeeterpro.exe",       # Banana
-    "voicemeeter_x64.exe",      # basic, 64-bit
-    "voicemeeter.exe"           # basic
-)
-
-function Find-VoiceMeeterExe {
-    param([string[]]$Names)
-
-    $roots = @()
-    foreach ($rp in @(
-        "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\VB:Voicemeeter\",
-        "HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\VB:Voicemeeter\"
+# Resolution order: the -AudioMode switch, then whatever the deployed service is configured
+# for, then PerSession.
+function Get-ConfiguredAudioMode {
+    foreach ($f in @(
+        (Join-Path $env:ProgramFiles 'MultiSeat\appsettings.local.json'),
+        (Join-Path $env:ProgramFiles 'MultiSeat\appsettings.json')
     )) {
-        if (Test-Path $rp) {
-            $loc = (Get-ItemProperty $rp -ErrorAction SilentlyContinue).InstallLocation
-            if ($loc) { $roots += $loc }
-        }
-    }
-    # The installer uses the 32-bit tree; check it first, and keep the 64-bit one as a fallback.
-    $roots += "C:\Program Files (x86)\VB\Voicemeeter"
-    $roots += "C:\Program Files\VB\Voicemeeter"
-
-    foreach ($root in $roots) {
-        foreach ($name in $Names) {
-            $candidate = Join-Path $root $name
-            if (Test-Path $candidate) { return $candidate }
-        }
+        if (-not (Test-Path $f)) { continue }
+        # Regex rather than ConvertFrom-Json: appsettings.json carries // comments, which
+        # ConvertFrom-Json rejects outright on Windows PowerShell 5.1.
+        $m = [regex]::Match((Get-Content $f -Raw), '"AudioMode"\s*:\s*"([^"]+)"')
+        if ($m.Success) { return @{ Mode = $m.Groups[1].Value; Source = $f } }
     }
     return $null
 }
 
-function Get-RunningVoiceMeeterName {
-    param([string[]]$Names)
-    foreach ($n in $Names) {
-        $proc = Get-Process -Name ([System.IO.Path]::GetFileNameWithoutExtension($n)) -ErrorAction SilentlyContinue
-        if ($proc) { return $proc[0].ProcessName }
-    }
-    return $null
-}
-
-$vmExe = Find-VoiceMeeterExe -Names $vmNames
-# Potato is what this section is actually for -- anything else counts as "not installed yet".
-$vmIsPotato = $vmExe -and ((Split-Path $vmExe -Leaf) -match '^voicemeeter8')
-if ($vmExe -and -not $vmIsPotato) {
-    Write-Host "  Found $(Split-Path $vmExe -Leaf), which is not Potato -- seats 1-3 need Potato's" -ForegroundColor Yellow
-    Write-Host "  three VAIO devices, so Potato will be installed alongside it." -ForegroundColor Yellow
-}
-
-# Helper: re-run the VoiceMeeter installer to repair/register its audio drivers.
-# Downloading the zip if it is no longer in the script directory.
-# The drivers only appear as audio devices after a subsequent reboot.
-function Register-VoiceMeeterDrivers {
-    Write-Host "  Re-running VoiceMeeter installer to register audio drivers..." -ForegroundColor White
-    $zip = Get-ChildItem $ScriptDir -Filter "Voicemeeter8Setup*.zip" | Select-Object -First 1
-    if (-not $zip) {
-        $f = Get-Prerequisite "Voicemeeter8Setup_v3122.zip" `
-            "https://download.vb-audio.com/Download_CABLE/Voicemeeter8Setup_v3122.zip" `
-            "VoiceMeeter Potato v3.1.2.2"
-        if ($f) { $zip = Get-Item $f }
-    }
-    if (-not $zip) {
-        Write-Host "  WARNING: Cannot find VoiceMeeter installer zip to repair drivers." -ForegroundColor Yellow
-        Write-Host "  Download from https://vb-audio.com/Voicemeeter/potato.htm and re-run." -ForegroundColor Yellow
-        $script:Skipped += "VoiceMeeter audio drivers (installer not found)"
-        return
-    }
-    $dir   = Expand-ZipFile $zip.FullName
-    $setup = Get-ChildItem $dir -Recurse |
-             Where-Object { $_.Name -match "Voicemeeter.*Setup.*\.exe$|VoicemeeterPro.*\.exe$" } |
-             Select-Object -First 1
-    if ($setup) {
-        Start-Process $setup.FullName -ArgumentList "/S" -Wait -NoNewWindow
-        Write-OK "Installer re-run -- reboot required for audio devices to appear"
-        # The main installer only registers VAIO1.  Explicitly install AUX VAIO + VAIO3.
-        # Re-resolve: $vmExe was computed BEFORE this install, so it may be stale or null.
-        $vmExe = Find-VoiceMeeterExe -Names $vmNames
-        if ($vmExe) {
-            Install-VoiceMeeterPotatoVAIOs $vmExe
-        }
-    } else {
-        Write-Host "  WARNING: No installer exe found inside VoiceMeeter zip." -ForegroundColor Yellow
-        $script:Skipped += "VoiceMeeter audio drivers (exe not found in zip)"
-    }
-    Remove-Item $dir -Recurse -Force -ErrorAction SilentlyContinue
-    $script:NeedsReboot = $true
-}
-
-if ($vmIsPotato) {
-    # VoiceMeeter's VAIO2 and VAIO3 devices only appear after VoiceMeeter has been
-    # launched at least once.  Start it now (idempotent -- second instance exits) and
-    # wait a moment so the WDM driver entries settle before we count.
-    # Launch the POTATO executable specifically: VAIO3 is a Potato device, so starting
-    # Banana here would never register it, and the count below would stay at 2.
-    $vmRunning = Get-RunningVoiceMeeterName -Names $vmNames
-    if (-not $vmRunning) {
-        Write-Host "  Starting VoiceMeeter Potato ($(Split-Path $vmExe -Leaf)) to activate virtual audio devices..." -ForegroundColor White
-        Start-Process $vmExe -ErrorAction SilentlyContinue
-        Start-Sleep -Seconds 8
-    } elseif ($vmRunning -notmatch '^voicemeeter8') {
-        # A different edition is already running. Do not start Potato alongside it -- VB's
-        # editions share one audio engine and are not meant to run at once.
-        #
-        # Note what this does and does not mean, because it is easy to overstate: the VAIO
-        # devices are registered by the INSTALLERS, so they are present whichever edition is
-        # running (measured: 3/3 registered with Banana running). What needs Potato running is
-        # the mixing itself -- seat audio routed through its VAIO devices has no engine behind
-        # it while a lesser edition holds the driver.
-        Write-Host "  NOTE: $vmRunning is running, which is not Potato. The VAIO devices stay" -ForegroundColor Yellow
-        Write-Host "  registered, but seat audio through them needs Potato to be the running" -ForegroundColor Yellow
-        Write-Host "  mixer -- close it and start $(Split-Path $vmExe -Leaf)." -ForegroundColor Yellow
-    } else {
-        Write-Host "  VoiceMeeter Potato already running ($vmRunning)" -ForegroundColor DarkGray
-    }
-
-    Write-AudioDiagnostics
-
-    $vmDevices = @(Get-CimInstance Win32_SoundDevice |
-        Where-Object { $_.Name -match "VoiceMeeter" }).Count
-    if ($vmDevices -ge 3) {
-        Write-OK "Already installed and audio devices registered ($vmDevices/3)"
-    } else {
-        Write-Host "  Installed but audio devices not yet registered ($vmDevices/3 found) -- registering..." -ForegroundColor Yellow
-        Register-VoiceMeeterDrivers
-        Write-Host "  [DIAG] Audio state after installer re-run:" -ForegroundColor DarkGray
-        Write-AudioDiagnostics
-        Write-OK "VoiceMeeter drivers registered -- reboot required"
-        $Installed += "VoiceMeeter audio drivers"
-    }
+$audioModeSource = 'the built-in default'
+if ($AudioMode) {
+    $audioModeSource = 'the -AudioMode switch'
 } else {
-    $zip = Get-ChildItem $ScriptDir -Filter "Voicemeeter8Setup*.zip" | Select-Object -First 1
-    if (-not $zip) {
-        $f = Get-Prerequisite "Voicemeeter8Setup_v3122.zip" `
-            "https://download.vb-audio.com/Download_CABLE/Voicemeeter8Setup_v3122.zip" `
-            "VoiceMeeter Potato v3.1.2.2"
-        if ($f) { $zip = Get-Item $f }
+    $foundMode = Get-ConfiguredAudioMode
+    if ($foundMode) {
+        $AudioMode       = $foundMode.Mode
+        $audioModeSource = $foundMode.Source
+    } else {
+        $AudioMode = 'PerSession'
     }
-    if ($zip) {
-        $dir = Expand-ZipFile $zip.FullName
+}
+
+$installAudioCables = ($AudioMode -eq 'SharedHost')
+
+if (-not $installAudioCables) {
+    Write-Step "Virtual audio devices (AudioMode = $AudioMode, from $audioModeSource)"
+    Write-Skip "VB-CABLE + VoiceMeeter  --  not used under PerSession audio"
+    Write-Host "  Each seat gets its own RDP Remote Audio endpoint instead, so no host cable is" -ForegroundColor DarkGray
+    Write-Host "  involved. Skipping these also avoids the reboot VoiceMeeter would demand." -ForegroundColor DarkGray
+    Write-Host "  Re-run with -AudioMode SharedHost if you need the microphone path, which is the" -ForegroundColor DarkGray
+    Write-Host "  one capability PerSession does not have." -ForegroundColor DarkGray
+}
+
+if ($installAudioCables) {
+
+    # ----------------------------------------------------------------
+    # 3a. VB-CABLE Basic  --  virtual audio device for seat 0
+    # ----------------------------------------------------------------
+    Write-Step "VB-CABLE Basic (virtual audio device for seat 0)"
+
+    $cableInstalled = [bool]@(Get-CimInstance Win32_SoundDevice |
+        Where-Object { $_.Name -match "\bCABLE\b" })
+
+    if ($cableInstalled) {
+        Write-OK "Already installed"
+    } else {
+        $zip = Get-ChildItem $ScriptDir -Filter "VBCABLE_Driver_Pack45.zip" | Select-Object -First 1
+        if (-not $zip) {
+            $f = Get-Prerequisite "VBCABLE_Driver_Pack45.zip" `
+                "https://download.vb-audio.com/Download_CABLE/VBCABLE_Driver_Pack45.zip" `
+                "VB-CABLE (basic)"
+            if ($f) { $zip = Get-Item $f }
+        }
+        if ($zip) {
+            Install-VbCablePack $zip.FullName "VB-CABLE (basic)"
+        } else {
+            Write-Skip "VB-CABLE  --  get from https://vb-audio.com/Cable/"
+        }
+    }
+
+    # ----------------------------------------------------------------
+    # 3b. VoiceMeeter Potato  --  3 virtual audio devices for seats 1-3
+    # ----------------------------------------------------------------
+    Write-Step "VoiceMeeter Potato (virtual audio devices for seats 1-3)"
+
+    # VoiceMeeter editions, Potato first. This section exists for Potato's THREE VAIO devices
+    # (VoiceMeeter Input, AUX Input, VAIO3) which seats 1-3 use; Banana provides only two and
+    # basic only one.
+    #
+    # This used to detect VoiceMeeter by looking for voicemeeterpro.exe, which is BANANA, and
+    # that was wrong in both directions: on a host with only Banana it reported Potato present
+    # and skipped the install, and on a host with Potato it launched Banana to "activate" the
+    # devices -- including VAIO3, which Banana does not have -- so the 3-device check below
+    # could fail and re-run the installer for nothing. Keep this list in step with
+    # AudioRouter.VoiceMeeterExeNames and the copy in scripts\install-service.ps1.
+    $vmNames = @(
+        "voicemeeter8x64.exe",      # Potato, 64-bit
+        "voicemeeter8.exe",         # Potato
+        "voicemeeterpro_x64.exe",   # Banana, 64-bit
+        "voicemeeterpro.exe",       # Banana
+        "voicemeeter_x64.exe",      # basic, 64-bit
+        "voicemeeter.exe"           # basic
+    )
+
+    function Find-VoiceMeeterExe {
+        param([string[]]$Names)
+
+        $roots = @()
+        foreach ($rp in @(
+            "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\VB:Voicemeeter\",
+            "HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\VB:Voicemeeter\"
+        )) {
+            if (Test-Path $rp) {
+                $loc = (Get-ItemProperty $rp -ErrorAction SilentlyContinue).InstallLocation
+                if ($loc) { $roots += $loc }
+            }
+        }
+        # The installer uses the 32-bit tree; check it first, and keep the 64-bit one as a fallback.
+        $roots += "C:\Program Files (x86)\VB\Voicemeeter"
+        $roots += "C:\Program Files\VB\Voicemeeter"
+
+        foreach ($root in $roots) {
+            foreach ($name in $Names) {
+                $candidate = Join-Path $root $name
+                if (Test-Path $candidate) { return $candidate }
+            }
+        }
+        return $null
+    }
+
+    function Get-RunningVoiceMeeterName {
+        param([string[]]$Names)
+        foreach ($n in $Names) {
+            $proc = Get-Process -Name ([System.IO.Path]::GetFileNameWithoutExtension($n)) -ErrorAction SilentlyContinue
+            if ($proc) { return $proc[0].ProcessName }
+        }
+        return $null
+    }
+
+    $vmExe = Find-VoiceMeeterExe -Names $vmNames
+    # Potato is what this section is actually for -- anything else counts as "not installed yet".
+    $vmIsPotato = $vmExe -and ((Split-Path $vmExe -Leaf) -match '^voicemeeter8')
+    if ($vmExe -and -not $vmIsPotato) {
+        Write-Host "  Found $(Split-Path $vmExe -Leaf), which is not Potato -- seats 1-3 need Potato's" -ForegroundColor Yellow
+        Write-Host "  three VAIO devices, so Potato will be installed alongside it." -ForegroundColor Yellow
+    }
+
+    # Helper: re-run the VoiceMeeter installer to repair/register its audio drivers.
+    # Downloading the zip if it is no longer in the script directory.
+    # The drivers only appear as audio devices after a subsequent reboot.
+    function Register-VoiceMeeterDrivers {
+        Write-Host "  Re-running VoiceMeeter installer to register audio drivers..." -ForegroundColor White
+        $zip = Get-ChildItem $ScriptDir -Filter "Voicemeeter8Setup*.zip" | Select-Object -First 1
+        if (-not $zip) {
+            $f = Get-Prerequisite "Voicemeeter8Setup_v3122.zip" `
+                "https://download.vb-audio.com/Download_CABLE/Voicemeeter8Setup_v3122.zip" `
+                "VoiceMeeter Potato v3.1.2.2"
+            if ($f) { $zip = Get-Item $f }
+        }
+        if (-not $zip) {
+            Write-Host "  WARNING: Cannot find VoiceMeeter installer zip to repair drivers." -ForegroundColor Yellow
+            Write-Host "  Download from https://vb-audio.com/Voicemeeter/potato.htm and re-run." -ForegroundColor Yellow
+            $script:Skipped += "VoiceMeeter audio drivers (installer not found)"
+            return
+        }
+        $dir   = Expand-ZipFile $zip.FullName
         $setup = Get-ChildItem $dir -Recurse |
                  Where-Object { $_.Name -match "Voicemeeter.*Setup.*\.exe$|VoicemeeterPro.*\.exe$" } |
                  Select-Object -First 1
         if ($setup) {
-            Write-Host "  Installing VoiceMeeter Potato..."
             Start-Process $setup.FullName -ArgumentList "/S" -Wait -NoNewWindow
+            Write-OK "Installer re-run -- reboot required for audio devices to appear"
+            # The main installer only registers VAIO1.  Explicitly install AUX VAIO + VAIO3.
+            # Re-resolve: $vmExe was computed BEFORE this install, so it may be stale or null.
             $vmExe = Find-VoiceMeeterExe -Names $vmNames
             if ($vmExe) {
-                # Register auto-start at Windows boot (system-wide)
-                $runKey = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run"
-                Set-ItemProperty -Path $runKey -Name "VoiceMeeter" -Value "`"$vmExe`""
-                Write-OK "Installed and registered to auto-start at boot"
-                $Installed += "VoiceMeeter Potato"
-                # Install AUX VAIO + VAIO3 (not included in the main installer)
                 Install-VoiceMeeterPotatoVAIOs $vmExe
-            } else {
-                Write-Host "  Silent install may not have worked -- launching interactive installer..." -ForegroundColor Yellow
-                Start-Process $setup.FullName -Wait
+            }
+        } else {
+            Write-Host "  WARNING: No installer exe found inside VoiceMeeter zip." -ForegroundColor Yellow
+            $script:Skipped += "VoiceMeeter audio drivers (exe not found in zip)"
+        }
+        Remove-Item $dir -Recurse -Force -ErrorAction SilentlyContinue
+        $script:NeedsReboot = $true
+    }
+
+    if ($vmIsPotato) {
+        # VoiceMeeter's VAIO2 and VAIO3 devices only appear after VoiceMeeter has been
+        # launched at least once.  Start it now (idempotent -- second instance exits) and
+        # wait a moment so the WDM driver entries settle before we count.
+        # Launch the POTATO executable specifically: VAIO3 is a Potato device, so starting
+        # Banana here would never register it, and the count below would stay at 2.
+        $vmRunning = Get-RunningVoiceMeeterName -Names $vmNames
+        if (-not $vmRunning) {
+            Write-Host "  Starting VoiceMeeter Potato ($(Split-Path $vmExe -Leaf)) to activate virtual audio devices..." -ForegroundColor White
+            Start-Process $vmExe -ErrorAction SilentlyContinue
+            Start-Sleep -Seconds 8
+        } elseif ($vmRunning -notmatch '^voicemeeter8') {
+            # A different edition is already running. Do not start Potato alongside it -- VB's
+            # editions share one audio engine and are not meant to run at once.
+            #
+            # Note what this does and does not mean, because it is easy to overstate: the VAIO
+            # devices are registered by the INSTALLERS, so they are present whichever edition is
+            # running (measured: 3/3 registered with Banana running). What needs Potato running is
+            # the mixing itself -- seat audio routed through its VAIO devices has no engine behind
+            # it while a lesser edition holds the driver.
+            Write-Host "  NOTE: $vmRunning is running, which is not Potato. The VAIO devices stay" -ForegroundColor Yellow
+            Write-Host "  registered, but seat audio through them needs Potato to be the running" -ForegroundColor Yellow
+            Write-Host "  mixer -- close it and start $(Split-Path $vmExe -Leaf)." -ForegroundColor Yellow
+        } else {
+            Write-Host "  VoiceMeeter Potato already running ($vmRunning)" -ForegroundColor DarkGray
+        }
+
+        Write-AudioDiagnostics
+
+        $vmDevices = @(Get-CimInstance Win32_SoundDevice |
+            Where-Object { $_.Name -match "VoiceMeeter" }).Count
+        if ($vmDevices -ge 3) {
+            Write-OK "Already installed and audio devices registered ($vmDevices/3)"
+        } else {
+            Write-Host "  Installed but audio devices not yet registered ($vmDevices/3 found) -- registering..." -ForegroundColor Yellow
+            Register-VoiceMeeterDrivers
+            Write-Host "  [DIAG] Audio state after installer re-run:" -ForegroundColor DarkGray
+            Write-AudioDiagnostics
+            Write-OK "VoiceMeeter drivers registered -- reboot required"
+            $Installed += "VoiceMeeter audio drivers"
+        }
+    } else {
+        $zip = Get-ChildItem $ScriptDir -Filter "Voicemeeter8Setup*.zip" | Select-Object -First 1
+        if (-not $zip) {
+            $f = Get-Prerequisite "Voicemeeter8Setup_v3122.zip" `
+                "https://download.vb-audio.com/Download_CABLE/Voicemeeter8Setup_v3122.zip" `
+                "VoiceMeeter Potato v3.1.2.2"
+            if ($f) { $zip = Get-Item $f }
+        }
+        if ($zip) {
+            $dir = Expand-ZipFile $zip.FullName
+            $setup = Get-ChildItem $dir -Recurse |
+                     Where-Object { $_.Name -match "Voicemeeter.*Setup.*\.exe$|VoicemeeterPro.*\.exe$" } |
+                     Select-Object -First 1
+            if ($setup) {
+                Write-Host "  Installing VoiceMeeter Potato..."
+                Start-Process $setup.FullName -ArgumentList "/S" -Wait -NoNewWindow
                 $vmExe = Find-VoiceMeeterExe -Names $vmNames
                 if ($vmExe) {
+                    # Register auto-start at Windows boot (system-wide)
                     $runKey = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run"
                     Set-ItemProperty -Path $runKey -Name "VoiceMeeter" -Value "`"$vmExe`""
                     Write-OK "Installed and registered to auto-start at boot"
                     $Installed += "VoiceMeeter Potato"
+                    # Install AUX VAIO + VAIO3 (not included in the main installer)
                     Install-VoiceMeeterPotatoVAIOs $vmExe
                 } else {
-                    Write-Host "  WARNING: VoiceMeeter not found after install. Check manually." -ForegroundColor Yellow
-                    $Skipped += "VoiceMeeter Potato"
+                    Write-Host "  Silent install may not have worked -- launching interactive installer..." -ForegroundColor Yellow
+                    Start-Process $setup.FullName -Wait
+                    $vmExe = Find-VoiceMeeterExe -Names $vmNames
+                    if ($vmExe) {
+                        $runKey = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run"
+                        Set-ItemProperty -Path $runKey -Name "VoiceMeeter" -Value "`"$vmExe`""
+                        Write-OK "Installed and registered to auto-start at boot"
+                        $Installed += "VoiceMeeter Potato"
+                        Install-VoiceMeeterPotatoVAIOs $vmExe
+                    } else {
+                        Write-Host "  WARNING: VoiceMeeter not found after install. Check manually." -ForegroundColor Yellow
+                        $Skipped += "VoiceMeeter Potato"
+                    }
                 }
+            } else {
+                Write-Host "  WARNING: No installer found in VoiceMeeter zip" -ForegroundColor Yellow
+                $Skipped += "VoiceMeeter Potato"
             }
+            Remove-Item $dir -Recurse -Force -ErrorAction SilentlyContinue
         } else {
-            Write-Host "  WARNING: No installer found in VoiceMeeter zip" -ForegroundColor Yellow
-            $Skipped += "VoiceMeeter Potato"
+            Write-Skip "VoiceMeeter Potato  --  get from https://vb-audio.com/Voicemeeter/potato.htm"
         }
-        Remove-Item $dir -Recurse -Force -ErrorAction SilentlyContinue
-    } else {
-        Write-Skip "VoiceMeeter Potato  --  get from https://vb-audio.com/Voicemeeter/potato.htm"
     }
-}
 
-# Verify combined virtual audio device count
-$totalVac = Get-VacCount
-Write-Host "  Total virtual audio devices installed: $totalVac (need $Seats for $Seats seat(s))" -ForegroundColor DarkGray
-if ($totalVac -lt $Seats) {
-    Write-Host "  WARNING: Only $totalVac virtual audio device(s) detected — $Seats needed for $Seats seat(s)." -ForegroundColor Yellow
-    Write-Host "  Re-run the script after reboot to recheck." -ForegroundColor Yellow
-    $Skipped += "Audio devices (need $Seats, have $totalVac)"
-} else {
-    Write-OK "Enough virtual audio devices ($totalVac >= $Seats)"
-}
+    # Verify combined virtual audio device count
+    $totalVac = Get-VacCount
+    Write-Host "  Total virtual audio devices installed: $totalVac (need $Seats for $Seats seat(s))" -ForegroundColor DarkGray
+    if ($totalVac -lt $Seats) {
+        Write-Host "  WARNING: Only $totalVac virtual audio device(s) detected — $Seats needed for $Seats seat(s)." -ForegroundColor Yellow
+        Write-Host "  Re-run the script after reboot to recheck." -ForegroundColor Yellow
+        $Skipped += "Audio devices (need $Seats, have $totalVac)"
+    } else {
+        Write-OK "Enough virtual audio devices ($totalVac >= $Seats)"
+    }
+
+}  # end: if ($installAudioCables)
 
 # ----------------------------------------------------------------
 # 4. RDP Wrapper Library

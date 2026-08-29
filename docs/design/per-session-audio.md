@@ -66,7 +66,7 @@ Add `MultiSeatOptions.AudioMode = { SharedHost (current default) | PerSession }`
 - ✅ **`AudioRouter`** — `EnsureVacScanned` returns immediately under `PerSession`, so no VoiceMeeter start and no "missing devices" warnings on a host that deliberately has none.
 - ✅ **`SeatManager`** — step 5 skips `AssignCable` (which *throws* when no cables exist — the expected state here); `ResetAudio` is a logged no-op; `SeatServices.AudioManaged` tells the dashboard to show "Session" instead of a down light.
 - ✅ **Tests** — config generation under both modes, including a guard that a stale `AudioGameRenderFriendlyName` never leaks into a `PerSession` config.
-- ⬜ **Prereqs (`install-prerequisites.ps1`)** — VB-CABLE / VoiceMeeter are **not required** under `PerSession`; `CLAUDE.md` documents this, the installer does not yet branch on it.
+- ✅ **Prereqs (`install-prerequisites.ps1`)** — the installer now branches on `-AudioMode`, and under `PerSession` skips VB-CABLE and VoiceMeeter entirely (which also removes the reboot VoiceMeeter forces). With no switch given it reads the deployed `appsettings.local.json` / `appsettings.json`, falling back to `PerSession`.
 
 ## Corrections from the field (issue #15)
 
