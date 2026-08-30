@@ -400,27 +400,25 @@ public sealed class ApolloConfigBuilder
         CreateJunctionIfMissing(Path.Combine(seatDir, "tools"),
                                 Path.Combine(apolloRoot, "tools"));
 
-        // Seed TLS cert + key so Apollo doesn't need to generate (or fail to write) them.
-        // All seats share the same server cert — Moonlight identifies seats by uniqueid, not cert.
-        // Only seed if absent so reprovisions don't disturb active paired sessions.
-        var apolloCreds = @"C:\Program Files\Apollo\config\credentials";
-        foreach (var file in new[] { "cacert.pem", "cakey.pem" })
-        {
-            var dest = Path.Combine(credDir, file);
-            var src  = Path.Combine(apolloCreds, file);
-            if (!File.Exists(dest) && File.Exists(src))
-            {
-                try
-                {
-                    File.Copy(src, dest);
-                    _logger.LogDebug("Seeded cert {File} to seat credentials dir", file);
-                }
-                catch (Exception ex)
-                {
-                    _logger.LogWarning(ex, "Could not seed cert {File} to {Dest}", file, dest);
-                }
-            }
-        }
+        // A seat is NOT seeded with a TLS identity any more.
+        //
+        // It used to be handed a copy of the console Apollo's cakey.pem, with a comment saying
+        // all seats could share one cert because Moonlight identifies seats by uniqueid. The
+        // second half is wrong: pairing hands the client the SERVER CERTIFICATE (root.plaincert,
+        // nvhttp.cpp getservercert), so the cert is pinned per host entry. And sharing one key
+        // across every seat and the console means any of them can impersonate the others - while
+        // the source copy under the Apollo install stays readable by every local user, which no
+        // permission work on our side can fix.
+        //
+        // Apollo generates its own 2048-bit credentials when either file is missing
+        // (httpcommon.cpp: "if (!fs::exists(pkey) || !fs::exists(cert)) create_creds(...)"), and
+        // the credentials dir is now writable by the seat, so doing nothing is what gives each
+        // seat a key of its own.
+        //
+        // Seats provisioned before this still hold the shared key. Replacing it breaks their
+        // pairings, so it happens only when asked for.
+        if (_options.RotateSharedSeatTls)
+            RotateSeededTlsIdentity(credDir);
     }
 
     /// <summary>
@@ -593,6 +591,59 @@ public sealed class ApolloConfigBuilder
     /// privilege boundary. It is here because a value pasted with a stray newline should fail
     /// loudly and fall back, rather than quietly reconfigure Apollo.
     /// </summary>
+    /// <summary>
+    /// Delete a seat's TLS identity ONLY when it is byte-identical to the console Apollo's, i.e.
+    /// it is still the copy MultiSeat seeded. Apollo regenerates a fresh one on next start.
+    ///
+    /// The identity check is the whole safety of this: a seat that has already generated its own
+    /// key does not match, so it is never touched. Deleting a key Apollo made for itself would
+    /// break that seat's pairings for no reason at all.
+    /// </summary>
+    private void RotateSeededTlsIdentity(string credDir)
+    {
+        var sourceDir = Path.Combine(@"C:\Program Files\Apollo", "config", "credentials");
+        var key = Path.Combine(credDir, "cakey.pem");
+        var cert = Path.Combine(credDir, "cacert.pem");
+
+        if (!File.Exists(key)) return;   // nothing seeded, or Apollo already owns this seat
+
+        if (!IsSameFile(key, Path.Combine(sourceDir, "cakey.pem")))
+        {
+            _logger.LogDebug(
+                "Seat TLS key in {Dir} is not the seeded one - leaving it alone", credDir);
+            return;
+        }
+
+        try
+        {
+            File.Delete(key);
+            if (File.Exists(cert)) File.Delete(cert);
+            _logger.LogWarning(
+                "Removed the shared TLS identity from {Dir}; Apollo will generate one for this "
+                + "seat alone. EVERY CLIENT PAIRED TO THIS SEAT MUST PAIR AGAIN - a client pins "
+                + "the server certificate it was given when it paired.",
+                credDir);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex,
+                "Could not remove the shared TLS identity from {Dir}; the seat keeps a key the "
+                + "console Apollo and every other seat also hold", credDir);
+        }
+    }
+
+    /// <summary>True when both files exist and have identical bytes.</summary>
+    internal static bool IsSameFile(string a, string b)
+    {
+        if (!File.Exists(a) || !File.Exists(b)) return false;
+
+        var infoA = new FileInfo(a);
+        var infoB = new FileInfo(b);
+        if (infoA.Length != infoB.Length) return false;
+
+        return File.ReadAllBytes(a).AsSpan().SequenceEqual(File.ReadAllBytes(b));
+    }
+
     /// <summary>
     /// The DACL a seat's credentials directory should carry: SYSTEM and Administrators in full,
     /// the seat itself able to write, and nobody else - no inheritance, so ProgramData's

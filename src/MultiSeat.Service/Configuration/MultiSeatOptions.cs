@@ -28,6 +28,21 @@ public sealed class MultiSeatOptions
     public string Encoder { get; set; } = "nvenc";
 
     /// <summary>
+    /// Replace a seat's TLS identity when it is still the one MultiSeat seeded from the console
+    /// Apollo. Off by default because it BREAKS THAT SEAT'S EXISTING PAIRINGS.
+    ///
+    /// Seats used to be seeded with a copy of the console Apollo's cakey.pem, so every seat and
+    /// the console shared one private key - and the source copy is world-readable, which no
+    /// permission fix on our side can change. New seats now generate their own; this switch is
+    /// for the ones already carrying the shared key.
+    ///
+    /// A client pairs against the server certificate (Apollo hands it over as root.plaincert
+    /// during pairing), so replacing it means every client paired to that seat must pair again.
+    /// That is why this is opt-in rather than automatic.
+    /// </summary>
+    public bool RotateSharedSeatTls { get; set; }
+
+    /// <summary>
     /// Apollo's own log level for every seat. "info" is what a seat needs day
     /// to day; "debug" is the only way to see why a seat's Apollo refuses a
     /// pairing or a client, since its log is the sole window into a session

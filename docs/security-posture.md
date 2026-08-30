@@ -175,26 +175,41 @@ Seats provisioned before this shipped are fixed on their next provision. A seat 
 longer resolves is deliberately left alone: protecting the directory without granting the seat would
 lock Apollo out of its own key and break the seat, which is worse than the exposure it closes.
 
-### WARNING: this does NOT make a seat's key private
+### Each seat now generates its own TLS identity
 
-**Every seat is seeded with a copy of the SAME key**, taken from the console Apollo's install
-(`ApolloConfigBuilder.EnsureSeatConfigDir`), and the comment there says so: all seats share one
-server cert because Moonlight identifies a seat by its `uniqueid`, not its certificate. Measured on
-the reference host, a seat's `cakey.pem` is byte-identical to the console Apollo's.
+A seat used to be seeded with a **copy of the console Apollo's `cakey.pem`**, on the reasoning that
+Moonlight identifies a seat by its `uniqueid` rather than its certificate. Half of that is wrong:
+pairing hands the client the **server certificate** (`root.plaincert`, `nvhttp.cpp getservercert`),
+so the certificate is pinned per host entry. And one key shared by every seat and the console means
+any of them can impersonate the others - while the source copy under the Apollo install stays
+readable by every local user, which no permission work here can change.
 
-And the source stays readable:
+MultiSeat now seeds nothing. Apollo generates its own 2048-bit credentials when either file is
+missing, into the per-seat `credentials` directory that is already locked to SYSTEM, Administrators
+and that seat. Verified on the reference host: with the directory emptied, a provisioned seat came
+up serving TLS on its web UI with a key **different from the console Apollo's**.
 
-    C:\Program Files\Apollo\config\credentials\cakey.pem
-        BUILTIN\Users:(I)(RX)
+### Seats provisioned before this still hold the shared key
 
-So a standard user who wants that key reads the original rather than the seat's copy, and the key
-they get impersonates **every** seat and the console Apollo. Locking the seat directories removes
-one copy of the exposure, not the exposure.
+Nothing removes it automatically, because **replacing a seat's certificate un-pairs every client
+paired to it**. `MultiSeat:RotateSharedSeatTls` (default **off**) deletes the seeded pair on the
+next provision so Apollo can generate a fresh one:
 
-Closing it properly means each seat generating its own key in its now-writable credentials
-directory instead of being seeded with a shared one. That is a deliberate change, not a cleanup:
-Moonlight pins the certificate it paired with, so every existing pairing on the host would need
-redoing. It has not been made.
+```jsonc
+{ "MultiSeat": { "RotateSharedSeatTls": true } }
+```
+
+It only deletes a key that is **byte-identical to the console Apollo's** - a seat that already owns
+its key is never touched - and it logs a warning naming the consequence when it fires. Turn it off
+again afterwards; it is a migration, not a mode.
+
+To check a seat by hand:
+
+```powershell
+$seat = "C:\ProgramData\MultiSeat\apollo\<seat>\config\credentials\cakey.pem"
+$src  = "C:\Program Files\Apollo\config\credentials\cakey.pem"
+(Get-FileHash $seat).Hash -eq (Get-FileHash $src).Hash   # True = still the shared key
+```
 
 ## What is *not* protected
 
