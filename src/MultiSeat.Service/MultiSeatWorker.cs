@@ -277,13 +277,11 @@ public sealed class MultiSeatWorker : BackgroundService
                     var exePath = obj["ExecutablePath"] as string;
                     var cmdLine = obj["CommandLine"] as string;
 
-                    var isOurs =
-                        (!string.IsNullOrEmpty(managedExeDir) && exePath is not null &&
-                         exePath.StartsWith(managedExeDir, StringComparison.OrdinalIgnoreCase)) ||
-                        (cmdLine is not null &&
-                         cmdLine.Contains(managedConfigDir, StringComparison.OrdinalIgnoreCase));
-
-                    if (isOurs)
+                    // One shared decision with the reporting path in HostApolloMonitor. This copy
+                    // used to omit the emptiness check on managedConfigDir, and Contains("") is
+                    // true for every process - an empty ApolloConfigDir would have marked every
+                    // Apollo on the host as ours, and this is the path that kills them.
+                    if (ApolloOwnership.IsMultiSeatManaged(exePath, cmdLine, managedExeDir, managedConfigDir))
                         managed.Add(Convert.ToInt32(obj["ProcessId"]));
                 }
             }

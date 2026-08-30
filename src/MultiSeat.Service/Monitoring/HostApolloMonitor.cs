@@ -6,6 +6,7 @@ using System.Text.RegularExpressions;
 using Microsoft.Extensions.Options;
 using MultiSeat.Service.Configuration;
 using MultiSeat.Service.Interop;
+using MultiSeat.Service.Streaming;
 using MultiSeat.Shared.Models;
 
 namespace MultiSeat.Service.Monitoring;
@@ -92,7 +93,7 @@ public sealed partial class HostApolloMonitor
                 var exePath = o["ExecutablePath"] as string;
                 var cmdLine = o["CommandLine"] as string;
 
-                if (IsMultiSeatManaged(exePath, cmdLine, managedExeDir, managedConfigDir))
+                if (ApolloOwnership.IsMultiSeatManaged(exePath, cmdLine, managedExeDir, managedConfigDir))
                     continue;
 
                 DateTimeOffset? started = null;
@@ -110,19 +111,6 @@ public sealed partial class HostApolloMonitor
         return null;
     }
 
-    internal static bool IsMultiSeatManaged(
-        string? exePath, string? cmdLine, string? managedExeDir, string? managedConfigDir)
-    {
-        if (!string.IsNullOrEmpty(exePath) && !string.IsNullOrEmpty(managedExeDir)
-            && exePath.StartsWith(managedExeDir, StringComparison.OrdinalIgnoreCase))
-            return true;
-
-        if (!string.IsNullOrEmpty(cmdLine) && !string.IsNullOrEmpty(managedConfigDir)
-            && cmdLine.Contains(managedConfigDir, StringComparison.OrdinalIgnoreCase))
-            return true;
-
-        return false;
-    }
 
     /// <summary>
     /// Apollo's <c>port</c> from the config next to its executable, or the documented default.

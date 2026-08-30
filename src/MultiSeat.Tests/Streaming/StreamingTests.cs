@@ -225,6 +225,92 @@ public class StreamingTests
         }
     }
 
+    // ── The per-seat state file (PR #21 territory) ────────────────────
+    //
+    // sunshine_state.json holds the seat's server UUID and every client it has paired. Apollo
+    // rewrites it on each pairing, and MultiSeat must never stamp on it: re-provisioning a seat
+    // is routine, and losing this file means every client has to re-enter a PIN. PR #21 made the
+    // seat able to WRITE it; these cover the half that was always there and never tested - that
+    // we do not overwrite what Apollo has put in it.
+
+    [Fact]
+    public void ApolloConfigBuilder_StateFile_SurvivesReprovisioning()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), $"multiseat-test-{Guid.NewGuid():N}");
+        try
+        {
+            var builder = new ApolloConfigBuilder(
+                new TestLogger<ApolloConfigBuilder>(), Options.Create(new MultiSeatOptions()));
+            var seat = new SeatInfo { AccountName = "MultiSeatSeat01", PortBase = 47984 };
+
+            builder.BuildConfig(seat, tempDir);
+
+            var statePath = Path.Combine(tempDir, "MultiSeatSeat01", "config", "sunshine_state.json");
+            Assert.True(File.Exists(statePath));
+
+            var seeded = File.ReadAllText(statePath);
+            var uuid = System.Text.Json.Nodes.JsonNode.Parse(seeded)!["root"]!["uniqueid"]!.GetValue<string>();
+            Assert.False(string.IsNullOrWhiteSpace(uuid));
+
+            // Stand in for Apollo pairing a client: rewrite the file the way it would.
+            File.WriteAllText(statePath, seeded.Replace(
+                "\"named_devices\": []",
+                "\"named_devices\": [{\"name\":\"living-room\",\"uuid\":\"KEEP-ME\"}]"));
+
+            builder.BuildConfig(seat, tempDir);   // re-provision
+
+            var after = File.ReadAllText(statePath);
+            Assert.Contains("KEEP-ME", after);
+            Assert.Contains(uuid, after);         // and the server identity did not change either
+        }
+        finally { DeleteTestDir(tempDir); }
+    }
+
+    [Fact]
+    public void ApolloConfigBuilder_StateFile_IsWhereTheConfigSaysItIs()
+    {
+        // file_state is an absolute path written into sunshine.conf. If it and the seeded file
+        // ever disagree, Apollo silently starts from the shared exe-dir default instead - a seat
+        // then has the wrong UUID and its pairings vanish, with nothing logged.
+        var tempDir = Path.Combine(Path.GetTempPath(), $"multiseat-test-{Guid.NewGuid():N}");
+        try
+        {
+            var builder = new ApolloConfigBuilder(
+                new TestLogger<ApolloConfigBuilder>(), Options.Create(new MultiSeatOptions()));
+            var seat = new SeatInfo { AccountName = "MultiSeatSeat01", PortBase = 47984 };
+
+            var content = File.ReadAllText(builder.BuildConfig(seat, tempDir));
+
+            var line = content.Split('\n').First(l => l.StartsWith("file_state = ", StringComparison.Ordinal));
+            var declared = line["file_state = ".Length..].Trim().Replace('/', Path.DirectorySeparatorChar);
+
+            Assert.True(File.Exists(declared), $"config points file_state at {declared}, which does not exist");
+        }
+        finally { DeleteTestDir(tempDir); }
+    }
+
+    [Fact]
+    public void ApolloConfigBuilder_UnresolvableAccount_StillProducesAConfig()
+    {
+        // The write grants resolve the seat account to a SID. On a host where that account has
+        // been deleted the grant cannot be made - it must warn and carry on, not throw, or a
+        // stale seat becomes unprovisionable rather than merely unable to save pairings.
+        var tempDir = Path.Combine(Path.GetTempPath(), $"multiseat-test-{Guid.NewGuid():N}");
+        try
+        {
+            var logger = new TestLogger<ApolloConfigBuilder>();
+            var builder = new ApolloConfigBuilder(logger, Options.Create(new MultiSeatOptions()));
+            var seat = new SeatInfo { AccountName = "NoSuchSeatAccount9137", PortBase = 47984 };
+
+            var configPath = builder.BuildConfig(seat, tempDir);
+
+            Assert.True(File.Exists(configPath));
+            Assert.True(File.Exists(Path.Combine(
+                tempDir, "NoSuchSeatAccount9137", "config", "sunshine_state.json")));
+        }
+        finally { DeleteTestDir(tempDir); }
+    }
+
     // ── Host-settable Apollo values (PR #21) ──────────────────────────
     //
     // MultiSeat:Encoder exists because Apollo's own fallback is not safe everywhere: on an AMD
