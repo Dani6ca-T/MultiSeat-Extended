@@ -53,9 +53,7 @@ public sealed class SessionHealthCheck
 
         foreach (var seat in seatManager.GetAllSeats())
         {
-            if (seat.Status is SeatStatus.Idle or SeatStatus.Provisioning
-                or SeatStatus.TearingDown or SeatStatus.Error)
-                continue;
+            if (!IsWorthChecking(seat.Status)) continue;
 
             var changed = await CheckSeatAsync(seat, ct);
             if (changed)
@@ -81,6 +79,23 @@ public sealed class SessionHealthCheck
     /// <summary>
     /// Check a single seat's health. Returns true if state changed.
     /// </summary>
+    /// <summary>
+    /// Which seats this check looks at.
+    ///
+    /// A seat mid-provision or mid-teardown is expected to be in flux, so watching it would fight
+    /// whatever is moving it. Error is skipped for a blunter reason: a seat parked there has no
+    /// live session to check.
+    ///
+    /// ⚠️ That last one has a consequence worth stating, because it caused a real bug (PR #22):
+    /// nothing here ever takes a seat OUT of Error, and the Apollo-restart check below only runs
+    /// for a seat this method admits. So a seat that lands in Error stays broken until something
+    /// outside this class hands it back - which is what POST /api/seats/{id}/session-reconnect now
+    /// does. Widening this set is not the fix; it would have the check fighting a teardown.
+    /// </summary>
+    internal static bool IsWorthChecking(SeatStatus status) =>
+        status is not (SeatStatus.Idle or SeatStatus.Provisioning
+                       or SeatStatus.TearingDown or SeatStatus.Error);
+
     private async Task<bool> CheckSeatAsync(SeatInfo seat, CancellationToken ct)
     {
         // ── Check 1: Is the Windows session still alive? ──────────

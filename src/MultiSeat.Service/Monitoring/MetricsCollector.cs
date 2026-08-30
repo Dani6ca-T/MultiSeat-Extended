@@ -278,7 +278,14 @@ public sealed class MetricsCollector : IDisposable
         return disks;
     }
 
-    private static HealthScore ComputeHealth(
+    /// <summary>
+    /// Turn raw utilisation into the number the dashboard shows.
+    ///
+    /// Internal so it can be asserted: a health score is a claim about the host, and every way of
+    /// being wrong here is quiet. Report Healthy while the box is thrashing and nobody looks;
+    /// report Critical on an idle host and the number stops being read at all.
+    /// </summary>
+    internal static HealthScore ComputeHealth(
         int cpuPct, int memPct, int gpuPct, int activeSeats, bool rdpActive)
     {
         var issues = new List<string>();
