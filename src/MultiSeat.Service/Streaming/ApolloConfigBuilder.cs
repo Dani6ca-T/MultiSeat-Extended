@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Security.AccessControl;
+using System.Security.Principal;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -74,7 +75,7 @@ public sealed class ApolloConfigBuilder
         // Only create if absent — pairings (stored in sunshine_state) survive re-provisioning.
         EnsureSeatConfigDir(seatDir);
         EnsureSeatStateFile(seatDir, seat.AccountName);
-        EnsureSeatAppsJson(seatDir);
+        EnsureSeatAppsJson(seatDir, seat.AccountName);
 
         var sb = new StringBuilder(2048);
 
@@ -171,7 +172,7 @@ public sealed class ApolloConfigBuilder
         // display — and hangs there. Apollo then never reaches the point where
         // it opens its HTTP servers, so the seat reports Ready with no port
         // listening. MultiSeat:Encoder lets such a host say what to use.
-        var encoder = string.IsNullOrWhiteSpace(_options.Encoder) ? "nvenc" : _options.Encoder.Trim();
+        var encoder = SanitizeConfigValue(_options.Encoder, "nvenc", "Encoder");
         sb.AppendLine($"# Encoder — {encoder} (MultiSeat:Encoder)");
         sb.AppendLine($"encoder = {encoder}");
         sb.AppendLine();
@@ -312,7 +313,7 @@ public sealed class ApolloConfigBuilder
 
         // ── Logging ───────────────────────────────────────────────────
         sb.AppendLine("# Logging");
-        var logLevel = string.IsNullOrWhiteSpace(_options.ApolloLogLevel) ? "info" : _options.ApolloLogLevel.Trim();
+        var logLevel = SanitizeConfigValue(_options.ApolloLogLevel, "info", "ApolloLogLevel");
         sb.AppendLine($"min_log_level = {logLevel}");
         sb.AppendLine($"log_path = {logPath}");
         sb.AppendLine();
@@ -425,7 +426,7 @@ public sealed class ApolloConfigBuilder
     /// The copy is not verbatim: per-app keys that only make sense for the console
     /// install are stripped on the way in — see <see cref="ConsoleOnlyAppKeys"/>.
     /// </summary>
-    private void EnsureSeatAppsJson(string seatDir)
+    private void EnsureSeatAppsJson(string seatDir, string accountName)
     {
         var dest = Path.Combine(seatDir, "config", "apps.json");
 
@@ -442,6 +443,16 @@ public sealed class ApolloConfigBuilder
             var stripped = StripConsoleOnlyAppKeys(json, out var removed);
 
             File.WriteAllText(dest, stripped, Encoding.UTF8);
+
+            // Same hazard as the state file: the service writes this, so the seat inherits
+            // read-and-execute and cannot save app edits made in Apollo's web UI. The write
+            // fails with nothing logged at either end.
+            //
+            // Note this file is deliberately overwritten on every provision so a seat picks up
+            // games added to the main install, so an edit made inside a seat survives only
+            // until the next provision. That is a separate design decision, and it is still
+            // better than the edit failing invisibly the moment it is made.
+            GrantSeatWrite(dest, accountName, AppsJsonConsequence);
 
             if (removed > 0)
                 _logger.LogInformation(
@@ -522,13 +533,21 @@ public sealed class ApolloConfigBuilder
     /// Apollo is pointed here via file_state = {seatDir}/config/sunshine_state.json in the config.
     /// Only creates the file if absent — preserves pairings on re-provision.
     /// </summary>
+    // What a failed grant actually costs, said at the call site rather than baked into the
+    // helper - the two files fail in completely different ways.
+    private const string StateFileConsequence =
+        "Apollo cannot remember the clients this seat pairs; pairing will appear to succeed and "
+        + "then be refused on the next request";
+    private const string AppsJsonConsequence =
+        "changes made to this seat's app list in Apollo's web UI will not save";
+
     private void EnsureSeatStateFile(string seatDir, string accountName)
     {
         var statePath = Path.Combine(seatDir, "config", "sunshine_state.json");
         if (File.Exists(statePath))
         {
             // Seats provisioned before this ran still carry the read-only ACL.
-            GrantSeatWrite(statePath, accountName);
+            GrantSeatWrite(statePath, accountName, StateFileConsequence);
             return;
         }
 
@@ -544,7 +563,7 @@ public sealed class ApolloConfigBuilder
             """;
 
         File.WriteAllText(statePath, json, Encoding.UTF8);
-        GrantSeatWrite(statePath, accountName);
+        GrantSeatWrite(statePath, accountName, StateFileConsequence);
         _logger.LogInformation("Created per-seat state file with UUID {Uuid}: {Path}", uuid, statePath);
     }
 
@@ -559,21 +578,57 @@ public sealed class ApolloConfigBuilder
     /// pairs successfully and then refuses that client's certificate on every
     /// call after, which is a hard failure to trace from either end.
     /// </summary>
-    private void GrantSeatWrite(string path, string accountName)
+    /// <summary>
+    /// Read a host-supplied value that is written verbatim into sunshine.conf.
+    ///
+    /// These land as "key = value" lines, so a value carrying a newline writes a SECOND Apollo
+    /// key that nobody chose. Only an administrator can set these today - nothing in the API
+    /// writes MultiSeatOptions and nothing rewrites appsettings at runtime - so this is not a
+    /// privilege boundary. It is here because a value pasted with a stray newline should fail
+    /// loudly and fall back, rather than quietly reconfigure Apollo.
+    /// </summary>
+    private string SanitizeConfigValue(string? value, string fallback, string key)
+    {
+        var trimmed = (value ?? string.Empty).Trim();
+        if (trimmed.Length == 0) return fallback;
+
+        if (trimmed.Any(c => char.IsControl(c)) || trimmed.Contains('='))
+        {
+            _logger.LogWarning(
+                "MultiSeat:{Key} contains a newline, control character or '=' and was ignored; "
+                + "using {Fallback}. A value written straight into sunshine.conf can otherwise "
+                + "inject Apollo keys nobody chose.",
+                key, fallback);
+            return fallback;
+        }
+
+        return trimmed;
+    }
+
+    private void GrantSeatWrite(string path, string accountName, string consequence)
     {
         try
         {
+            // Resolve to a SID, qualified with THIS machine, before touching the ACL. A bare
+            // account name goes through NTAccount, and on a domain-joined host "Gaming" can
+            // resolve to a DOMAIN account of the same name — handing a stranger Modify on a
+            // seat's file. Seat accounts are always local, so say so rather than let the
+            // resolver choose. Same shape as the group-SID fix in AccountManager (S4), where
+            // English literals silently failed on non-English Windows.
+            var sid = (SecurityIdentifier)new NTAccount(Environment.MachineName, accountName)
+                .Translate(typeof(SecurityIdentifier));
+
             var info = new FileInfo(path);
             var acl = info.GetAccessControl();
-            acl.AddAccessRule(new FileSystemAccessRule(accountName, FileSystemRights.Modify, AccessControlType.Allow));
+            acl.AddAccessRule(new FileSystemAccessRule(sid, FileSystemRights.Modify, AccessControlType.Allow));
             info.SetAccessControl(acl);
         }
         catch (Exception ex)
         {
             _logger.LogWarning(
                 ex,
-                "Could not grant {Account} write access to {Path} — Apollo will not be able to remember the clients this seat pairs",
-                accountName, path);
+                "Could not grant {Account} write access to {Path} — {Consequence}",
+                accountName, path, consequence);
         }
     }
 
@@ -583,6 +638,14 @@ public sealed class ApolloConfigBuilder
     /// so the user doesn't have to set up credentials again from scratch.
     /// Apollo reads this file lazily on each web-UI/pairing request.
     /// </summary>
+    /// <remarks>
+    /// ⚠️ This file is deliberately NOT granted to seat accounts, unlike the per-seat state and
+    /// apps files. It carries the web UI login shared by every seat, so granting one seat Modify
+    /// would let that seat change the credentials for all of them — a standard user on one seat
+    /// silently locking the others out. The cost of leaving it read-only is that changing the web
+    /// UI password from inside a seat does not persist; do it as an administrator instead.
+    /// Recorded in docs/security-posture.md so the trade-off is findable rather than folklore.
+    /// </remarks>
     private void EnsureSharedCredentials(string configDir)
     {
         var sharedCred = Path.Combine(configDir, "shared_credentials.json");

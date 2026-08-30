@@ -169,6 +169,8 @@ Edit `appsettings.json` in `C:\Program Files\MultiSeat\` (restart the service af
 | `PortBase` | `48100` | First Apollo HTTPS port (above a stock Apollo's block, so MultiSeat coexists with a standalone Apollo) |
 | `ApolloExePath` | `C:\Program Files\ApolloVibe\sunshine.exe` | Path to MultiSeat's own Apollo (separate from any standalone `C:\Program Files\Apollo`) |
 | `ApolloConfigDir` | `C:\ProgramData\MultiSeat\apollo` | Per-seat config directory |
+| `Encoder` | `nvenc` | Apollo encoder for every seat. **AMD hosts must set this** (`amdvce` or `software`): Apollo's own fallback lands on AMF, whose startup probe runs against the seat's RDP surface and hangs *before* any port opens — the seat reports `Ready` with nothing listening. Values: `nvenc`, `quicksync`, `amdvce`, `software`. |
+| `ApolloLogLevel` | `info` | Apollo's own log level per seat. `debug` is the only way to see why a seat refuses a pairing or a client. Values: `verbose`, `debug`, `info`, `warning`, `error`. |
 | `ApiPort` | `9550` | Dashboard port |
 | `ApiKey` | *(auto-generated)* | API key required to access the dashboard. Auto-generated on first start and saved to `C:\ProgramData\MultiSeat\api-key.txt`. Set a fixed value here to override. Set to `disabled` to turn off authentication entirely (only safe on a fully trusted private network). |
 | `VacCableCount` | `4` | Number of installed VB-CABLE devices |

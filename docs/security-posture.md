@@ -131,6 +131,54 @@ provisioning that nobody is there to dismiss — which usually shows up as a sea
 - The RDP credential used during provisioning is written through the credential API, not by passing
   the password on `cmdkey`'s command line.
 
+## What a seat account can write, and what it deliberately cannot
+
+A seat runs as a standard user, so it only gets read-and-execute on files **the service** created
+under `ProgramData`. Windows grants it more than that on its own creations - the inherited ACL lets
+a user create files and makes them the owner - so the split is: files Apollo makes for itself are
+fine, files MultiSeat makes for Apollo are not.
+
+That distinction was invisible for a fortnight. Making seats standard users (S4, `949eeb0`) meant a
+seat could no longer write `sunshine_state.json`, which Apollo rewrites on every pairing. The write
+failed silently, the reload restored the old contents, and every client a seat paired was forgotten
+the moment it reconnected - reported from the field in PR #21, not caught here.
+
+| file | who writes it | seat access |
+|---|---|---|
+| `<seat>/config/sunshine_state.json` | service creates, Apollo rewrites on every pairing | **Modify, granted explicitly** |
+| `<seat>/config/apps.json` | service seeds, Apollo rewrites from its web UI | **Modify, granted explicitly** |
+| `<seat>/config/credentials/*.pem` | Apollo creates them itself | writable as creator-owner, no grant needed |
+| `shared_credentials.json` | service seeds; Apollo would rewrite it | **read-only, deliberately - see below** |
+
+Each grant is a single explicit ACE for that seat's account SID on that one file. Inheritance is left
+alone and nothing is removed. The account is resolved **machine-qualified** to a SID before the ACE
+is written, so a domain account that happens to share a seat's name cannot be granted instead.
+
+### Why the shared credentials file stays read-only
+
+`shared_credentials.json` holds the Apollo web UI login shared by **every** seat. Granting one seat
+write would let a standard user on that seat change the credentials for all the others, so it is left
+read-only on purpose. The cost is that changing the web UI password from inside a seat does not
+persist; do it as an administrator. This is a trade-off, not an oversight.
+
+### WARNING: a seat's TLS private key is readable by every local user
+
+`<seat>/config/credentials/cakey.pem` is created by Apollo under `ProgramData`, where the inherited
+ACL grants `BUILTIN\Users` read. Any standard user on the host - including another seat - can read it
+and impersonate that seat's HTTPS/pairing endpoint.
+
+This is **not** new: before the key moved per-seat it lived in the Apollo install directory, equally
+readable and shared by every seat, so the per-seat split shrinks the blast radius rather than widening
+it. It is recorded here because it is the same class of exposure the secrets above were locked down
+for, and it has not been fixed:
+
+```powershell
+icacls "C:\ProgramData\MultiSeat\apollo\<seat>\config\credentials\cakey.pem"
+```
+
+The fix would be an explicit DACL on the per-seat `credentials` directory (SYSTEM + Administrators +
+that seat), matching what `accounts.json` and `api-key.txt` already carry.
+
 ## What is *not* protected
 
 Stated so nobody has to discover it:

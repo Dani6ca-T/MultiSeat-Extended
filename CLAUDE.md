@@ -86,6 +86,25 @@ Reflects fixes shipped 2026-07-24 (GitHub issues #11 / #10 / #9a):
 - **Seat audio does not hijack the host default.** The seat's virtual audio device is written as Apollo's `virtual_sink` (not `audio_sink`) with `keep_sink_default = disabled` + `auto_capture_sink = disabled`, and MultiSeat no longer runs `--set-default-render`. Windows has a **single machine-wide default output** shared by the console + all seats; Apollo still points the game at the sink during an active stream and restores the previous default afterward, without re-asserting it. Keep the client's "Play audio on host PC" **off** so `virtual_sink` is used. Not full isolation — an active seat still suspends the console's playback and leaks onto its speakers (#12). **Real isolation is `AudioMode = PerSession`** (see "Audio: two modes" above); it arrived via RDP per-session endpoints, not the per-app routing (`IAudioPolicyConfigFactory::SetPersistedDefaultAudioEndpoint`) this note used to predict.
 - **Controller forwarding is native by default.** `EnableViGEmController` defaults **off** — Apollo forwards the Moonlight client's controller into the seat itself and MultiSeat creates no ViGEm pad. The dashboard shows the seat's Controller service as **"Native"** (not a down light) and the Input tab notes that XInput→seat assignment only applies when `EnableViGEmController` is on. `SeatServices.ControllerManaged` + `GET /api/input/mode` surface the mode.
 
+## Per-seat file permissions — a seat cannot write what the SERVICE created
+
+A seat is a standard user (S4). Under `ProgramData` the inherited ACL lets it **create** files and
+makes it their owner, but gives it only read-and-execute on files **MultiSeat** created. So:
+
+- **Apollo's own creations are fine** — `config/credentials/cakey.pem` and friends. This is why
+  `pkey`/`cert` point at the seat's dir rather than Program Files, which a seat cannot write at all.
+- **Files MultiSeat seeds need an explicit grant.** `sunshine_state.json` (rewritten on **every
+  pairing**) and `apps.json` get one ACE for that seat's SID, machine-qualified so a domain account
+  of the same name can't be hit instead.
+- ⛔ **`shared_credentials.json` is deliberately NOT granted** — it is the web UI login shared by
+  every seat, so one seat writing it changes the login for all of them.
+
+⚠️ **This bit us for a fortnight and nothing logged it.** Making seats standard users meant Apollo
+could not write `sunshine_state.json`; its save failed silently, the reload restored the old file,
+and every client a seat paired was forgotten on reconnect. Found in the field (PR #21), not here.
+The failure shape to remember: **pairing succeeds, then the next request from the same client is
+refused.** Details and the still-open TLS-key exposure: `docs/security-posture.md`.
+
 ## Security posture — `docs/security-posture.md`
 
 Read it before changing anything about accounts, the API, or the install scripts. It records what

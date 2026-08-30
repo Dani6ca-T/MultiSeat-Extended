@@ -225,6 +225,151 @@ public class StreamingTests
         }
     }
 
+    // ── Host-settable Apollo values (PR #21) ──────────────────────────
+    //
+    // MultiSeat:Encoder exists because Apollo's own fallback is not safe everywhere: on an AMD
+    // host it lands on AMF, whose startup probe runs against the seat's RDP surface (1000 Hz, no
+    // real display) and hangs there BEFORE Apollo opens any port. The seat then reports Ready with
+    // nothing listening. MultiSeat:ApolloLogLevel exists because a seat's Apollo log is the only
+    // window into a session nobody can watch.
+    //
+    // Both are written verbatim into sunshine.conf, so these also pin the sanitising.
+
+    [Theory]
+    [InlineData("amdvce")]
+    [InlineData("software")]
+    [InlineData("quicksync")]
+    public void ApolloConfigBuilder_EncoderFollowsTheOption(string encoder)
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), $"multiseat-test-{Guid.NewGuid():N}");
+        try
+        {
+            var options = new MultiSeatOptions { Encoder = encoder };
+            var builder = new ApolloConfigBuilder(new TestLogger<ApolloConfigBuilder>(), Options.Create(options));
+            var seat = new SeatInfo { AccountName = "MultiSeatSeat01", PortBase = 47984 };
+
+            var content = File.ReadAllText(builder.BuildConfig(seat, tempDir));
+
+            Assert.Contains($"encoder = {encoder}", content);
+            Assert.DoesNotContain("encoder = nvenc", content);
+        }
+        finally { DeleteTestDir(tempDir); }
+    }
+
+    [Fact]
+    public void ApolloConfigBuilder_EncoderDefaultsToNvenc_WhenUnsetOrBlank()
+    {
+        // The default has to survive an empty string as well as an unset property: an operator
+        // clearing the value in appsettings must not produce "encoder = ", which Apollo reads as
+        // an empty encoder rather than as "use the default".
+        foreach (var value in new[] { null, "", "   " })
+        {
+            var tempDir = Path.Combine(Path.GetTempPath(), $"multiseat-test-{Guid.NewGuid():N}");
+            try
+            {
+                var options = new MultiSeatOptions { Encoder = value! };
+                var builder = new ApolloConfigBuilder(new TestLogger<ApolloConfigBuilder>(), Options.Create(options));
+                var seat = new SeatInfo { AccountName = "MultiSeatSeat01", PortBase = 47984 };
+
+                var content = File.ReadAllText(builder.BuildConfig(seat, tempDir));
+
+                Assert.Contains("encoder = nvenc", content);
+            }
+            finally { DeleteTestDir(tempDir); }
+        }
+    }
+
+    [Fact]
+    public void ApolloConfigBuilder_LogLevelFollowsTheOption_AndDefaultsToInfo()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), $"multiseat-test-{Guid.NewGuid():N}");
+        try
+        {
+            var options = new MultiSeatOptions { ApolloLogLevel = "debug" };
+            var builder = new ApolloConfigBuilder(new TestLogger<ApolloConfigBuilder>(), Options.Create(options));
+            var seat = new SeatInfo { AccountName = "MultiSeatSeat01", PortBase = 47984 };
+
+            var content = File.ReadAllText(builder.BuildConfig(seat, tempDir));
+
+            Assert.Contains("min_log_level = debug", content);
+            Assert.DoesNotContain("min_log_level = info", content);
+        }
+        finally { DeleteTestDir(tempDir); }
+
+        var tempDir2 = Path.Combine(Path.GetTempPath(), $"multiseat-test-{Guid.NewGuid():N}");
+        try
+        {
+            var builder = new ApolloConfigBuilder(
+                new TestLogger<ApolloConfigBuilder>(), Options.Create(new MultiSeatOptions()));
+            var seat = new SeatInfo { AccountName = "MultiSeatSeat01", PortBase = 47984 };
+
+            Assert.Contains("min_log_level = info", File.ReadAllText(builder.BuildConfig(seat, tempDir2)));
+        }
+        finally { DeleteTestDir(tempDir2); }
+    }
+
+    [Theory]
+    [InlineData("nvenc\nsunshine_name = evil")]   // newline injects a second key
+    [InlineData("nvenc\r\nport = 47999")]         // CRLF does the same
+    [InlineData("nvenc = x")]                     // a bare '=' splits the line
+    public void ApolloConfigBuilder_RejectsValuesThatWouldInjectAnotherKey(string hostile)
+    {
+        // sunshine.conf is "key = value" lines, so a value carrying a newline writes a SECOND
+        // Apollo key nobody chose. Only an administrator can set this today, so it is not a
+        // privilege boundary - it is here so a value pasted with a stray newline falls back
+        // loudly instead of quietly reconfiguring Apollo.
+        var tempDir = Path.Combine(Path.GetTempPath(), $"multiseat-test-{Guid.NewGuid():N}");
+        try
+        {
+            var options = new MultiSeatOptions { Encoder = hostile };
+            var builder = new ApolloConfigBuilder(new TestLogger<ApolloConfigBuilder>(), Options.Create(options));
+            var seat = new SeatInfo { AccountName = "MultiSeatSeat01", PortBase = 47984 };
+
+            var content = File.ReadAllText(builder.BuildConfig(seat, tempDir));
+
+            // Assert the WHOLE line, not a prefix: "encoder = nvenc = x" contains
+            // "encoder = nvenc" and would pass a Contains check while still carrying the
+            // injected text. That weaker assertion let the bare-'=' case through.
+            Assert.Single(
+                content.Split('\n').Select(l => l.TrimEnd('\r')),
+                l => l == "encoder = nvenc");
+            Assert.DoesNotContain("evil", content);
+            Assert.DoesNotContain("port = 47999", content);
+            // The seat's real port line must still be the only one.
+            Assert.Single(
+                content.Split('\n'),
+                l => l.TrimStart().StartsWith("port = ", StringComparison.Ordinal));
+        }
+        finally { DeleteTestDir(tempDir); }
+    }
+
+    [Fact]
+    public void ApolloConfigBuilder_TlsMaterialLivesUnderTheSeatDir_NotProgramFiles()
+    {
+        // Apollo generates cakey.pem itself at startup. Left at its default it writes into
+        // {exe_dir}/config/credentials under Program Files, which a standard-user seat cannot
+        // write - Apollo dies on "HTTP interface failed to initialize" and never opens a port.
+        // The seat's own config dir works because ProgramData lets a user CREATE files and makes
+        // the creator their owner; it is only files the SERVICE created that a seat cannot write.
+        var tempDir = Path.Combine(Path.GetTempPath(), $"multiseat-test-{Guid.NewGuid():N}");
+        try
+        {
+            var builder = new ApolloConfigBuilder(
+                new TestLogger<ApolloConfigBuilder>(), Options.Create(new MultiSeatOptions()));
+            var seat = new SeatInfo { AccountName = "MultiSeatSeat01", PortBase = 47984 };
+
+            var content = File.ReadAllText(builder.BuildConfig(seat, tempDir));
+
+            var seatCredDir = Path.Combine(tempDir, "MultiSeatSeat01", "config", "credentials")
+                .Replace('\\', '/');
+            Assert.Contains($"pkey = {seatCredDir}/cakey.pem", content);
+            Assert.Contains($"cert = {seatCredDir}/cacert.pem", content);
+            Assert.DoesNotContain("Program Files", content.Split('\n')
+                .First(l => l.StartsWith("pkey = ", StringComparison.Ordinal)));
+        }
+        finally { DeleteTestDir(tempDir); }
+    }
+
     // The default flipped to PerSession on 2026-08-19: SharedHost wedges the host's audio endpoint
     // stack on every seat provision (nodes collapse 27 -> 1, measured), which is a worse default
     // than losing the mic path. This asserts the flip in both places it has to hold — the C# default
