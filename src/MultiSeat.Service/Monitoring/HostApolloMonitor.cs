@@ -110,7 +110,7 @@ public sealed partial class HostApolloMonitor
         return null;
     }
 
-    private static bool IsMultiSeatManaged(
+    internal static bool IsMultiSeatManaged(
         string? exePath, string? cmdLine, string? managedExeDir, string? managedConfigDir)
     {
         if (!string.IsNullOrEmpty(exePath) && !string.IsNullOrEmpty(managedExeDir)

@@ -6,11 +6,16 @@ using Xunit;
 namespace MultiSeat.Tests.Sessions;
 
 /// <summary>
-/// Tests for session management logic that can run without SYSTEM privileges.
-/// Full integration tests (actual session creation) require running as SYSTEM
-/// with RDP Wrapper active — those are marked with [Trait("Category", "Integration")].
+/// Token handles, interop struct layouts and seat state transitions - the parts of the session
+/// path that run without SYSTEM privileges.
+///
+/// Renamed from SessionLauncherTests, which is what it was called while containing no test of
+/// SessionLauncher at all. A file named for the thing it does not cover is worse than no file:
+/// it answers "is this tested?" with a yes. SessionLauncher's own guards are covered in
+/// SessionGuardTests; the rest of it is P/Invoke against a live session and is exercised only
+/// by the [Skip]-gated integration tests.
 /// </summary>
-public class SessionLauncherTests
+public class SessionInteropTests
 {
     [Fact]
     public void SafeTokenHandle_InvalidHandle_IsInvalid()

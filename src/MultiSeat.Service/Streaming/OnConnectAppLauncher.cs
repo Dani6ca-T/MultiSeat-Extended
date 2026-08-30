@@ -34,7 +34,8 @@ public sealed class OnConnectAppLauncher
 
     // Longest marker we scan for; we retain this-many-minus-one chars between reads so a
     // marker straddling a tick boundary is reassembled on the next read and still detected.
-    private static readonly int MaxMarkerLen =
+    // internal so tests can compute split points from the real value instead of hardcoding it.
+    internal static readonly int MaxMarkerLen =
         Math.Max(ConnectedMarker.Length, DisconnectedMarker.Length);
 
     private readonly ILogger<OnConnectAppLauncher> _logger;
@@ -202,7 +203,7 @@ public sealed class OnConnectAppLauncher
     /// connect/disconnect events: start reading at end-of-file, and infer the current
     /// connected state from the last marker already present in the file.
     /// </summary>
-    private SeatConnState SeedState(string logPath)
+    internal static SeatConnState SeedState(string logPath)
     {
         var state = new SeatConnState { LogPath = logPath };
         try
@@ -220,7 +221,7 @@ public sealed class OnConnectAppLauncher
     /// Read log bytes appended since the last tick and return the seat's connected
     /// state if a connect/disconnect line appeared, otherwise null (no change to report).
     /// </summary>
-    private bool? ReadLatestState(string logPath, SeatConnState state)
+    internal static bool? ReadLatestState(string logPath, SeatConnState state)
     {
         try
         {
@@ -251,7 +252,7 @@ public sealed class OnConnectAppLauncher
     /// True if the last connect/disconnect marker in <paramref name="text"/> is a
     /// connect, false if a disconnect, null if neither marker is present.
     /// </summary>
-    private static bool? LastMarkerIsConnected(string text)
+    internal static bool? LastMarkerIsConnected(string text)
     {
         var c = text.LastIndexOf(ConnectedMarker, StringComparison.Ordinal);
         var d = text.LastIndexOf(DisconnectedMarker, StringComparison.Ordinal);
@@ -279,7 +280,7 @@ public sealed class OnConnectAppLauncher
         return false;
     }
 
-    private sealed class SeatConnState
+    internal sealed class SeatConnState
     {
         public readonly object Gate = new();
         public long Offset;
