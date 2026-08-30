@@ -90,6 +90,28 @@ public sealed class HidHideCli
         string.Join(" ", commands.Where(c => !string.IsNullOrWhiteSpace(c)));
 
     /// <summary>
+    /// Whether a result is worth one retry: the busy control device and a timeout are transient,
+    /// and a READ that came back without answering is the trap this class exists for - an empty
+    /// transcript is indistinguishable from an empty configuration, so it must be treated as a
+    /// failed read rather than as "nothing is configured".
+    ///
+    /// A WRITE is deliberately not retried for lack of an answer. Writes are not asked for the
+    /// cloak state, so they never have one, and retrying every write would double every pass.
+    /// </summary>
+    internal static bool WorthRetrying(HidHideCliResult result, bool isRead) =>
+        result.AccessDenied || result.TimedOut || (isRead && !result.Answered);
+
+    /// <summary>
+    /// The driver's control device takes one caller at a time and refuses the second with
+    /// <c>Error code 0x0005 ... Access denied</c> - AND EXIT CODE 0, so nothing else in the result
+    /// says anything went wrong. Parsing that transcript as an answer is exactly how a monitor
+    /// concludes the configuration is empty and "restores" over a user's own entries.
+    /// </summary>
+    internal static bool LooksAccessDenied(string output) =>
+        output.Contains("0x0005", StringComparison.OrdinalIgnoreCase) ||
+        output.Contains("Access denied", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>
     /// Run a write. Retries once when the driver's control device was busy.
     /// </summary>
     public HidHideCliResult Write(string arguments) => RunWithRetry(arguments, isRead: false);
@@ -100,16 +122,22 @@ public sealed class HidHideCli
     /// save over the configuration it was asked to report on.
     /// </summary>
     public HidHideCliResult Read(string arguments) =>
-        RunWithRetry(Sequence("--cloak-state", arguments, "--cancel"), isRead: true);
+        RunWithRetry(ReadArguments(arguments), isRead: true);
+
+    /// <summary>
+    /// Shape a read: <c>--cloak-state</c> first so the result can tell a genuine empty
+    /// configuration from a failed read, and <c>--cancel</c> LAST so the listing does not save
+    /// over the configuration it was asked to report on. Order is not cosmetic - the cancel has to
+    /// come after the thing it is cancelling.
+    /// </summary>
+    internal static string ReadArguments(string arguments) =>
+        Sequence("--cloak-state", arguments, "--cancel");
 
     private HidHideCliResult RunWithRetry(string arguments, bool isRead)
     {
         var result = Run(arguments);
 
-        // Retry once on the two failures that are known to be transient and silent: the busy
-        // control device, and a read that came back without answering.
-        var worthRetrying = result.AccessDenied || result.TimedOut || (isRead && !result.Answered);
-        if (!worthRetrying) return result;
+        if (!WorthRetrying(result, isRead)) return result;
 
         _logger.LogWarning(
             "HidHide CLI did not answer ({Reason}) for: {Args} — retrying once after {Gap} ms",
@@ -187,8 +215,7 @@ public sealed class HidHideCli
         // "Error code 0x0005 ... Access denied" with exit 0: the control device was busy and the
         // invocation did nothing. Parsing that as an answer is how a monitor concludes the
         // configuration is empty.
-        var denied = output.Contains("0x0005", StringComparison.OrdinalIgnoreCase) ||
-                     output.Contains("Access denied", StringComparison.OrdinalIgnoreCase);
+        var denied = LooksAccessDenied(output);
 
         if (denied)
         {
