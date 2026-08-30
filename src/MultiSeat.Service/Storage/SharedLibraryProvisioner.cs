@@ -64,12 +64,23 @@ public sealed class SharedLibraryProvisioner
         }
     }
 
+    /// <summary>
+    /// The icacls arguments for the grant, separated out so they can be asserted.
+    ///
+    /// Three things here are load-bearing and none of them announce themselves when wrong:
+    /// the SID form rather than the group name (a localized Windows has no "Users" group to
+    /// resolve), the (OI)(CI) inheritance (without it seats can enter the folder but not the
+    /// game directories inside it), and the quoting (the default path has no space, but
+    /// SharedGameLibraryDir is user-settable and one space would truncate the command).
+    /// </summary>
+    internal static string IcaclsArguments(string dir) =>
+        $"\"{dir}\" /grant \"{UsersSid}:(OI)(CI)M\" /T /C /Q";
+
     private async Task GrantUsersModifyAsync(string dir, CancellationToken ct)
     {
         try
         {
-            var psi = new ProcessStartInfo("icacls",
-                $"\"{dir}\" /grant \"{UsersSid}:(OI)(CI)M\" /T /C /Q")
+            var psi = new ProcessStartInfo("icacls", IcaclsArguments(dir))
             {
                 CreateNoWindow = true,
                 UseShellExecute = false,
