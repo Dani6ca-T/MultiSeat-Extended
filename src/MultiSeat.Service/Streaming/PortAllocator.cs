@@ -42,8 +42,11 @@ public sealed class PortAllocator
         }
     }
 
-    public int GetHttpsPort(int portBase) => portBase + Constants.OffsetHttps;
-    public int GetHttpPort(int portBase) => portBase + Constants.OffsetHttp;
+    // Named for what they are. The previous names were inherited from the aliases in Constants
+    // and were inverted: "GetHttpsPort" returned the GFE HTTP port and "GetHttpPort" returned the
+    // web UI, which is HTTPS.
+    public int GetGfeHttpPort(int portBase) => portBase + Constants.OffsetGfeHttp;
+    public int GetWebUiPort(int portBase) => portBase + Constants.OffsetWebUi;
     public int GetVideoPort(int portBase) => portBase + Constants.OffsetVideo;
     public int GetAudioPort(int portBase) => portBase + Constants.OffsetAudio;
     public int GetControlPort(int portBase) => portBase + Constants.OffsetControl;

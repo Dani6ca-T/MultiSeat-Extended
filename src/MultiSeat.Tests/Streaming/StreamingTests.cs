@@ -36,8 +36,8 @@ public class StreamingTests
         var alloc = new PortAllocator();
         var portBase = alloc.Allocate();
 
-        Assert.Equal(portBase + Constants.OffsetHttps, alloc.GetHttpsPort(portBase));
-        Assert.Equal(portBase + Constants.OffsetHttp, alloc.GetHttpPort(portBase));
+        Assert.Equal(portBase + Constants.OffsetGfeHttp, alloc.GetGfeHttpPort(portBase));
+        Assert.Equal(portBase + Constants.OffsetWebUi, alloc.GetWebUiPort(portBase));
         Assert.Equal(portBase + Constants.OffsetVideo, alloc.GetVideoPort(portBase));
         Assert.Equal(portBase + Constants.OffsetAudio, alloc.GetAudioPort(portBase));
         Assert.Equal(portBase + Constants.OffsetControl, alloc.GetControlPort(portBase));
@@ -152,7 +152,8 @@ public class StreamingTests
 
             // Verify required configuration keys
             Assert.Contains("sunshine_name = MultiSeat-MultiSeatSeat01", content);
-            Assert.Contains($"port = {47984 + Constants.OffsetHttps}", content);
+            // sunshine.conf's "port" key IS the GFE HTTP port; everything else is derived from it.
+            Assert.Contains($"port = {47984 + Constants.OffsetGfeHttp}", content);
             Assert.Contains("resolutions = [1920x1080]", content);
             Assert.Contains("fps = [30, 60]", content);
             // Display-device auto-config so Apollo matches the client's requested mode (issue #11).
@@ -734,9 +735,10 @@ public class StreamingTests
         Assert.Equal(12, Constants.OffsetMic);
         Assert.Equal(26, Constants.OffsetRtsp);
 
-        // Legacy aliases
-        Assert.Equal(Constants.OffsetGfeHttp, Constants.OffsetHttps);
-        Assert.Equal(Constants.OffsetWebUi,   Constants.OffsetHttp);
+        // The OffsetHttps / OffsetHttp aliases that used to be asserted here are gone. Both were
+        // inverted - OffsetHttps was the GFE HTTP port and OffsetHttp was the HTTPS web UI - so
+        // the pair of assertions amounted to "the misleading name still means what it always
+        // meant", which is not a property worth protecting.
     }
 
     [Fact]

@@ -46,10 +46,10 @@ public static class Constants
     // each seat gets a unique, collision-free netplay port (seat 0 = 48113, seat 1 = 48143, …).
     public const int OffsetRetroArchNetplay = 13;  // RetroArch netplay host port (TCP)
 
-    // Legacy aliases kept for the ApolloConfigBuilder "port =" line (value is OffsetGfeHttp = 0)
-    // and for FirewallManager until those callers are updated.
-    public const int OffsetHttps = OffsetGfeHttp;   // = 0; "port =" key in sunshine.conf
-    public const int OffsetHttp  = OffsetWebUi;     // = 1; web UI port
+    // There were two aliases here, OffsetHttps and OffsetHttp, and both said the opposite of what
+    // they pointed at: OffsetHttps was the GFE *HTTP* port (0) and OffsetHttp was the web UI, which
+    // is *HTTPS* (1). Removed rather than corrected - an alias whose only job is to be a second
+    // name for a value is not worth the chance of reading it at 2am and believing it.
 
     // ── Default paths ────────────────────────────────────────────────
     // MultiSeat installs and manages its OWN Apollo (ApolloVibe) in a dedicated

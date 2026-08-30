@@ -409,7 +409,7 @@ public sealed class SeatManager
             await BroadcastState(seat);
             _logger.LogInformation(
                 "Seat {Id}: READY for Moonlight connection on port {P}",
-                seat.Id, seat.PortBase + Shared.Constants.OffsetHttps);
+                seat.Id, seat.PortBase + Shared.Constants.OffsetGfeHttp);
 
             return seat;
         }
