@@ -73,7 +73,7 @@ public sealed class ApolloConfigBuilder
         // the per-seat config/ dir and write an explicit file_state = <absolute_path> in the
         // generated sunshine.conf so Apollo uses that path instead of the shared exe-dir default.
         // Only create if absent — pairings (stored in sunshine_state) survive re-provisioning.
-        EnsureSeatConfigDir(seatDir);
+        EnsureSeatConfigDir(seatDir, seat.AccountName);
         EnsureSeatStateFile(seatDir, seat.AccountName);
         EnsureSeatAppsJson(seatDir, seat.AccountName);
 
@@ -377,12 +377,18 @@ public sealed class ApolloConfigBuilder
     /// (create files), not Modify (create subdirectories), on ProgramData dirs.
     /// Pre-creating these dirs as SYSTEM avoids Apollo exiting on credentials mkdir failure.
     /// </summary>
-    private void EnsureSeatConfigDir(string seatDir)
+    private void EnsureSeatConfigDir(string seatDir, string accountName)
     {
         var configDir = Path.Combine(seatDir, "config");
         var credDir = Path.Combine(configDir, "credentials");
         Directory.CreateDirectory(configDir);
         Directory.CreateDirectory(credDir);
+
+        // Lock the credentials dir before anything is seeded into it. Left inheriting, it
+        // carries ProgramData's BUILTIN\Users:(RX), so every standard user on the host -
+        // including every OTHER seat - can read the TLS private key and impersonate this
+        // seat's pairing endpoint.
+        ProtectSeatCredentialsDir(credDir, accountName);
 
         // Apollo uses relative paths for its assets and tools directories
         // (e.g. ./assets/shaders/ for GPU shaders). Create junction points so
@@ -587,6 +593,79 @@ public sealed class ApolloConfigBuilder
     /// privilege boundary. It is here because a value pasted with a stray newline should fail
     /// loudly and fall back, rather than quietly reconfigure Apollo.
     /// </summary>
+    /// <summary>
+    /// The DACL a seat's credentials directory should carry: SYSTEM and Administrators in full,
+    /// the seat itself able to write, and nobody else - no inheritance, so ProgramData's
+    /// BUILTIN\Users:(RX) does not reach the private key.
+    ///
+    /// Separate from the applying code so the shape can be asserted without a real seat account.
+    /// </summary>
+    internal static DirectorySecurity BuildSeatCredentialsAcl(SecurityIdentifier seatSid)
+    {
+        var acl = new DirectorySecurity();
+
+        // Drop inheritance entirely rather than preserving what was inherited: preserving it is
+        // what leaves the Users entry in place, which is the whole problem.
+        acl.SetAccessRuleProtection(isProtected: true, preserveInheritance: false);
+
+        const InheritanceFlags Inherit = InheritanceFlags.ObjectInherit | InheritanceFlags.ContainerInherit;
+
+        acl.AddAccessRule(new FileSystemAccessRule(
+            new SecurityIdentifier(WellKnownSidType.LocalSystemSid, null),
+            FileSystemRights.FullControl, Inherit, PropagationFlags.None, AccessControlType.Allow));
+        acl.AddAccessRule(new FileSystemAccessRule(
+            new SecurityIdentifier(WellKnownSidType.BuiltinAdministratorsSid, null),
+            FileSystemRights.FullControl, Inherit, PropagationFlags.None, AccessControlType.Allow));
+        // Modify, not FullControl: the seat must read, rewrite and create files here, but has no
+        // reason to be able to rewrite the ACL itself.
+        acl.AddAccessRule(new FileSystemAccessRule(
+            seatSid, FileSystemRights.Modify, Inherit, PropagationFlags.None, AccessControlType.Allow));
+
+        return acl;
+    }
+
+    /// <summary>
+    /// Apply that DACL. Existing files inside pick it up because Windows recalculates inherited
+    /// entries on children when a parent's inheritable entries change.
+    ///
+    /// If the seat account cannot be resolved this does NOTHING and says so. Protecting the
+    /// directory without granting the seat would leave Apollo unable to read or write its own key,
+    /// which breaks the seat outright - a worse outcome than the exposure this closes, and that
+    /// exposure is the state the host was already in.
+    /// </summary>
+    private void ProtectSeatCredentialsDir(string credDir, string accountName)
+    {
+        SecurityIdentifier sid;
+        try
+        {
+            sid = (SecurityIdentifier)new NTAccount(Environment.MachineName, accountName)
+                .Translate(typeof(SecurityIdentifier));
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(
+                ex,
+                "Could not resolve {Account} to a SID, so {Dir} keeps its inherited permissions - "
+                + "its TLS private key stays readable by every local user",
+                accountName, credDir);
+            return;
+        }
+
+        try
+        {
+            new DirectoryInfo(credDir).SetAccessControl(BuildSeatCredentialsAcl(sid));
+            _logger.LogInformation(
+                "Restricted {Dir} to SYSTEM, Administrators and {Account}", credDir, accountName);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(
+                ex,
+                "Could not restrict {Dir} - its TLS private key stays readable by every local user",
+                credDir);
+        }
+    }
+
     private string SanitizeConfigValue(string? value, string fallback, string key)
     {
         var trimmed = (value ?? string.Empty).Trim();

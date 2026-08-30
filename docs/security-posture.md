@@ -161,23 +161,40 @@ write would let a standard user on that seat change the credentials for all the 
 read-only on purpose. The cost is that changing the web UI password from inside a seat does not
 persist; do it as an administrator. This is a trade-off, not an oversight.
 
-### WARNING: a seat's TLS private key is readable by every local user
+### The seat credentials directory is locked down - but the key it holds is shared
 
-`<seat>/config/credentials/cakey.pem` is created by Apollo under `ProgramData`, where the inherited
-ACL grants `BUILTIN\Users` read. Any standard user on the host - including another seat - can read it
-and impersonate that seat's HTTPS/pairing endpoint.
+`<seat>/config/credentials/` is given an explicit DACL when the seat is provisioned: SYSTEM and
+Administrators in full, that seat's account Modify, inheritance switched off, nothing else. Without
+it the directory inherits ProgramData's `BUILTIN\Users:(RX)` and every standard user on the host -
+including every other seat - can read the TLS private key.
 
-This is **not** new: before the key moved per-seat it lived in the Apollo install directory, equally
-readable and shared by every seat, so the per-seat split shrinks the blast radius rather than widening
-it. It is recorded here because it is the same class of exposure the secrets above were locked down
-for, and it has not been fixed:
+    before   NT AUTHORITY\SYSTEM:(I)(F)  BUILTIN\Administrators:(I)(F)  BUILTIN\Users:(I)(RX)
+    after    NT AUTHORITY\SYSTEM:(F)     BUILTIN\Administrators:(F)     <HOST>\<seat>:(M)
 
-```powershell
-icacls "C:\ProgramData\MultiSeat\apollo\<seat>\config\credentials\cakey.pem"
-```
+Seats provisioned before this shipped are fixed on their next provision. A seat whose account no
+longer resolves is deliberately left alone: protecting the directory without granting the seat would
+lock Apollo out of its own key and break the seat, which is worse than the exposure it closes.
 
-The fix would be an explicit DACL on the per-seat `credentials` directory (SYSTEM + Administrators +
-that seat), matching what `accounts.json` and `api-key.txt` already carry.
+### WARNING: this does NOT make a seat's key private
+
+**Every seat is seeded with a copy of the SAME key**, taken from the console Apollo's install
+(`ApolloConfigBuilder.EnsureSeatConfigDir`), and the comment there says so: all seats share one
+server cert because Moonlight identifies a seat by its `uniqueid`, not its certificate. Measured on
+the reference host, a seat's `cakey.pem` is byte-identical to the console Apollo's.
+
+And the source stays readable:
+
+    C:\Program Files\Apollo\config\credentials\cakey.pem
+        BUILTIN\Users:(I)(RX)
+
+So a standard user who wants that key reads the original rather than the seat's copy, and the key
+they get impersonates **every** seat and the console Apollo. Locking the seat directories removes
+one copy of the exposure, not the exposure.
+
+Closing it properly means each seat generating its own key in its now-writable credentials
+directory instead of being seeded with a shared one. That is a deliberate change, not a cleanup:
+Moonlight pins the certificate it paired with, so every existing pairing on the host would need
+redoing. It has not been made.
 
 ## What is *not* protected
 
