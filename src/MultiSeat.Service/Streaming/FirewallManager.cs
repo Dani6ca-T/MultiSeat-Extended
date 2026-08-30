@@ -43,6 +43,42 @@ public sealed class FirewallManager
     }
 
     /// <summary>
+    /// The rule name for a seat. One definition, because this convention had three copies - open,
+    /// close and the existence check - and they only work if they agree. If they ever drifted,
+    /// ClosePorts would delete nothing and every seat ever provisioned would leave its rules
+    /// behind, silently and permanently.
+    /// </summary>
+    internal static string RuleName(Guid seatId) => $"MultiSeat-Seat-{seatId:N}";
+
+    /// <summary>
+    /// Inbound TCP ports for a seat: pairing/launch over GFE HTTPS and its plaintext fallback, the
+    /// Apollo web UI, RTSP session setup, and the RetroArch netplay host port when that feature is
+    /// on (seat-to-seat netplay goes over loopback, which the firewall does not filter, so this is
+    /// only for LAN players joining a seat's game).
+    /// </summary>
+    internal static IReadOnlyList<int> TcpPorts(int portBase, bool emulatorNetplay)
+    {
+        var offsets = new List<int>
+        {
+            Constants.OffsetGfeHttps,
+            Constants.OffsetGfeHttp,
+            Constants.OffsetWebUi,
+            Constants.OffsetRtsp,
+        };
+        if (emulatorNetplay) offsets.Add(Constants.OffsetRetroArchNetplay);
+        return offsets.Select(o => portBase + o).ToList();
+    }
+
+    /// <summary>Inbound UDP ports for a seat: the media streams and the control channel.</summary>
+    internal static IReadOnlyList<int> UdpPorts(int portBase) =>
+    [
+        portBase + Constants.OffsetVideo,
+        portBase + Constants.OffsetControl,
+        portBase + Constants.OffsetAudio,
+        portBase + Constants.OffsetMic,
+    ];
+
+    /// <summary>
     /// Ensure the MultiSeat API (dashboard) port is open in the Windows Firewall.
     /// Called once at service startup so the dashboard is reachable from LAN devices.
     /// The rule is idempotent — no-op if it already exists.
@@ -76,23 +112,10 @@ public sealed class FirewallManager
     /// </summary>
     public async Task OpenPortsAsync(SeatInfo seat, CancellationToken ct)
     {
-        var ruleName = $"MultiSeat-Seat-{seat.Id:N}";
+        var ruleName = RuleName(seat.Id);
         var portBase = seat.PortBase;
 
-        // TCP: GFE HTTPS (pairing/launch), GFE HTTP (fallback), web UI, RTSP setup,
-        // plus the RetroArch netplay host port when emulator netplay is enabled (so external
-        // LAN players can also join a seat's game; seat-to-seat over loopback is firewall-exempt).
-        var tcpOffsets = new List<int>
-        {
-            Constants.OffsetGfeHttps,
-            Constants.OffsetGfeHttp,
-            Constants.OffsetWebUi,
-            Constants.OffsetRtsp,
-        };
-        if (_options.EnableEmulatorNetplay)
-            tcpOffsets.Add(Constants.OffsetRetroArchNetplay);
-
-        var tcpPorts = string.Join(',', tcpOffsets.Select(o => portBase + o));
+        var tcpPorts = string.Join(',', TcpPorts(portBase, _options.EnableEmulatorNetplay));
         await RunNetshAsync(
             $"advfirewall firewall add rule name=\"{ruleName}-TCP\" " +
             $"dir=in action=allow protocol=TCP localport={tcpPorts} " +
@@ -100,12 +123,7 @@ public sealed class FirewallManager
             $"description=\"MultiSeat Apollo streaming (TCP)\"",
             ct);
 
-        // UDP: video + control + audio + mic
-        var udpPorts = string.Join(',',
-            portBase + Constants.OffsetVideo,
-            portBase + Constants.OffsetControl,
-            portBase + Constants.OffsetAudio,
-            portBase + Constants.OffsetMic);
+        var udpPorts = string.Join(',', UdpPorts(portBase));
         await RunNetshAsync(
             $"advfirewall firewall add rule name=\"{ruleName}-UDP\" " +
             $"dir=in action=allow protocol=UDP localport={udpPorts} " +
@@ -128,7 +146,7 @@ public sealed class FirewallManager
         if (!_ruleNames.TryRemove(seat.Id, out var ruleName))
         {
             // Try the default naming convention
-            ruleName = $"MultiSeat-Seat-{seat.Id:N}";
+            ruleName = RuleName(seat.Id);
         }
 
         await RunNetshAsync(
@@ -144,7 +162,7 @@ public sealed class FirewallManager
     /// </summary>
     public async Task<bool> RulesExistAsync(SeatInfo seat, CancellationToken ct)
     {
-        var ruleName = $"MultiSeat-Seat-{seat.Id:N}";
+        var ruleName = RuleName(seat.Id);
         var (exitCode, _) = await RunNetshAsync(
             $"advfirewall firewall show rule name=\"{ruleName}-TCP\"", ct);
         return exitCode == 0;
