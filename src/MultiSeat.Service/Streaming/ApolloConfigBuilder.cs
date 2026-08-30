@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Security.AccessControl;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -64,6 +65,7 @@ public sealed class ApolloConfigBuilder
         // All seats share one credentials file so web UI login persists across re-provisioning.
         // The file is created by MultiSeat on first run (from Apollo's default config) and survives seat teardown.
         var credPath = Path.Combine(configDir, "shared_credentials.json").Replace('\\', '/');
+        var tlsDir = Path.Combine(seatDir, "config", "credentials").Replace('\\', '/');
         EnsureSharedCredentials(configDir);
         // platf::appdata() on Windows resolves to {exe_dir}/config/ — not the working directory.
         // To isolate each seat's state file (and thus its UUID), we seed sunshine_state.json in
@@ -71,7 +73,7 @@ public sealed class ApolloConfigBuilder
         // generated sunshine.conf so Apollo uses that path instead of the shared exe-dir default.
         // Only create if absent — pairings (stored in sunshine_state) survive re-provisioning.
         EnsureSeatConfigDir(seatDir);
-        EnsureSeatStateFile(seatDir);
+        EnsureSeatStateFile(seatDir, seat.AccountName);
         EnsureSeatAppsJson(seatDir);
 
         var sb = new StringBuilder(2048);
@@ -162,10 +164,16 @@ public sealed class ApolloConfigBuilder
         sb.AppendLine();
 
         // ── Encoder ───────────────────────────────────────────────────
-        // Prefer NVENC for hardware-accelerated low-latency encoding.
-        // Apollo will fall back to AMF → software if NVENC is unavailable.
-        sb.AppendLine("# Encoder — NVENC for hardware-accelerated low-latency encoding");
-        sb.AppendLine("encoder = nvenc");
+        // NVENC by default, for hardware-accelerated low-latency encoding, and
+        // Apollo falls back on its own where it is absent. That fallback is not
+        // safe everywhere: on AMD it lands on AMF, whose startup probe runs
+        // against the RDP surface a seat provides — 1000Hz refresh, no real
+        // display — and hangs there. Apollo then never reaches the point where
+        // it opens its HTTP servers, so the seat reports Ready with no port
+        // listening. MultiSeat:Encoder lets such a host say what to use.
+        var encoder = string.IsNullOrWhiteSpace(_options.Encoder) ? "nvenc" : _options.Encoder.Trim();
+        sb.AppendLine($"# Encoder — {encoder} (MultiSeat:Encoder)");
+        sb.AppendLine($"encoder = {encoder}");
         sb.AppendLine();
 
         // ── NVENC tuning ──────────────────────────────────────────────
@@ -272,6 +280,13 @@ public sealed class ApolloConfigBuilder
         sb.AppendLine("# Security");
         sb.AppendLine($"file_state = {statePath}");
         sb.AppendLine($"credentials_file = {credPath}");
+        // The same reasoning covers the TLS material. Left at its default Apollo
+        // looks for cakey.pem under {exe_dir}/config/credentials/, inside Program
+        // Files — which a seat account cannot write, so it cannot even generate
+        // one. It dies on "HTTP interface failed to initialize" and never opens a
+        // port. The per-seat credentials/ dir is already created for this.
+        sb.AppendLine($"pkey = {tlsDir}/cakey.pem");
+        sb.AppendLine($"cert = {tlsDir}/cacert.pem");
         // Each seat has independent pairing — Moonlight pairs per-seat
         sb.AppendLine("origin_web_ui_allowed = lan");
         sb.AppendLine();
@@ -297,7 +312,8 @@ public sealed class ApolloConfigBuilder
 
         // ── Logging ───────────────────────────────────────────────────
         sb.AppendLine("# Logging");
-        sb.AppendLine("min_log_level = info");
+        var logLevel = string.IsNullOrWhiteSpace(_options.ApolloLogLevel) ? "info" : _options.ApolloLogLevel.Trim();
+        sb.AppendLine($"min_log_level = {logLevel}");
         sb.AppendLine($"log_path = {logPath}");
         sb.AppendLine();
 
@@ -506,10 +522,15 @@ public sealed class ApolloConfigBuilder
     /// Apollo is pointed here via file_state = {seatDir}/config/sunshine_state.json in the config.
     /// Only creates the file if absent — preserves pairings on re-provision.
     /// </summary>
-    private void EnsureSeatStateFile(string seatDir)
+    private void EnsureSeatStateFile(string seatDir, string accountName)
     {
         var statePath = Path.Combine(seatDir, "config", "sunshine_state.json");
-        if (File.Exists(statePath)) return;
+        if (File.Exists(statePath))
+        {
+            // Seats provisioned before this ran still carry the read-only ACL.
+            GrantSeatWrite(statePath, accountName);
+            return;
+        }
 
         // UUID format matches what Apollo writes: uppercase 8-4-4-4-12
         var uuid = Guid.NewGuid().ToString("D").ToUpperInvariant();
@@ -523,7 +544,37 @@ public sealed class ApolloConfigBuilder
             """;
 
         File.WriteAllText(statePath, json, Encoding.UTF8);
+        GrantSeatWrite(statePath, accountName);
         _logger.LogInformation("Created per-seat state file with UUID {Uuid}: {Path}", uuid, statePath);
+    }
+
+    /// <summary>
+    /// Give the seat account write access to a file the service created.
+    ///
+    /// Files written here inherit ProgramData's ACL, where Users get read and
+    /// execute but not write. Apollo runs as the seat account and rewrites the
+    /// state file every time it pairs a client — add_authorized_client() calls
+    /// save_state() then load_state(). The write fails silently, the reload puts
+    /// the old contents back, and the client that just paired is gone. The seat
+    /// pairs successfully and then refuses that client's certificate on every
+    /// call after, which is a hard failure to trace from either end.
+    /// </summary>
+    private void GrantSeatWrite(string path, string accountName)
+    {
+        try
+        {
+            var info = new FileInfo(path);
+            var acl = info.GetAccessControl();
+            acl.AddAccessRule(new FileSystemAccessRule(accountName, FileSystemRights.Modify, AccessControlType.Allow));
+            info.SetAccessControl(acl);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(
+                ex,
+                "Could not grant {Account} write access to {Path} — Apollo will not be able to remember the clients this seat pairs",
+                accountName, path);
+        }
     }
 
     /// <summary>
