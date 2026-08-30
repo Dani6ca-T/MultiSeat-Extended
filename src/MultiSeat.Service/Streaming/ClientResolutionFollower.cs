@@ -54,6 +54,50 @@ public sealed class ClientResolutionFollower
         _logger = logger;
     }
 
+    /// <summary>What to do about the mode a client asked for.</summary>
+    internal enum FollowAction
+    {
+        /// <summary>The seat is already that size.</summary>
+        AlreadyCorrectSize,
+
+        /// <summary>This exact mode was tried and the seat still is not that size.</summary>
+        AlreadyAttempted,
+
+        /// <summary>mstsc would silently ignore this geometry, so reconnecting would achieve nothing.</summary>
+        GeometryRejected,
+
+        /// <summary>Reconnect the session at the requested size.</summary>
+        Resize,
+    }
+
+    /// <summary>
+    /// The whole decision, with no I/O in it.
+    ///
+    /// The ordering matters and each branch guards a real failure: without AlreadyCorrectSize a
+    /// steady state would reconnect on every tick; without AlreadyAttempted a size Windows refuses
+    /// to give reconnects the seat forever, interrupting the stream each time; and a geometry mstsc
+    /// ignores must not be attempted at all, since the reconnect would cost an interruption and
+    /// change nothing.
+    ///
+    /// A DIFFERENT request after a refused one must still go through - otherwise one bad size from
+    /// one client would freeze the seat's resolution for good.
+    /// </summary>
+    internal static FollowAction Decide(
+        RequestedMode requested, int seatWidth, int seatHeight, RequestedMode? lastApplied)
+    {
+        if (requested.Width == seatWidth && requested.Height == seatHeight)
+            return FollowAction.AlreadyCorrectSize;
+
+        if (lastApplied is not null
+            && lastApplied.Width == requested.Width && lastApplied.Height == requested.Height)
+            return FollowAction.AlreadyAttempted;
+
+        if (!RdpGeometry.ForClient(requested.Width, requested.Height).IsValid)
+            return FollowAction.GeometryRejected;
+
+        return FollowAction.Resize;
+    }
+
     /// <summary>
     /// Returns true when the seat was resized, so the caller can broadcast the change.
     /// Never throws: a failure here must not take down the health check.
@@ -77,34 +121,23 @@ public sealed class ClientResolutionFollower
             var requested = ApolloLogParser.ParseLastRequestedMode(text);
             if (requested is null) return false;
 
-            // Already the seat's size — nothing to do. Also record it, so a later log re-read
-            // does not treat it as new.
-            if (requested.Width == seat.Width && requested.Height == seat.Height)
-            {
-                _applied[seat.Id] = requested;
-                return false;
-            }
+            _applied.TryGetValue(seat.Id, out var last);
+            var action = Decide(requested, seat.Width, seat.Height, last);
 
-            if (_applied.TryGetValue(seat.Id, out var last)
-                && last.Width == requested.Width && last.Height == requested.Height)
-            {
-                // Tried this one already and the seat still is not that size — Windows refused
-                // it. Saying so once per seat beats reconnecting in a loop.
-                return false;
-            }
-
-            var geometry = RdpGeometry.ForClient(requested.Width, requested.Height);
-            if (!geometry.IsValid)
-            {
+            // Everything except AlreadyAttempted records the mode: the point of remembering is
+            // that we have now dealt with this request, however it turned out.
+            if (action is not FollowAction.AlreadyAttempted)
                 _applied[seat.Id] = requested;
+
+            if (action is FollowAction.GeometryRejected)
+            {
                 _logger.LogWarning(
                     "Seat {Id}: client asked for {W}x{H}, which mstsc would ignore — leaving the " +
                     "seat at {CurW}x{CurH}",
                     seat.Id, requested.Width, requested.Height, seat.Width, seat.Height);
-                return false;
             }
 
-            _applied[seat.Id] = requested;
+            if (action is not FollowAction.Resize) return false;
 
             _logger.LogInformation(
                 "Seat {Id}: client requested {W}x{H}{Hz} but the session is {CurW}x{CurH} — " +

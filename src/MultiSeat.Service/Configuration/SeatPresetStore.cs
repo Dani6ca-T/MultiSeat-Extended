@@ -9,18 +9,26 @@ namespace MultiSeat.Service.Configuration;
 /// </summary>
 public sealed class SeatPresetStore
 {
-    private readonly string _filePath = @"C:\ProgramData\MultiSeat\seat-presets.json";
+    private readonly string _filePath;
     private readonly ILogger<SeatPresetStore> _logger;
     private readonly object _lock = new();
     private List<SeatPreset> _presets = [];
 
     private static readonly JsonSerializerOptions _json = new() { WriteIndented = true };
 
-    public SeatPresetStore(ILogger<SeatPresetStore> logger)
+    /// <param name="filePath">
+    /// Where the presets live. Defaults to the ProgramData location the service uses; tests
+    /// pass a temp path, because the real file holds the user's autostart seats and a test that
+    /// wrote to it would delete them.
+    /// </param>
+    public SeatPresetStore(ILogger<SeatPresetStore> logger, string? filePath = null)
     {
         _logger = logger;
+        _filePath = filePath ?? DefaultFilePath;
         Load();
     }
+
+    internal const string DefaultFilePath = @"C:\ProgramData\MultiSeat\seat-presets.json";
 
     public IReadOnlyList<SeatPreset> GetAll()
     {
