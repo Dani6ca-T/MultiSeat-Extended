@@ -18,7 +18,7 @@ namespace MultiSeat.Service.Accounts;
 /// All MultiSeat-managed accounts are prefixed with "MultiSeatSeat" and
 /// added to the Users group.
 /// </summary>
-public sealed class AccountManager
+public sealed class AccountManager : IAccountManager
 {
     private readonly ILogger<AccountManager> _logger;
     private readonly ConcurrentDictionary<string, AccountInfo> _managedAccounts = new(StringComparer.OrdinalIgnoreCase);

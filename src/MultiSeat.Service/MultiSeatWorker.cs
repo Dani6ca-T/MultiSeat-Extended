@@ -30,7 +30,7 @@ public sealed class MultiSeatWorker : BackgroundService
     private readonly FirewallManager _firewall;
     private readonly SeatPresetStore _presets;
     private readonly SharedLibraryProvisioner _sharedLibrary;
-    private readonly Accounts.AccountManager _accounts;
+    private readonly Accounts.IAccountManager _accounts;
     private readonly IServiceProvider _services;
 
     private WebApplication? _apiApp;
@@ -47,7 +47,7 @@ public sealed class MultiSeatWorker : BackgroundService
         FirewallManager firewall,
         SeatPresetStore presets,
         SharedLibraryProvisioner sharedLibrary,
-        Accounts.AccountManager accounts,
+        Accounts.IAccountManager accounts,
         IServiceProvider services)
     {
         _accounts = accounts;

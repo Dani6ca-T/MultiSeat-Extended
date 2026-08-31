@@ -35,6 +35,7 @@ public static class ApiServer
         builder.Services.AddSingleton(sessionLauncher);
         builder.Services.AddSingleton<Sessions.ISessionLauncher>(sessionLauncher);
         builder.Services.AddSingleton(hostServices.GetRequiredService<Accounts.AccountManager>());
+        builder.Services.AddSingleton<Accounts.IAccountManager>(hostServices.GetRequiredService<Accounts.IAccountManager>());
         builder.Services.AddSingleton(hostServices.GetRequiredService<Monitoring.GpuMonitor>());
         builder.Services.AddSingleton(hostServices.GetRequiredService<Monitoring.MetricsCollector>());
         builder.Services.AddSingleton(hostServices.GetRequiredService<Monitoring.SessionHealthCheck>());

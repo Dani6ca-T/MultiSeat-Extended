@@ -253,6 +253,7 @@ builder.Services.AddWindowsService(options =>
 
 // ── Core services (singletons — one per host lifetime) ───────────────
 builder.Services.AddSingleton<AccountManager>();
+builder.Services.AddSingleton<IAccountManager>(sp => sp.GetRequiredService<AccountManager>());
 builder.Services.AddSingleton<SessionLauncher>();
 builder.Services.AddSingleton<RdpWrapper>();
 builder.Services.AddSingleton<ProcessInjector>();

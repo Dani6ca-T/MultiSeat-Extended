@@ -9,10 +9,10 @@ public static class AccountEndpoints
     {
         var group = app.MapGroup("/api/accounts").WithTags("Accounts");
 
-        group.MapGet("/", (AccountManager mgr) =>
+        group.MapGet("/", (IAccountManager mgr) =>
             Results.Ok(mgr.ListManagedAccounts()));
 
-        group.MapPost("/", (AccountCreateRequest request, AccountManager mgr) =>
+        group.MapPost("/", (AccountCreateRequest request, IAccountManager mgr) =>
         {
             if (!ApiInputValidation.IsValidAccountName(request.Username))
                 return ApiInputValidation.AccountNameError();
@@ -27,7 +27,7 @@ public static class AccountEndpoints
             }
         });
 
-        group.MapPost("/link", (AccountCreateRequest request, AccountManager mgr) =>
+        group.MapPost("/link", (AccountCreateRequest request, IAccountManager mgr) =>
         {
             if (!ApiInputValidation.IsValidAccountName(request.Username))
                 return ApiInputValidation.AccountNameError();
@@ -42,7 +42,7 @@ public static class AccountEndpoints
             }
         });
 
-        group.MapDelete("/{username}", (string username, AccountManager mgr) =>
+        group.MapDelete("/{username}", (string username, IAccountManager mgr) =>
         {
             if (!ApiInputValidation.IsValidAccountName(username))
                 return ApiInputValidation.AccountNameError();

@@ -35,7 +35,7 @@ public sealed class SeatManager
     private readonly ConcurrentDictionary<Guid, SeatInfo> _seats = new();
     private readonly ILogger<SeatManager> _logger;
     private readonly MultiSeatOptions _options;
-    private readonly AccountManager _accounts;
+    private readonly IAccountManager _accounts;
     private readonly ISessionLauncher _sessionLauncher;
     private readonly ProcessInjector _processInjector;
     private readonly IVirtualDisplayManager _displayManager;
@@ -55,7 +55,7 @@ public sealed class SeatManager
     public SeatManager(
         ILogger<SeatManager> logger,
         IOptions<MultiSeatOptions> options,
-        AccountManager accounts,
+        IAccountManager accounts,
         ISessionLauncher sessionLauncher,
         ProcessInjector processInjector,
         IVirtualDisplayManager displayManager,

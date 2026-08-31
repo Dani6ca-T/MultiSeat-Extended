@@ -40,7 +40,7 @@ public sealed class SessionLauncher : ISessionLauncher
 {
     private readonly ILogger<SessionLauncher> _logger;
     private readonly MultiSeatOptions _options;
-    private readonly AccountManager _accounts;
+    private readonly IAccountManager _accounts;
 
     // Track keepalive process handles per session to prevent premature cleanup.
     // Concurrent because provisioning, teardown, and the health-check loop can all
@@ -77,7 +77,7 @@ public sealed class SessionLauncher : ISessionLauncher
     public SessionLauncher(
         ILogger<SessionLauncher> logger,
         IOptions<MultiSeatOptions> options,
-        AccountManager accounts)
+        IAccountManager accounts)
     {
         _logger = logger;
         _options = options.Value;
