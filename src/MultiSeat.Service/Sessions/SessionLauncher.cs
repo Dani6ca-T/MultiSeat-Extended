@@ -36,7 +36,7 @@ namespace MultiSeat.Service.Sessions;
 ///   6. Clean up stored credentials
 ///   7. Launch keepalive process in the new session to anchor it
 /// </summary>
-public sealed class SessionLauncher
+public sealed class SessionLauncher : ISessionLauncher
 {
     private readonly ILogger<SessionLauncher> _logger;
     private readonly MultiSeatOptions _options;

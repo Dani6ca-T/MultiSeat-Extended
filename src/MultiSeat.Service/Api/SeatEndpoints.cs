@@ -200,7 +200,7 @@ public static class SeatEndpoints
             });
 
         group.MapPost("/{id:guid}/session-reconnect",
-            async (Guid id, SeatManager mgr, SessionLauncher sessionLauncher, CancellationToken ct) =>
+            async (Guid id, SeatManager mgr, ISessionLauncher sessionLauncher, CancellationToken ct) =>
             {
                 var seat = mgr.GetSeat(id);
                 if (seat is null)
@@ -265,7 +265,7 @@ public static class SeatEndpoints
         // — the premise the terminal-session HDR work in issue #15 rests on. Runs the probe
         // inside the seat's own session, because display APIs see nothing from Session 0.
         group.MapGet("/{id:guid}/diagnostics/advanced-color",
-            async (Guid id, bool? enable, SeatManager mgr, SessionLauncher launcher, CancellationToken ct) =>
+            async (Guid id, bool? enable, SeatManager mgr, ISessionLauncher launcher, CancellationToken ct) =>
             {
                 var seat = mgr.GetSeat(id);
                 if (seat is null) return Results.NotFound();
