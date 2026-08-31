@@ -20,7 +20,7 @@ namespace MultiSeat.Service.Monitoring;
 public sealed class SessionHealthCheck
 {
     private readonly ILogger<SessionHealthCheck> _logger;
-    private readonly SessionLauncher _sessionLauncher;
+    private readonly ISessionLauncher _sessionLauncher;
     private readonly ApolloManager _apolloManager;
     private readonly SeatManager _seatManager;
     private readonly OnConnectAppLauncher _onConnectApps;
@@ -28,7 +28,7 @@ public sealed class SessionHealthCheck
 
     public SessionHealthCheck(
         ILogger<SessionHealthCheck> logger,
-        SessionLauncher sessionLauncher,
+        ISessionLauncher sessionLauncher,
         ApolloManager apolloManager,
         SeatManager seatManager,
         OnConnectAppLauncher onConnectApps,

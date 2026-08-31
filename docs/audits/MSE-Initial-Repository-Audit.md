@@ -177,7 +177,7 @@ prerequisites/                       — Installer scripts
 
 | Service | Used By | Missing Interface |
 |---------|---------|-------------------|
-| `SessionLauncher` | SeatManager, SessionHealthCheck, SeatEndpoints, ProcessInjector | ✅ `ISessionLauncher` (extracted) |
+| `SessionLauncher` | SeatManager, SessionHealthCheck, SeatEndpoints, ProcessInjector | ✅ `ISessionLauncher` (fully wired, except ProcessInjector) |
 | `VirtualDisplayManager` | SeatManager, SeatEndpoints | ✅ `IVirtualDisplayManager` (extracted) |
 | `VibepolloManager` | SeatManager, SessionHealthCheck, HostEndpoints | `IVibepolloManager` |
 | `PortAllocator` | SeatManager | `IPortAllocator` |
@@ -397,15 +397,15 @@ Status: ✅ IMPLEMENTED
 
 ### ISessionLauncher Interface Extraction
 
-**Status**: ✅ Implemented
+**Status**: ✅ Fully Wired
 
 **What was done**:
 1. Created `ISessionLauncher` interface in `src/MultiSeat.Service/Sessions/ISessionLauncher.cs`
 2. Made `SessionLauncher` implement `ISessionLauncher`
-3. Updated `SeatManager` to depend on `ISessionLauncher` instead of concrete `SessionLauncher`
-4. Updated `SessionHealthCheck` to depend on `ISessionLauncher` instead of concrete `SessionLauncher`
-5. Updated `SeatEndpoints` DI parameters to use `ISessionLauncher`
-6. Updated `ApiServer.cs` and `Program.cs` DI registrations to expose both concrete and interface
+3. Updated `SeatEndpoints` DI parameters to use `ISessionLauncher`
+4. Updated `ApiServer.cs` and `Program.cs` DI registrations to expose both concrete and interface
+5. Updated `SeatManager` to depend on `ISessionLauncher` instead of concrete `SessionLauncher`
+6. Updated `SessionHealthCheck` to depend on `ISessionLauncher` instead of concrete `SessionLauncher`
 
 **Interface methods**:
 - `LaunchSessionAsync(string, CancellationToken, RdpGeometry) → Task<int>`
@@ -421,11 +421,11 @@ Status: ✅ IMPLEMENTED
 - No new tests needed — all existing tests pass
 
 **Test results**:
-- Before: 338 passed, 14 skipped, 0 failed
-- After:  338 passed, 14 skipped, 0 failed
+- Before: 383 passed, 17 skipped, 0 failed
+- After:  383 passed, 17 skipped, 0 failed
 
 **Follow-up opportunities** (not implemented, documented for future):
-- Extract `IProviderManager` interface from `VibepolloManager`
+- Extract `IProviderManager` interface from `ApolloManager`
 - Move `RdpGeometry` to `MultiSeat.Shared` to enable interfaces in the domain layer
 
 ### IVirtualDisplayManager Interface Extraction

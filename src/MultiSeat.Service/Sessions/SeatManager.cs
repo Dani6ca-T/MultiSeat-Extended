@@ -36,7 +36,7 @@ public sealed class SeatManager
     private readonly ILogger<SeatManager> _logger;
     private readonly MultiSeatOptions _options;
     private readonly AccountManager _accounts;
-    private readonly SessionLauncher _sessionLauncher;
+    private readonly ISessionLauncher _sessionLauncher;
     private readonly ProcessInjector _processInjector;
     private readonly IVirtualDisplayManager _displayManager;
     private readonly ApolloManager _apolloManager;
@@ -56,7 +56,7 @@ public sealed class SeatManager
         ILogger<SeatManager> logger,
         IOptions<MultiSeatOptions> options,
         AccountManager accounts,
-        SessionLauncher sessionLauncher,
+        ISessionLauncher sessionLauncher,
         ProcessInjector processInjector,
         IVirtualDisplayManager displayManager,
         ApolloManager apolloManager,
