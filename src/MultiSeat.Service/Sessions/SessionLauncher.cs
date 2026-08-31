@@ -34,7 +34,7 @@ namespace MultiSeat.Service.Sessions;
 ///   4. Poll WTS until the account's session appears
 ///   5. Disconnect the mstsc client — session stays alive as "Disconnected"
 ///   6. Clean up stored credentials
-///   7. Launch keepalive process in the new session to anchor it
+///   7. Launch the session anchor process in the new session to hold it open
 /// </summary>
 public sealed class SessionLauncher
 {
@@ -42,10 +42,10 @@ public sealed class SessionLauncher
     private readonly MultiSeatOptions _options;
     private readonly AccountManager _accounts;
 
-    // Track keepalive process handles per session to prevent premature cleanup.
+    // Track session-anchor process handles per session to prevent premature cleanup.
     // Concurrent because provisioning, teardown, and the health-check loop can all
     // touch it from different threads.
-    private readonly ConcurrentDictionary<int, KeepaliveInfo> _keepalives = new();
+    private readonly ConcurrentDictionary<int, SessionAnchorInfo> _sessionAnchors = new();
 
     // Track the mstsc process that is keeping a session Active.
     // DisconnectSession() kills mstsc, sending the session back to Disconnected.
@@ -205,7 +205,7 @@ public sealed class SessionLauncher
     /// <summary>
     /// Disconnect the session for the given session ID by killing the tracked
     /// mstsc process. The session goes from Active → Disconnected; processes
-    /// already running inside it (Apollo, keepalive) continue unaffected.
+    /// already running inside it (Apollo, the session anchor) continue unaffected.
     /// Safe to call multiple times or when no mstsc is tracked.
     /// </summary>
     public void DisconnectSession(int sessionId)
@@ -412,7 +412,7 @@ public sealed class SessionLauncher
 
     /// <summary>
     /// Log off a background session by session ID.
-    /// Also cleans up the keepalive process.
+    /// Also cleans up the session anchor process.
     /// </summary>
     public void LogoffSession(int sessionId)
     {
@@ -421,21 +421,21 @@ public sealed class SessionLauncher
         // Kill any pending mstsc first (session might still be Active)
         DisconnectSession(sessionId);
 
-        // Kill keepalive first
-        if (_keepalives.TryRemove(sessionId, out var keepalive))
+        // Kill the session anchor first
+        if (_sessionAnchors.TryRemove(sessionId, out var anchor))
         {
             try
             {
-                if (!keepalive.Process.HasExited)
+                if (!anchor.Process.HasExited)
                 {
-                    keepalive.Process.Kill();
-                    keepalive.Process.WaitForExit(3000);
+                    anchor.Process.Kill();
+                    anchor.Process.WaitForExit(3000);
                 }
             }
             catch { /* best effort */ }
             finally
             {
-                keepalive.Process.Dispose();
+                anchor.Process.Dispose();
             }
         }
 
@@ -463,12 +463,12 @@ public sealed class SessionLauncher
         if (!wtsAlive)
             return false;
 
-        // If the keepalive process died but the WTS session is still active,
+        // If the session anchor process died but the WTS session is still active,
         // the session is alive — log a warning but don't kill the seat.
-        if (_keepalives.TryGetValue(sessionId, out var keepalive) && keepalive.Process.HasExited)
+        if (_sessionAnchors.TryGetValue(sessionId, out var anchor) && anchor.Process.HasExited)
         {
             _logger.LogWarning(
-                "Keepalive process for session {Sid} exited, but WTS session is still active",
+                "Session anchor for session {Sid} exited, but WTS session is still active",
                 sessionId);
         }
 
@@ -487,7 +487,7 @@ public sealed class SessionLauncher
     ///   2. Store the RDP credential as the console user (CredWrite, impersonated)
     ///   3. Launch mstsc.exe in the console session targeting 127.0.0.2
     ///   4. Poll WTS until the seat account's session appears
-    ///   5. Launch a keepalive process in the new session
+    ///   5. Launch a session anchor process in the new session
     ///   6. Save mstsc process in _pendingMstsc (caller will kill it via DisconnectSession)
     ///   7. Clean up stored credentials
     ///
@@ -571,9 +571,9 @@ public sealed class SessionLauncher
             _logger.LogInformation(
                 "RDP loopback created session {Sid} for {Account}", sessionId, accountName);
 
-            // Step 5: Launch keepalive BEFORE anything else to avoid a race
+            // Step 5: Launch the session anchor BEFORE anything else to avoid a race
             // where Windows logs off the session because no processes are running.
-            await LaunchKeepaliveInSessionAsync(sessionId, accountName, password, ct);
+            await LaunchSessionAnchorAsync(sessionId, accountName, password, ct);
 
             // Step 6: Keep mstsc alive so the session stays ACTIVE.
             // Hide the mstsc window — a minimized mstsc causes Windows to throttle
@@ -1169,10 +1169,10 @@ public sealed class SessionLauncher
     }
 
     /// <summary>
-    /// Launch a keepalive process inside the new session to anchor it.
+    /// Launch the session anchor process inside the new session to hold it open.
     /// Without a running process, Windows may garbage-collect the session.
     /// </summary>
-    private async Task LaunchKeepaliveInSessionAsync(
+    private async Task LaunchSessionAnchorAsync(
         int sessionId, string accountName, string password, CancellationToken ct)
     {
         // Use WTSQueryUserToken to get the session's actual token, which has
@@ -1182,7 +1182,7 @@ public sealed class SessionLauncher
         SafeTokenHandle token;
         if (WtsApi.WTSQueryUserToken((uint)sessionId, out var rawToken))
         {
-            _logger.LogDebug("Got session token via WTSQueryUserToken for keepalive in session {Sid}", sessionId);
+            _logger.LogDebug("Got session token via WTSQueryUserToken for the session anchor in session {Sid}", sessionId);
             // Duplicate to a primary token
             if (AdvApi.DuplicateTokenEx(
                     rawToken,
@@ -1214,7 +1214,7 @@ public sealed class SessionLauncher
 
         try
         {
-            var keepaliveCmd = BuildKeepaliveCommand();
+            var anchorCmd = BuildSessionAnchorCommand();
 
             var si = new Kernel32.StartupInfo
             {
@@ -1230,13 +1230,13 @@ public sealed class SessionLauncher
                         Kernel32.NORMAL_PRIORITY_CLASS;
 
             if (!AdvApi.CreateProcessAsUserW(
-                    token, null, keepaliveCmd,
+                    token, null, anchorCmd,
                     IntPtr.Zero, IntPtr.Zero, false, flags, envBlock, null,
                     ref si, out var pi))
             {
                 var err = Marshal.GetLastWin32Error();
                 _logger.LogWarning(
-                    "Failed to launch keepalive in session {Sid}: error {Err}. " +
+                    "Failed to launch the session anchor in session {Sid}: error {Err}. " +
                     "Session will rely on RDP session persistence.",
                     sessionId, err);
                 return;
@@ -1245,16 +1245,16 @@ public sealed class SessionLauncher
             Kernel32.CloseHandle(pi.hThread);
 
             _logger.LogInformation(
-                "Keepalive launched in session {Sid}: PID {Pid} (cmd: {Cmd})",
-                sessionId, pi.dwProcessId, keepaliveCmd);
+                "Session anchor launched in session {Sid}: PID {Pid} (cmd: {Cmd}). This is the in-seat anchor that stops Windows reclaiming the session - NOT the console-session keepalive mstsc of issue #18, which logs separately",
+                sessionId, pi.dwProcessId, anchorCmd);
 
-            // Brief wait to verify the keepalive didn't crash immediately
+            // Brief wait to verify the anchor didn't crash immediately
             var waitResult = Kernel32.WaitForSingleObject(pi.hProcess, 1000);
             if (waitResult == Kernel32.WAIT_OBJECT_0)
             {
                 Kernel32.GetExitCodeProcess(pi.hProcess, out var exitCode);
                 _logger.LogError(
-                    "Keepalive PID {Pid} in session {Sid} exited immediately with code {Code}. " +
+                    "Session anchor PID {Pid} in session {Sid} exited immediately with code {Code}. " +
                     "Session may not persist.",
                     pi.dwProcessId, sessionId, exitCode);
                 Kernel32.CloseHandle(pi.hProcess);
@@ -1262,17 +1262,17 @@ public sealed class SessionLauncher
             }
 
             _logger.LogInformation(
-                "Keepalive PID {Pid} is running after 1s check", pi.dwProcessId);
+                "Session anchor PID {Pid} is running after 1s check", pi.dwProcessId);
 
             try
             {
                 var process = Process.GetProcessById(pi.dwProcessId);
-                _keepalives[sessionId] = new KeepaliveInfo(process, pi.hProcess);
+                _sessionAnchors[sessionId] = new SessionAnchorInfo(process, pi.hProcess);
             }
             catch (ArgumentException)
             {
                 // Process exited between the wait check and GetProcessById
-                _logger.LogWarning("Keepalive PID {Pid} exited before it could be tracked", pi.dwProcessId);
+                _logger.LogWarning("Session anchor PID {Pid} exited before it could be tracked", pi.dwProcessId);
                 Kernel32.CloseHandle(pi.hProcess);
             }
         }
@@ -1686,9 +1686,9 @@ public sealed class SessionLauncher
     }
 
     /// <summary>
-    /// Build the command line for the session keepalive process.
+    /// Build the command line for the session anchor process.
     /// </summary>
-    private static string BuildKeepaliveCommand()
+    internal static string BuildSessionAnchorCommand()
     {
         // Use "waitfor" with a signal name that will never arrive.
         // Unlike "cmd.exe /c pause", waitfor does NOT depend on console input
@@ -1838,7 +1838,7 @@ public sealed class SessionLauncher
 
     // ═══════════════════════════════════════════════════════════════════
 
-    private sealed record KeepaliveInfo(Process Process, IntPtr NativeHandle) : IDisposable
+    private sealed record SessionAnchorInfo(Process Process, IntPtr NativeHandle) : IDisposable
     {
         public void Dispose()
         {
