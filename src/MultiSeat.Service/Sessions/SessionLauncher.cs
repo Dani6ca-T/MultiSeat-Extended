@@ -901,12 +901,97 @@ public sealed class SessionLauncher : ISessionLauncher
     }
 
     /// <summary>
+    /// Start the keepalive mstsc on its own desktop, via a helper running inside the console
+    /// session. Returns null if anything went wrong, so the caller can fall back rather than
+    /// leave the seat without a keepalive at all.
+    ///
+    /// The work happens in a helper because window stations are per-session: this service is in
+    /// session 0 and cannot create a desktop in the console session's window station. See
+    /// <see cref="KeepaliveDesktopHelper"/> for why the desktop matters at all.
+    /// </summary>
+    private Process? LaunchMstscOnSeparateDesktop(
+        SafeTokenHandle consoleToken, uint consoleSessionId)
+    {
+        // ProgramData, not %TEMP%: the helper runs as the console user and the service reads the
+        // file back as SYSTEM, so it has to be somewhere both can reach. Same reasoning as the
+        // staged Default.rdp.
+        var pidFile = Path.Combine(
+            @"C:\ProgramData\MultiSeat", $"keepalive-{Guid.NewGuid():N}.pid");
+
+        try
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(pidFile)!);
+
+            var exe = Environment.ProcessPath;
+            if (string.IsNullOrEmpty(exe))
+            {
+                _logger.LogWarning("Could not resolve this executable's path for the keepalive helper");
+                return null;
+            }
+
+            var exit = RunInConsoleSession(
+                consoleToken, consoleSessionId,
+                $"\"{exe}\" --keepalive-mstsc {RdpLoopbackAddress} \"{pidFile}\"",
+                waitForExit: true);
+
+            if (exit != 0)
+            {
+                _logger.LogWarning(
+                    "Keepalive helper exited {Code}; it could not create the desktop or start mstsc",
+                    exit);
+                return null;
+            }
+
+            if (!File.Exists(pidFile))
+            {
+                _logger.LogWarning(
+                    "Keepalive helper reported success but wrote no PID, so there is nothing to track");
+                return null;
+            }
+
+            if (!int.TryParse(File.ReadAllText(pidFile).Trim(), out var pid))
+            {
+                _logger.LogWarning("Keepalive helper wrote a PID that does not parse");
+                return null;
+            }
+
+            var process = Process.GetProcessById(pid);
+            _logger.LogInformation(
+                "Keepalive mstsc (PID {Pid}) started on {Desktop} - its pointer cannot reach the "
+                + "console desktop",
+                pid, KeepaliveDesktopHelper.QualifiedDesktop);
+
+            return process;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Could not start the keepalive on its own desktop");
+            return null;
+        }
+        finally
+        {
+            try { if (File.Exists(pidFile)) File.Delete(pidFile); } catch { /* best effort */ }
+        }
+    }
+
+    /// <summary>
     /// Launch mstsc.exe in the console session targeting the RDP loopback address.
     /// Returns the mstsc Process for cleanup.
     /// </summary>
     private Process LaunchMstscInConsoleSession(
         SafeTokenHandle consoleToken, uint consoleSessionId)
     {
+        if (_options.KeepaliveOnSeparateDesktop)
+        {
+            var onOwnDesktop = LaunchMstscOnSeparateDesktop(consoleToken, consoleSessionId);
+            if (onOwnDesktop is not null) return onOwnDesktop;
+
+            _logger.LogWarning(
+                "Falling back to the console desktop for the keepalive. The seat will work, but "
+                + "while a client streams it may mirror the seat's pointer onto the console "
+                + "desktop (issue #18).");
+        }
+
         var targetSid = (int)consoleSessionId;
         AdvApi.SetTokenInformation(
             consoleToken, AdvApi.TokenInformationClass.TokenSessionId,

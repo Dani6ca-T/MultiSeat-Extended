@@ -162,6 +162,15 @@ if (args.Length >= 2 && args[0] == "--advanced-color")
 // ── Set-default-capture helper mode ──────────────────────────────────
 // Sets the Windows default audio capture (microphone) device for the current session.
 // Usage: MultiSeat.Service.exe --set-default-capture <deviceId>
+// Launch the keepalive mstsc on its own desktop, from INSIDE the console session (issue #18).
+// Window stations are per-session, so the service in session 0 cannot create a desktop in the
+// console session - this runs there and does it locally.
+// Usage: MultiSeat.Service.exe --keepalive-mstsc <address> <pidFile>
+if (args.Length == 3 && args[0] == "--keepalive-mstsc")
+{
+    return MultiSeat.Service.Sessions.KeepaliveDesktopHelper.Run(args[1], args[2]);
+}
+
 if (args.Length == 2 && args[0] == "--set-default-capture")
 {
     return MultiSeat.Service.Audio.AudioCaptureHelper.SetDefaultAudioDevice(args[1]) ? 0 : 1;
