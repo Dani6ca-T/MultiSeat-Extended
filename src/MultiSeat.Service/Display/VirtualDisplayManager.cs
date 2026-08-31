@@ -21,7 +21,7 @@ namespace MultiSeat.Service.Display;
 ///   - Detect whether the SudoVDA driver adapter is installed (for health checks)
 ///   - Expose diagnostic display enumeration via the console-session helper
 /// </summary>
-public sealed class VirtualDisplayManager
+public sealed class VirtualDisplayManager : IVirtualDisplayManager
 {
     private readonly ILogger<VirtualDisplayManager> _logger;
     private readonly ProcessInjector _processInjector;

@@ -38,7 +38,7 @@ public sealed class SeatManager
     private readonly AccountManager _accounts;
     private readonly SessionLauncher _sessionLauncher;
     private readonly ProcessInjector _processInjector;
-    private readonly VirtualDisplayManager _displayManager;
+    private readonly IVirtualDisplayManager _displayManager;
     private readonly ApolloManager _apolloManager;
     private readonly ApolloConfigBuilder _configBuilder;
     private readonly PortAllocator _portAllocator;
@@ -58,7 +58,7 @@ public sealed class SeatManager
         AccountManager accounts,
         SessionLauncher sessionLauncher,
         ProcessInjector processInjector,
-        VirtualDisplayManager displayManager,
+        IVirtualDisplayManager displayManager,
         ApolloManager apolloManager,
         ApolloConfigBuilder configBuilder,
         PortAllocator portAllocator,

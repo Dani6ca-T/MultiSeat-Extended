@@ -248,6 +248,7 @@ builder.Services.AddSingleton<SessionLauncher>();
 builder.Services.AddSingleton<RdpWrapper>();
 builder.Services.AddSingleton<ProcessInjector>();
 builder.Services.AddSingleton<VirtualDisplayManager>();
+builder.Services.AddSingleton<IVirtualDisplayManager>(sp => sp.GetRequiredService<VirtualDisplayManager>());
 builder.Services.AddSingleton<ApolloManager>();
 builder.Services.AddSingleton<ApolloConfigBuilder>();
 builder.Services.AddSingleton<OnConnectAppLauncher>();

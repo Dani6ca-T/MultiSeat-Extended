@@ -177,8 +177,8 @@ prerequisites/                       — Installer scripts
 
 | Service | Used By | Missing Interface |
 |---------|---------|-------------------|
-| `SessionLauncher` | SeatManager, SessionHealthCheck, SeatEndpoints, ProcessInjector | `ISessionLauncher` |
-| `VirtualDisplayManager` | SeatManager, SeatEndpoints | `IVirtualDisplayManager` |
+| `SessionLauncher` | SeatManager, SessionHealthCheck, SeatEndpoints, ProcessInjector | ✅ `ISessionLauncher` (extracted) |
+| `VirtualDisplayManager` | SeatManager, SeatEndpoints | ✅ `IVirtualDisplayManager` (extracted) |
 | `VibepolloManager` | SeatManager, SessionHealthCheck, HostEndpoints | `IVibepolloManager` |
 | `PortAllocator` | SeatManager | `IPortAllocator` |
 | `FirewallManager` | SeatManager, MultiSeatWorker | `IFirewallManager` |
@@ -425,8 +425,38 @@ Status: ✅ IMPLEMENTED
 - After:  338 passed, 14 skipped, 0 failed
 
 **Follow-up opportunities** (not implemented, documented for future):
-- Extract `IVirtualDisplayManager` interface from `VirtualDisplayManager`
 - Extract `IProviderManager` interface from `VibepolloManager`
+- Move `RdpGeometry` to `MultiSeat.Shared` to enable interfaces in the domain layer
+
+### IVirtualDisplayManager Interface Extraction
+
+**Status**: ✅ Implemented
+
+**What was done**:
+1. Created `IVirtualDisplayManager` interface in `src/MultiSeat.Service/Display/IVirtualDisplayManager.cs`
+2. Made `VirtualDisplayManager` implement `IVirtualDisplayManager`
+3. Updated `SeatManager` to depend on `IVirtualDisplayManager` instead of concrete `VirtualDisplayManager`
+4. Updated `SystemEndpoints` DI parameter to use `IVirtualDisplayManager`
+5. Updated `ApiServer.cs` and `Program.cs` DI registrations to expose both concrete and interface
+
+**Interface methods**:
+- `CreateDisplayAsync(SeatInfo, CancellationToken) → Task`
+- `DestroyDisplayAsync(SeatInfo, CancellationToken) → Task`
+- `IsDriverAvailable { get; } → bool`
+- `EnumerateAllConnectedPaths() → IReadOnlyList<object>`
+
+**What was NOT changed**:
+- `VirtualDisplay` record stays with the concrete class (internal tracking)
+- `GetDisplay(Guid)` and `ActiveDisplayCount` not exposed (no external consumers)
+- No logic changes — pure interface extraction
+- This is NOT the future `IDisplayProvider` boundary
+
+**Test results**:
+- Before: 383 passed, 17 skipped, 0 failed
+- After:  383 passed, 17 skipped, 0 failed
+
+**Follow-up opportunities** (not implemented, documented for future):
+- Extract `IProviderManager` interface from `VibepolloManager`/`ApolloManager`
 - Move `RdpGeometry` to `MultiSeat.Shared` to enable interfaces in the domain layer
 
 ---

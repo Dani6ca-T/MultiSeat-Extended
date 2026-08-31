@@ -50,7 +50,7 @@ public static class SystemEndpoints
         // Diagnostic endpoint — dumps all connected display paths from QueryDisplayConfig.
         // Use this to verify SudoVDA virtual displays are visible and check their names.
         // GET /api/system/displays
-        group.MapGet("/displays", (VirtualDisplayManager displays) =>
+        group.MapGet("/displays", (IVirtualDisplayManager displays) =>
         {
             var allPaths = displays.EnumerateAllConnectedPaths();
             return Results.Ok(new

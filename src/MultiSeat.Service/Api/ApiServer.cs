@@ -39,7 +39,9 @@ public static class ApiServer
         builder.Services.AddSingleton(hostServices.GetRequiredService<Monitoring.MetricsCollector>());
         builder.Services.AddSingleton(hostServices.GetRequiredService<Monitoring.SessionHealthCheck>());
         builder.Services.AddSingleton(hostServices.GetRequiredService<Monitoring.HostApolloMonitor>());
-        builder.Services.AddSingleton(hostServices.GetRequiredService<Display.VirtualDisplayManager>());
+        var displayManager = hostServices.GetRequiredService<Display.VirtualDisplayManager>();
+        builder.Services.AddSingleton(displayManager);
+        builder.Services.AddSingleton<Display.IVirtualDisplayManager>(displayManager);
         builder.Services.AddSingleton(hostServices.GetRequiredService<Configuration.SeatPresetStore>());
 
         builder.WebHost.ConfigureKestrel(kestrel =>
