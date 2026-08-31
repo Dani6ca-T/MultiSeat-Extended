@@ -48,13 +48,18 @@ public sealed class MultiSeatOptions
     /// user's desktop while a client is streaming. A process on another desktop cannot move the
     /// console pointer - measured, SetCursorPos there fails outright.
     ///
-    /// Off by default because of one unmeasured risk: mstsc is deliberately placed on a
-    /// non-primary monitor because Windows THROTTLES a hidden or minimized RDP client, which
-    /// freezes the stream. Whether a non-interactive desktop counts as hidden for that purpose
-    /// needs a real client streaming to answer, and cannot be settled on a host that never
-    /// reproduced the bug.
+    /// ON by default since 2026-08-31. The risk that kept it off was throttling: mstsc is placed on
+    /// a non-primary monitor because Windows throttles a hidden or minimized RDP client, which
+    /// freezes the stream, and whether a non-interactive desktop counts as hidden could not be
+    /// reasoned out. Measured instead - a real Moonlight client streaming a seat for several
+    /// minutes with this on: no stutter, no stall, and the console cursor read 0 changes in 152
+    /// samples while the client's mouse was moving (the same measurement that reads 55 in 64 on an
+    /// affected host).
+    ///
+    /// Set false to go back to the console desktop. The launcher also falls back on its own if the
+    /// desktop cannot be created, so a seat still works even where this path fails.
     /// </summary>
-    public bool KeepaliveOnSeparateDesktop { get; set; }
+    public bool KeepaliveOnSeparateDesktop { get; set; } = true;
 
     public bool RotateSharedSeatTls { get; set; }
 
