@@ -40,6 +40,22 @@ public sealed class MultiSeatOptions
     /// during pairing), so replacing it means every client paired to that seat must pair again.
     /// That is why this is opt-in rather than automatic.
     /// </summary>
+    /// <summary>
+    /// Run the keepalive mstsc on a desktop of its own instead of the console's interactive one.
+    ///
+    /// Fixes issue #18: an RDP client repositions its local cursor from the server's
+    /// pointer-position message, so the keepalive mirrors the seat's pointer onto the console
+    /// user's desktop while a client is streaming. A process on another desktop cannot move the
+    /// console pointer - measured, SetCursorPos there fails outright.
+    ///
+    /// Off by default because of one unmeasured risk: mstsc is deliberately placed on a
+    /// non-primary monitor because Windows THROTTLES a hidden or minimized RDP client, which
+    /// freezes the stream. Whether a non-interactive desktop counts as hidden for that purpose
+    /// needs a real client streaming to answer, and cannot be settled on a host that never
+    /// reproduced the bug.
+    /// </summary>
+    public bool KeepaliveOnSeparateDesktop { get; set; }
+
     public bool RotateSharedSeatTls { get; set; }
 
     /// <summary>
