@@ -88,7 +88,7 @@ internal static partial class Kernel32
     public const uint PROCESS_QUERY_INFORMATION = 0x0400;
 
     /// <summary>
-    /// Create a named event for session keepalive signaling.
+    /// Create a named event for session anchor signaling.
     /// </summary>
     [LibraryImport(Lib, SetLastError = true, StringMarshalling = StringMarshalling.Utf16)]
     public static partial IntPtr CreateEventW(

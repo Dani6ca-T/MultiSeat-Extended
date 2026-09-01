@@ -100,13 +100,45 @@ public class SessionInteropTests
         Assert.Equal(24, size);
     }
 
+    /// <summary>
+    /// The session anchor is the process launched INSIDE a seat session so Windows does not
+    /// reclaim it. It is not the console-session keepalive mstsc of issue #18 - a reporter read
+    /// one for the other because both used to log the word "keepalive".
+    ///
+    /// The command it runs is load-bearing and the alternatives were each rejected for a measured
+    /// reason recorded in the method: cmd.exe /c pause needs ReadConsoleInput, which fails once the
+    /// console is detached on RDP disconnect; cmd.exe /k takes CTRL_CLOSE_EVENT on disconnect;
+    /// PowerShell hits a Node.js v24 null-byte env var bug; ping works but puts traffic on the
+    /// wire; and waitfor exits 1 inside an RDP session. This pins the survivor so none of them
+    /// comes back by accident.
+    ///
+    /// The previous test here asserted "cmd.exe" against a string literal it declared itself, so it
+    /// could not fail - and the shape it named had not been what the code produced for some time.
+    /// </summary>
     [Fact]
-    public void KeepaliveCommand_IsNonEmpty()
+    public void SessionAnchorCommand_IsTheOneShapeThatSurvivesAnRdpDisconnect()
     {
-        // We can't call the private method directly, but we can verify
-        // the expected command pattern exists as a constant behavior.
-        var expectedPattern = "cmd.exe";
-        Assert.Contains(expectedPattern, "cmd.exe /c \"timeout /t -1 /nobreak >NUL\"");
+        var cmd = SessionLauncher.BuildSessionAnchorCommand();
+
+        // Fully qualified: a bare "timeout" resolves against the seat's PATH, and the anchor has to
+        // start before anything in that session is known-good.
+        Assert.StartsWith(@"C:\Windows\System32\timeout.exe", cmd, StringComparison.OrdinalIgnoreCase);
+
+        // /nobreak, or a stray Ctrl+C ends the session.
+        Assert.Contains("/nobreak", cmd);
+
+        // A timeout long enough that the session health check, not expiry, is what ends it.
+        var match = System.Text.RegularExpressions.Regex.Match(cmd, @"/t\s+(\d+)");
+        Assert.True(match.Success, $"the anchor command must set a timeout: {cmd}");
+        Assert.True(int.Parse(match.Groups[1].Value) >= 86_400,
+            $"a short timeout would drop the seat when it expires: {cmd}");
+
+        // Each of these was tried and failed in the field. None may return.
+        Assert.DoesNotContain("pause", cmd, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("cmd.exe /k", cmd, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("powershell", cmd, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("ping", cmd, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("waitfor", cmd, StringComparison.OrdinalIgnoreCase);
     }
 
     // ── Integration tests (require SYSTEM + RDP Wrapper) ─────────────
