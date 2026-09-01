@@ -16,6 +16,25 @@
     <InternalsVisibleTo Include="MultiSeat.Tests" />
   </ItemGroup>
 
+  <!--
+    Stamp the commit into the binary so a deployed service can say which source it was built
+    from. Without this, "did my pull actually reach the service?" is unanswerable on the host -
+    the question that cost a round trip on issue #18.
+
+    ContinueOnError and the Exists guard matter: someone building from a source zip has no .git
+    and no git on PATH, and that must produce an unstamped build, not a failed one.
+  -->
+  <Target Name="StampCommit" BeforeTargets="GetAssemblyVersion"
+          Condition="Exists('$(MSBuildProjectDirectory)/../../.git')">
+    <Exec Command="git rev-parse --short=9 HEAD" ConsoleToMSBuild="true" ContinueOnError="true"
+          StandardOutputImportance="low" IgnoreExitCode="true">
+      <Output TaskParameter="ConsoleOutput" PropertyName="BuildCommit" />
+    </Exec>
+    <PropertyGroup Condition="'$(BuildCommit)' != ''">
+      <SourceRevisionId>$(BuildCommit.Trim())</SourceRevisionId>
+    </PropertyGroup>
+  </Target>
+
   <ItemGroup>
     <PackageReference Include="Microsoft.Extensions.Hosting.WindowsServices" Version="9.*" />
     <PackageReference Include="Nefarius.ViGEm.Client" Version="1.*" />

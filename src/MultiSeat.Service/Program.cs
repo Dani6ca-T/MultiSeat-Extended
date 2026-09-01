@@ -306,5 +306,19 @@ var host = builder.Build();
 if (args.Contains("--log-filters"))
     return MultiSeat.Service.Diagnostics.LogFilterInspector.Run(host.Services);
 
+// -- Configuration inspection mode -------------------------------------
+// Says which binary is deployed and what it resolved each setting to, naming the file that
+// won. Runs after Build() for the same reason as above: it must report the REAL host's
+// configuration, not a reconstruction that is free to drift from it.
+//
+// The reporter of issue #18 set an option, pulled the commit, and saw no effect - because
+// pulling source does not rebuild the service, and a binary that predates an option ignores
+// it in silence. There was no way to tell that apart from the option being overridden.
+//
+// Exit code 0 = nothing here explains a setting failing to take effect, 1 = something does.
+// Usage: MultiSeat.Service.exe --config
+if (args.Contains("--config"))
+    return MultiSeat.Service.Diagnostics.ConfigInspector.Run(host.Services, builder.Configuration);
+
 await host.RunAsync();
 return 0;
