@@ -475,6 +475,23 @@ public sealed class ApolloManager
         bool RejectedPrimaryOnly);
 
     /// <summary>
+    /// Parse Apollo log text for a SudoVDA display using the <b>last</b> display-enumeration
+    /// block. Apollo enumerates displays at startup (first block) and again when a client
+    /// connects and creates the virtual display (later blocks). Late detection must read the
+    /// most recent block to find a display that did not exist at startup.
+    ///
+    /// When only the first block is needed (provisioning), use
+    /// <see cref="ParseSudoVdaDisplayId"/> or <see cref="ParseSudoVdaDisplayIdFromLogText"/>.
+    /// </summary>
+    public static SudoVdaParseResult ParseLatestSudoVdaDisplayIdFromLogText(string text)
+    {
+        const string marker = "Currently available display devices:";
+        var last = text.LastIndexOf(marker, StringComparison.Ordinal);
+        if (last < 0) return new SudoVdaParseResult(null, null, 0, false);
+        return ParseSudoVdaDisplayIdFromLogText(text[last..]);
+    }
+
+    /// <summary>
     /// Pure parse of Apollo's "Currently available display devices:" JSON block.
     /// Public and static so the RdpIdd-vs-SudoVDA discrimination can be tested directly —
     /// same rationale as <see cref="ResolveLogPath"/>.

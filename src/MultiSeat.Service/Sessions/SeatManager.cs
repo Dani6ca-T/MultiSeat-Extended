@@ -634,14 +634,10 @@ public sealed class SeatManager
             return false;
         }
 
-        // ParseSudoVdaDisplayIdFromLogText matches the FIRST display block, which is Apollo's
-        // startup enumeration — exactly the one that never contains the virtual display. Slice
-        // from the last block so we parse Apollo's most recent view instead.
-        const string marker = "Currently available display devices:";
-        var last = text.LastIndexOf(marker, StringComparison.Ordinal);
-        if (last < 0) return false;
-
-        var result = ApolloManager.ParseSudoVdaDisplayIdFromLogText(text[last..]);
+        // ParseLatestSudoVdaDisplayIdFromLogText slices from the LAST display-enumeration
+        // block so we parse Apollo's most recent view — the first block is always the startup
+        // enumeration, which never contains the virtual display.
+        var result = ApolloManager.ParseLatestSudoVdaDisplayIdFromLogText(text);
         if (result.DeviceId is null) return false; // still nothing — stay quiet, we run every tick
 
         seat.DisplayDevicePath = result.DeviceId;

@@ -998,6 +998,60 @@ public class StreamingTests
         Assert.Equal(0, result.DisplayCount);
     }
 
+    // ── ParseLatestSudoVdaDisplayIdFromLogText ──────────────────────────
+    // Late detection needs the LAST display-enumeration block, not the first.
+    // Apollo enumerates displays at startup (first block) and again when a client
+    // connects and creates the virtual display (later blocks).
+
+    [Fact]
+    public void ParseLatestSudoVda_PicksFromLastBlock_NotFirst()
+    {
+        // Two display blocks: the first has no SudoVDA (startup enumeration),
+        // the second has one (client connected and created the virtual display).
+        var firstBlock = DisplayLogJson(
+            DisplayEntry("{rdp-surface}", "", primary: true,
+                refreshNumerator: 1000, width: 3440, height: 1440));
+        var secondBlock = DisplayLogJson(
+            DisplayEntry("{rdp-surface}", "", primary: true,
+                refreshNumerator: 1000, width: 3440, height: 1440),
+            DisplayEntry("{sudovda}", "", primary: false,
+                refreshNumerator: 1000, width: 1920, height: 1080));
+
+        var log = firstBlock + "\n" + secondBlock;
+
+        // ParseSudoVdaDisplayIdFromLogText (first block) would return null
+        var firstResult = ApolloManager.ParseSudoVdaDisplayIdFromLogText(log);
+        Assert.Null(firstResult.DeviceId);
+
+        // ParseLatestSudoVdaDisplayIdFromLogText (last block) finds the display
+        var latestResult = ApolloManager.ParseLatestSudoVdaDisplayIdFromLogText(log);
+        Assert.Equal("{sudovda}", latestResult.DeviceId);
+    }
+
+    [Fact]
+    public void ParseLatestSudoVda_WorksWithSingleBlock()
+    {
+        var log = DisplayLogJson(
+            DisplayEntry("{rdp-surface}", "", primary: true,
+                refreshNumerator: 1000, width: 3440, height: 1440),
+            DisplayEntry("{sudovda}", "VDD by MTT", primary: false,
+                refreshNumerator: 60, width: 1920, height: 1080));
+
+        var result = ApolloManager.ParseLatestSudoVdaDisplayIdFromLogText(log);
+
+        Assert.Equal("{sudovda}", result.DeviceId);
+        Assert.Equal("VDD by MTT", result.FriendlyName);
+    }
+
+    [Fact]
+    public void ParseLatestSudoVda_ReturnsNothingWhenNoDisplayBlock()
+    {
+        var result = ApolloManager.ParseLatestSudoVdaDisplayIdFromLogText("Info: started\n");
+
+        Assert.Null(result.DeviceId);
+        Assert.Equal(0, result.DisplayCount);
+    }
+
     [Fact]
     public void ResolveLogPath_HonoursPlainApolloLogWhenTheBinaryRespectsLogPath()
     {
