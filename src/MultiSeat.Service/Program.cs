@@ -171,6 +171,19 @@ if (args.Length == 3 && args[0] == "--keepalive-mstsc")
     return MultiSeat.Service.Sessions.KeepaliveDesktopHelper.Run(args[1], args[2]);
 }
 
+// -- Capture-endpoint inspection ---------------------------------------
+// Lists the audio CAPTURE endpoints visible from THIS session, and whether the Steam Streaming
+// Microphone that stream_mic depends on is among them. Endpoint enumeration is session-scoped,
+// so this only means anything run inside a seat - session 0 sees nothing.
+//
+// It exists because --audio-peaks is render-only, and the claim that PerSession costs the
+// microphone rests on capture-device visibility that has never actually been measured.
+//
+// Exit 0 = the device is visible and active here, 1 = it is not, 2 = enumeration failed and the
+// run establishes nothing. Usage: MultiSeat.Service.exe --list-capture
+if (args.Length >= 1 && args[0] == "--list-capture")
+    return MultiSeat.Service.Diagnostics.CaptureEndpointInspector.Run();
+
 if (args.Length == 2 && args[0] == "--set-default-capture")
 {
     return MultiSeat.Service.Audio.AudioCaptureHelper.SetDefaultAudioDevice(args[1]) ? 0 : 1;
