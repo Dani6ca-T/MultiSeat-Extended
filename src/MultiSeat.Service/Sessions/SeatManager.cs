@@ -949,14 +949,7 @@ public sealed class SeatManager
     /// </summary>
     public bool ControllerRoutingEnabled => _options.EnableViGEmController;
 
-    /// <summary>Get the InputRouter for API access to controller assignments.</summary>
-    public InputRouter InputRouter => _inputRouter;
 
-    /// <summary>Get the InputHookManager for API status queries.</summary>
-    public InputHookManager InputHookManager => _inputHookManager;
-
-    /// <summary>Get the ApolloManager for API queries.</summary>
-    public ApolloManager ApolloManager => _apolloManager;
 
     public IReadOnlyList<string> GetPairedClients(Guid seatId)
     {

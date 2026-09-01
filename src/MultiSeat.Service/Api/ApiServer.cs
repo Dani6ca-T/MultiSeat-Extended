@@ -31,6 +31,8 @@ public static class ApiServer
         // Re-use the host's singleton registrations
         builder.Services.AddSingleton(hostServices.GetRequiredService<Sessions.SeatManager>());
         builder.Services.AddSingleton(hostServices.GetRequiredService<Sessions.RdpWrapper>());
+        builder.Services.AddSingleton(hostServices.GetRequiredService<Input.InputRouter>());
+        builder.Services.AddSingleton(hostServices.GetRequiredService<Input.InputHookManager>());
         var sessionLauncher = hostServices.GetRequiredService<Sessions.SessionLauncher>();
         builder.Services.AddSingleton(sessionLauncher);
         builder.Services.AddSingleton<Sessions.ISessionLauncher>(sessionLauncher);

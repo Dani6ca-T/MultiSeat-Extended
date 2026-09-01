@@ -33,7 +33,7 @@ Control Plane
          └── Streaming
 ```
 
-Current reality: 2-layer (`MultiSeat.Shared` + `MultiSeat.Service`) with `SeatManager` orchestrating 14 concrete dependencies + 2 interfaces + 1 interface collection.
+Current reality: 2-layer (`MultiSeat.Shared` + `MultiSeat.Service`) with `SeatManager` orchestrating 12 concrete dependencies + 3 interfaces + 1 interface collection.
 
 ---
 
@@ -56,7 +56,8 @@ Working tree:    Clean (only untracked ProcessTracking + docs)
 | ISessionLauncher interface extraction | `8fefd3c` | ✅ Interface created |
 | ISessionLauncher wiring completion | `a6d9359` | ✅ SeatManager + SessionHealthCheck wired |
 | IVirtualDisplayManager extraction | `5f03be0` | ✅ Fully wired |
-| IAccountManager extraction | PENDING | ✅ Implemented, awaiting commit |
+| IAccountManager extraction | `0d3d02d` | ✅ Completed |
+| Service Locator removal | PENDING | ✅ Implemented, awaiting commit |
 | Initial repository audit | `8fefd3c` | ✅ Complete |
 | Traycer branch audit | Untracked | ✅ Complete |
 | Historical architecture audit | Untracked | ✅ Complete |
@@ -65,7 +66,7 @@ Working tree:    Clean (only untracked ProcessTracking + docs)
 | AccountManager boundary audit | Untracked | ✅ APPROVED + COMPLETED |
 | IEmulatorConfigSeeder | Original | ✅ Existing |
 
-**SeatManager dependency status**: 13 concrete, 3 interfaced (ISessionLauncher, IVirtualDisplayManager, IAccountManager), 1 interface collection (IEnumerable\<IEmulatorConfigSeeder\>).
+**SeatManager dependency status**: 12 concrete, 3 interfaced (ISessionLauncher, IVirtualDisplayManager, IAccountManager), 1 interface collection (IEnumerable\<IEmulatorConfigSeeder\>). Public properties removed: InputRouter, InputHookManager, ApolloManager.
 
 ---
 
@@ -273,14 +274,14 @@ Leave the repository in a safe state. Update this file before stopping whenever 
 ```
 Last verified:     2026-08-31
 Branch:            master
-HEAD:              PENDING (after IAccountManager commit)
-origin/master:     d27ad1f5b18380d190f97ff76bebfc0d48b851d9
-Working tree:      IAccountManager extraction staged for commit
-Current task:      IAccountManager extraction — COMPLETED, awaiting commit+push
+HEAD:              PENDING (after Service Locator removal commit)
+origin/master:     0d3d02d (IAccountManager extraction)
+Working tree:      Service Locator removal staged for commit
+Current task:      Service Locator removal — COMPLETED, awaiting commit+push
 Status:            Done
-Last completed:    IAccountManager extraction
-Next exact step:   Commit and push, then investigate IProcessInjector or Service Locator removal
+Last completed:    Service Locator removal
+Next exact step:   Commit and push, then select next architectural improvement
 Known blocker:     ProcessTracking still can't compile on master (pre-existing, untracked)
-Test baseline:     387 passed / 17 skipped / 0 failed (383 baseline + 4 from build restoration)
+Test baseline:     387 passed / 17 skipped / 0 failed
 Build:             ✅ 0 errors from tracked code, 9 errors from pre-existing ProcessTracking
 ```
