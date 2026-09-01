@@ -129,4 +129,60 @@ internal static partial class Kernel32
         string? lpCurrentDirectory,
         ref StartupInfo lpStartupInfo,
         out ProcessInformation lpProcessInformation);
+
+    // ── Job Objects ──────────────────────────────────────────────────
+    public const uint JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x00002000;
+
+    // JOBOBJECTINFOCLASS — only ExtendedLimitInformation is used.
+    public const int JobObjectInfoClassExtendedLimitInformation = 9;
+
+    [StructLayout(LayoutKind.Sequential)]
+    public struct JobObjectBasicLimitInformation
+    {
+        public long PerProcessUserTimeLimit;
+        public long PerJobUserTimeLimit;
+        public uint LimitFlags;
+        public IntPtr MinimumWorkingSetSize;
+        public IntPtr MaximumWorkingSetSize;
+        public uint ActiveProcessLimit;
+        public IntPtr AffinityPriorityClass;
+        public uint SchedulingClass;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    public struct IoCounters
+    {
+        public ulong ReadOperationCount;
+        public ulong WriteOperationCount;
+        public ulong OtherOperationCount;
+        public ulong ReadTransferCount;
+        public ulong WriteTransferCount;
+        public ulong OtherTransferCount;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    public struct JobObjectExtendedLimitInformation
+    {
+        public JobObjectBasicLimitInformation BasicLimitInformation;
+        public IoCounters IoInfo;
+        public IntPtr ProcessMemoryLimit;
+        public IntPtr JobMemoryLimit;
+        public IntPtr PeakProcessMemoryUsed;
+        public IntPtr PeakJobMemoryUsed;
+    }
+
+    [LibraryImport(Lib, SetLastError = true, StringMarshalling = StringMarshalling.Utf16)]
+    public static partial IntPtr CreateJobObjectW(IntPtr lpJobAttributes, string? lpName);
+
+    [LibraryImport(Lib, SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static partial bool SetInformationJobObject(
+        IntPtr hJob,
+        int jobObjectInformationClass,
+        ref JobObjectExtendedLimitInformation lpJobObjectInformation,
+        uint cbJobObjectInformationLength);
+
+    [LibraryImport(Lib, SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static partial bool AssignProcessToJobObject(IntPtr hJob, IntPtr hProcess);
 }
