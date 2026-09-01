@@ -57,7 +57,7 @@ Working tree:    Clean (only untracked ProcessTracking + docs)
 | ISessionLauncher wiring completion | `a6d9359` | ✅ SeatManager + SessionHealthCheck wired |
 | IVirtualDisplayManager extraction | `5f03be0` | ✅ Fully wired |
 | IAccountManager extraction | `0d3d02d` | ✅ Completed |
-| Service Locator removal | PENDING | ✅ Implemented, awaiting commit |
+| Service Locator removal | `d4486c0` | ✅ Completed |
 | Initial repository audit | `8fefd3c` | ✅ Complete |
 | Traycer branch audit | Untracked | ✅ Complete |
 | Historical architecture audit | Untracked | ✅ Complete |
@@ -274,8 +274,8 @@ Leave the repository in a safe state. Update this file before stopping whenever 
 ```
 Last verified:     2026-08-31
 Branch:            master
-HEAD:              PENDING (after Service Locator removal commit)
-origin/master:     0d3d02d (IAccountManager extraction)
+HEAD:              d4486c0
+origin/master:     d4486c0
 Working tree:      Service Locator removal staged for commit
 Current task:      Service Locator removal — COMPLETED, awaiting commit+push
 Status:            Done
