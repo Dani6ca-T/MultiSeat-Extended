@@ -578,3 +578,61 @@ ApolloManager → ApolloServerQuery:  valid (QueryHealthAsync)
 - **Commit**: cdee422 (already pushed)
 - **Push**: origin/master — already up to date
 - **Changes made**: NONE during this verification — cdee422 passed all checks
+
+---
+
+## 17. Automated Test Verification — 2026-09-01
+
+**Commit**: `70369c0` — `test(apollo): add DI smoke and QueryHealthAsync verification`
+
+### Tests added
+
+| Test | File | Purpose |
+|------|------|---------|
+| `FullServiceGraph_CanBeConstructed` | Di/ApolloDiSmokeTests.cs | Verifies full Program.cs DI graph resolves |
+| `SeatManager_Dependencies_RoutedThroughApolloManager` | Di/ApolloDiSmokeTests.cs | Verifies architectural dependency chain |
+| `QueryHealthAsync_ReturnsNull_WhenNoProcessId` | Streaming/ApolloManagerQueryHealthTests.cs | Guard: no PID → null |
+| `QueryHealthAsync_ReturnsNull_WhenNegativeProcessId` | Streaming/ApolloManagerQueryHealthTests.cs | Guard: negative PID → null |
+| `QueryHealthAsync_ReturnsNull_WhenNoPortBase` | Streaming/ApolloManagerQueryHealthTests.cs | Guard: no port → null |
+| `QueryHealthAsync_ReturnsNull_WhenBothInvalid` | Streaming/ApolloManagerQueryHealthTests.cs | Guard: both invalid → null |
+| `QueryHealthAsync_DelegatesToServerQuery_WhenValidProcessAndPort` | Streaming/ApolloManagerQueryHealthTests.cs | Delegation: valid PID+port → QueryAsync |
+| `QueryHealthAsync_DoesNotReturnNullFromGuard_WhenValidProcessAndPort` | Streaming/ApolloManagerQueryHealthTests.cs | Verifies guard clause not hit |
+| `QueryHealthAsync_UsesCorrectPortOffset` | Streaming/ApolloManagerQueryHealthTests.cs | Verifies PortBase + OffsetGfeHttp |
+| `QueryHealthAsync_ThrowsOnCancelledToken` | Streaming/ApolloManagerQueryHealthTests.cs | Verifies CancellationToken propagation |
+
+### Build result
+
+```
+Build: 0 errors (with ProcessTracking temporarily excluded)
+Warning: 1 pre-existing (CS1998 in SessionLauncher.cs)
+```
+
+### Full test result
+
+```
+Passed:  400
+Failed:  0
+Skipped: 17
+Total:   417
+```
+
+### New test result
+
+```
+Passed: 10
+Failed: 0
+```
+
+### Limitations
+
+- Build requires temporarily excluding untracked ProcessTracking files (pre-existing issue)
+- Tests run with ProcessTracking excluded — ProcessTracking is restored after verification
+- .NET SDK was incomplete (missing Sdks/ subdirectory) — repaired by extracting SDK 9.0.317 from cached zip
+
+### Git safety
+
+- Only test files added: `src/MultiSeat.Tests/Di/ApolloDiSmokeTests.cs`, `src/MultiSeat.Tests/Streaming/ApolloManagerQueryHealthTests.cs`
+- No production source modified
+- ProcessTracking untouched (restored after temporary exclusion)
+- traycer untouched
+- No .csproj changes
