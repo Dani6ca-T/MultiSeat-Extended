@@ -99,15 +99,60 @@ if ($bandName -eq '2.4 GHz') {
     $problems += "Could not determine the band from channel '$channel' - read the radio type above."
 }
 
-$rxNum = 0
+$rxNum = 0; $txNum = 0
 [void][int]::TryParse(($rx -replace '[^\d].*$',''), [ref]$rxNum)
-if ($rxNum -gt 0 -and $rxNum -lt 200) {
-    $problems += "Receive rate is only $rxNum Mbps. That is a weak link for streaming even if speed tests look fine - streaming needs steadiness, not peak."
+[void][int]::TryParse(($tx -replace '[^\d].*$',''), [ref]$txNum)
+
+# Judge on RSSI, not the percentage. Windows' "Signal %" is a vendor-mapped scale with no fixed
+# meaning - 75% read as comfortable on a real measured link whose RSSI was -66 dBm, which is
+# marginal. dBm is an absolute figure and the industry thresholds are well established:
+#   -50 and better  excellent
+#   -60             good
+#   -67             the usual floor for latency-sensitive traffic (VoIP, streaming)
+#   -70 and worse   expect retries
+# The trap is that a marginal link still has plenty of BANDWIDTH. It fails on CONSISTENCY: weak
+# signal means retransmissions, and retransmissions are latency spikes, which is what people
+# report as lag.
+$rssi = Field 'Rssi'
+$rssiNum = 0
+if ($rssi) { [void][int]::TryParse(($rssi -replace '[^-\d]',''), [ref]$rssiNum) }
+
+if ($rssiNum -lt 0) {
+    if ($rssiNum -le -70) {
+        $problems += "RSSI is $rssiNum dBm - poor. Expect retransmissions, and every retransmission is a latency spike."
+    } elseif ($rssiNum -le -65) {
+        $problems += "RSSI is $rssiNum dBm - marginal, near the -67 floor for latency-sensitive traffic. There is enough bandwidth here; what you lose is CONSISTENCY, and that is what reads as lag."
+    } elseif ($rssiNum -le -60) {
+        $problems += "RSSI is $rssiNum dBm - usable but not comfortable for streaming. Better than -60 is the target."
+    }
+} elseif ($signal -and (($signal -replace '%','') -as [int])) {
+    $sig = [int]($signal -replace '%','')
+    if ($sig -lt 70) { $problems += "Signal is $signal (no RSSI reported). Under ~70% the radio drops to slower, more robust rates." }
 }
 
-if ($signal -and ($signal -replace '%','') -as [int]) {
-    $sig = [int]($signal -replace '%','')
-    if ($sig -lt 70) { $problems += "Signal is $signal. Under ~70% the radio starts dropping to slower, more robust rates." }
+# Rate judged against what the ADAPTER can do, not an absolute floor. A 160MHz Wi-Fi 6/6E card
+# negotiating a few hundred Mbps is running far under its own ceiling, and that gap is the useful
+# signal - it means narrow channel width, a low MCS from weak signal, or fewer spatial streams.
+$wide = $radio -match '802\.11(ax|be)' -or ($raw -join ' ') -match '160MHz|Wi-Fi 6'
+if ($rxNum -gt 0) {
+    if ($rxNum -lt 200) {
+        $problems += "Receive rate is only $rxNum Mbps - a weak link for streaming even if speed tests look fine."
+    } elseif ($wide -and $rxNum -lt 600) {
+        $problems += "Receive rate is $rxNum Mbps on an 802.11ax-class adapter, well under what it can do. Usually means a narrow channel width (20/40MHz) or a low rate forced by weak signal."
+    }
+}
+if ($txNum -gt 0 -and $rxNum -gt 0 -and $txNum -lt ($rxNum / 1.8)) {
+    $problems += "Transmit rate ($txNum Mbps) is far below receive ($rxNum Mbps). Lopsided like that usually means the client's radio is struggling to reach the AP - antenna position, your hands over the device, or distance."
+}
+
+# 6 GHz on the same SSID is worth knowing about: far less congested than 5 GHz, though shorter
+# range. Note WPA2 cannot use it - 6 GHz mandates WPA3, so a WPA2 profile silently never joins.
+if (($raw -join "`n") -match 'Band:\s*6 GHz' -and $bandName -ne '6 GHz') {
+    Write-Host '  NOTE: this AP also has a 6 GHz radio you are not using.' -ForegroundColor DarkGray
+    if (($raw -join ' ') -match 'WPA2') {
+        Write-Host '        Your profile is WPA2, and 6 GHz REQUIRES WPA3 - so it cannot be joined' -ForegroundColor DarkGray
+        Write-Host '        until the network is set to WPA3 or WPA2/WPA3 mixed mode.' -ForegroundColor DarkGray
+    }
 }
 
 if ($problems.Count -eq 0) {
