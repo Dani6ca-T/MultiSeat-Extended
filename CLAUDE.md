@@ -152,6 +152,41 @@ Two separate scripts — prereqs and service deploy are intentionally split:
 .\scripts\install-service.ps1 -Uninstall
 ```
 
+### RDPWrap offsets — the installer now verifies, it does not assume
+
+RDPWrap patches `termsrv.dll` at byte offsets looked up in `rdpwrap.ini` **by DLL version**. A
+Windows update moves them, the ini stops matching, and multi-session RDP dies — which takes every
+seat with it, because a seat **is** an RDP session.
+
+The prereq script now checks coverage after copying the ini and escalates only as far as needed:
+
+1. the ini covers the running build → nothing to do
+2. it does not → **re-download the community ini** (`sebaxakerhtc/rdpwrap.ini`) and refresh the cache
+3. the community has not caught up either → **generate the offsets locally** from this machine's
+   `termsrv.dll`, via `llccd/RDPWrapOffsetFinder` (MIT), after backing the ini up
+
+Community offsets are preferred wherever both exist — far more hosts have exercised them.
+Generation is a last resort, not the default. To ask about it without running the installer:
+
+```powershell
+.\scripts\check-rdpwrap-offsets.ps1            # read-only: 0 covered, 1 not, 2 cannot tell
+.\scripts\check-rdpwrap-offsets.ps1 -Apply     # generate + merge + restart TermService
+```
+
+⚠️ **`termsrv.dll` reports two different versions and only one of them is right.** Its
+StringFileInfo and its `VS_FIXEDFILEINFO` disagree — measured here: the string said
+`10.0.26100.8115` while the raw said `10.0.26100.8972`, and **RDPWrap keys on the raw one**.
+`.VersionInfo.FileVersion` returns the string, so checking it can report "covered" off a section
+that is not the one in play. Read `FileVersionRaw`. Coverage also needs **both** `[version]` and
+`[version-SLInit]`: a half-present pair is worse than none, because RDPWrap patches with what it
+finds.
+
+⛔ **Why this check exists at all.** `Get-Prerequisite` caches downloads by filename forever, which
+is right for an installer and wrong for a file whose job is to track Windows builds. The cached
+`rdpwrap.ini` on the reference host was from April, did not cover the running build, and was being
+copied over a good one on **every** run — so "re-run the prereq script to refresh `rdpwrap.ini`"
+had been doing the opposite for months, silently, because nothing checked afterwards.
+
 ## Key Runtime Paths
 
 | Path | Purpose |
@@ -331,7 +366,8 @@ a healthy jail — and it is why this is off by default. Set `SeatPadDevicePaths
 ## Known Constraints
 
 - NVIDIA consumer GPUs: 3–5 concurrent NVENC sessions max.
-- RDPWrap breaks after Windows updates to `termsrv.dll` — re-run prereq script to refresh `rdpwrap.ini`.
+- RDPWrap breaks after Windows updates to `termsrv.dll` — re-run the prereq script, which now
+  **verifies** the ini covers the running build instead of assuming it does (see below).
 - mstsc window for each seat must never be manually disconnected (session goes Disconnected, display APIs stop working).
 - Single GPU only — multi-GPU not tested.
 - Windows 11 build 26100+ / x64 only.
