@@ -1426,7 +1426,16 @@ if ($Skipped.Count -gt 0) {
 
 if ($NeedsReboot -and -not $SkipReboot) {
     Write-Host "`n  A REBOOT is required before continuing." -ForegroundColor Magenta
-    $reboot = Read-Host "  Reboot now? (y/N)"
+    # Read-Host THROWS under -NonInteractive, which failed the whole script at the very last step
+    # even when every install before it succeeded — so a scripted or CI run reported failure for a
+    # prompt it was never going to answer. Ask if we can; otherwise say what to do and exit clean.
+    $reboot = $null
+    try {
+        $reboot = Read-Host "  Reboot now? (y/N)"
+    } catch {
+        Write-Host "  (non-interactive session — not prompting)" -ForegroundColor DarkGray
+        Write-Host "  Reboot when convenient, then re-run this script to confirm clean." -ForegroundColor Magenta
+    }
     if ($reboot -eq 'y') { Restart-Computer -Force }
 } elseif ($NeedsReboot) {
     Write-Host "`n  A REBOOT is required before continuing." -ForegroundColor Magenta
