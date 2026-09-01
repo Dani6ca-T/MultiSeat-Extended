@@ -40,7 +40,6 @@ public sealed class SeatManager
     private readonly ProcessInjector _processInjector;
     private readonly IVirtualDisplayManager _displayManager;
     private readonly ApolloManager _apolloManager;
-    private readonly ApolloConfigBuilder _configBuilder;
     private readonly PortAllocator _portAllocator;
     private readonly FirewallManager _firewall;
     private readonly AudioRouter _audioRouter;
@@ -49,7 +48,6 @@ public sealed class SeatManager
     private readonly InputHookManager _inputHookManager;
     private readonly HidHideConfigurator _hidHide;
     private readonly OnConnectAppLauncher _onConnectApps;
-    private readonly Monitoring.ApolloServerQuery _serverQuery;
     private readonly IEnumerable<IEmulatorConfigSeeder> _emulatorSeeders;
 
     public SeatManager(
@@ -60,7 +58,6 @@ public sealed class SeatManager
         ProcessInjector processInjector,
         IVirtualDisplayManager displayManager,
         ApolloManager apolloManager,
-        ApolloConfigBuilder configBuilder,
         PortAllocator portAllocator,
         FirewallManager firewall,
         AudioRouter audioRouter,
@@ -69,7 +66,6 @@ public sealed class SeatManager
         InputHookManager inputHookManager,
         HidHideConfigurator hidHide,
         OnConnectAppLauncher onConnectApps,
-        Monitoring.ApolloServerQuery serverQuery,
         IEnumerable<IEmulatorConfigSeeder> emulatorSeeders)
     {
         _logger = logger;
@@ -79,7 +75,6 @@ public sealed class SeatManager
         _processInjector = processInjector;
         _displayManager = displayManager;
         _apolloManager = apolloManager;
-        _configBuilder = configBuilder;
         _portAllocator = portAllocator;
         _firewall = firewall;
         _audioRouter = audioRouter;
@@ -88,7 +83,6 @@ public sealed class SeatManager
         _inputHookManager = inputHookManager;
         _hidHide = hidHide;
         _onConnectApps = onConnectApps;
-        _serverQuery = serverQuery;
         _emulatorSeeders = emulatorSeeders;
     }
 
@@ -322,7 +316,6 @@ public sealed class SeatManager
 
             {
                 var logPath = _apolloManager.GetLogPath(seat.AccountName, _options.ApolloConfigDir);
-                var configPath = _apolloManager.GetConfigPath(seat.Id);
 
                 // Wait for Apollo to initialize SudoVDA IPC and write its display log.
                 // The session MUST stay ACTIVE (mstsc connected) — Apollo calls QueryDisplayConfig
@@ -335,10 +328,10 @@ public sealed class SeatManager
                 // always query and set display modes when clients connect.
 
                 var displayId = _apolloManager.ParseSudoVdaDisplayId(logPath);
-                if (displayId != null && configPath != null)
+                if (displayId != null)
                 {
                     seat.DisplayDevicePath = displayId;
-                    _configBuilder.UpdateDisplayOutput(configPath, displayId);
+                    _apolloManager.UpdateDisplayOutput(seat, displayId);
 
                     _logger.LogInformation(
                         "Seat {Id}: SudoVDA UUID discovered ({Dev}) — restarting Apollo with display target",
@@ -486,7 +479,7 @@ public sealed class SeatManager
         try { _portAllocator.Release(seat.PortBase); } catch { /* best effort */ }
 
         // Clean up per-seat Apollo config directory
-        try { _configBuilder.CleanupConfig(seat.AccountName, _options.ApolloConfigDir); } catch { /* best effort */ }
+        try { _apolloManager.CleanupSeatConfig(seat); } catch { /* best effort */ }
     }
 
     // ═══════════════════════════════════════════════════════════════════
@@ -509,9 +502,8 @@ public sealed class SeatManager
         var apolloAlive = seat.ApolloProcessId > 0 && _apolloManager.IsAlive(seatId);
 
         Monitoring.ApolloServerInfo? server = null;
-        if (apolloAlive && seat.PortBase > 0)
-            server = await _serverQuery.QueryAsync(
-                seat.PortBase + Shared.Constants.OffsetGfeHttp, ct);
+        if (apolloAlive)
+            server = await _apolloManager.QueryHealthAsync(seat, ct);
 
         return new SeatServices
         {
@@ -556,12 +548,8 @@ public sealed class SeatManager
         seat.ApolloProcessId = await _apolloManager.StartAsync(seat, ct);
 
         // Re-apply display config
-        var configPath = _apolloManager.GetConfigPath(seat.Id);
-        if (configPath is not null)
-        {
-            if (!string.IsNullOrEmpty(seat.DisplayDevicePath))
-                _configBuilder.UpdateDisplayOutput(configPath, seat.DisplayDevicePath);
-        }
+        if (!string.IsNullOrEmpty(seat.DisplayDevicePath))
+            _apolloManager.UpdateDisplayOutput(seat, seat.DisplayDevicePath);
 
         _ = BroadcastState(seat);
         _logger.LogInformation("Seat {Id}: Apollo started by user (PID {Pid})", seatId, seat.ApolloProcessId);
@@ -578,12 +566,8 @@ public sealed class SeatManager
 
         seat.ApolloProcessId = await _apolloManager.StartAsync(seat, ct);
 
-        var configPath = _apolloManager.GetConfigPath(seat.Id);
-        if (configPath is not null)
-        {
-            if (!string.IsNullOrEmpty(seat.DisplayDevicePath))
-                _configBuilder.UpdateDisplayOutput(configPath, seat.DisplayDevicePath);
-        }
+        if (!string.IsNullOrEmpty(seat.DisplayDevicePath))
+            _apolloManager.UpdateDisplayOutput(seat, seat.DisplayDevicePath);
 
         if (seat.ApolloProcessId > 0)
             await ApplyDisplayIsolationAsync(seat, ct);
@@ -642,9 +626,7 @@ public sealed class SeatManager
 
         seat.DisplayDevicePath = result.DeviceId;
 
-        var configPath = _apolloManager.GetConfigPath(seat.Id);
-        if (configPath is not null)
-            _configBuilder.UpdateDisplayOutput(configPath, result.DeviceId);
+        _apolloManager.UpdateDisplayOutput(seat, result.DeviceId);
 
         _logger.LogInformation(
             "Seat {Id}: SudoVDA display found after client connect ({Dev}) — applying display isolation",
@@ -868,7 +850,7 @@ public sealed class SeatManager
         seat.SessionId = await _sessionLauncher.LaunchSessionAsync(seat.AccountName, ct, geometry);
 
         // Apollo advertises the seat's resolution in its config, so regenerate before starting.
-        _configBuilder.BuildConfig(seat, _options.ApolloConfigDir);
+        _apolloManager.RebuildConfig(seat);
         seat.ApolloProcessId = await _apolloManager.StartAsync(seat, ct);
 
         if (seat.AutoStart)
@@ -900,9 +882,8 @@ public sealed class SeatManager
         await _displayManager.CreateDisplayAsync(seat, ct);
 
         // Update Apollo config
-        var configPath = _apolloManager.GetConfigPath(seat.Id);
-        if (configPath is not null && !string.IsNullOrEmpty(seat.DisplayDevicePath))
-            _configBuilder.UpdateDisplayOutput(configPath, seat.DisplayDevicePath);
+        if (!string.IsNullOrEmpty(seat.DisplayDevicePath))
+            _apolloManager.UpdateDisplayOutput(seat, seat.DisplayDevicePath);
 
         _ = BroadcastState(seat);
         _logger.LogInformation("Seat {Id}: display reset", seatId);
@@ -951,21 +932,21 @@ public sealed class SeatManager
     {
         var seat = GetSeat(seatId);
         if (seat is null) return Array.Empty<string>();
-        return _configBuilder.GetPairedClients(seat.AccountName, _options.ApolloConfigDir);
+        return _apolloManager.GetSeatPairedClients(seat);
     }
 
     public bool UnpairClient(Guid seatId, string clientName)
     {
         var seat = GetSeat(seatId);
         if (seat is null) return false;
-        return _configBuilder.UnpairClient(seat.AccountName, _options.ApolloConfigDir, clientName);
+        return _apolloManager.UnpairSeatClient(seat, clientName);
     }
 
     public void UnpairAllClients(Guid seatId)
     {
         var seat = GetSeat(seatId);
         if (seat is null) return;
-        _configBuilder.UnpairAllClients(seat.AccountName, _options.ApolloConfigDir);
+        _apolloManager.UnpairAllSeatClients(seat);
     }
 
     private void UnassignControllersForSeat(Guid seatId)

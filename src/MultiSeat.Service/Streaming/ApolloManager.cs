@@ -41,6 +41,7 @@ public sealed class ApolloManager
     private readonly MultiSeatOptions _options;
     private readonly ApolloConfigBuilder _configBuilder;
     private readonly ProcessInjector _processInjector;
+    private readonly Monitoring.ApolloServerQuery _serverQuery;
 
     // Seat → Apollo instance tracking
     private readonly ConcurrentDictionary<Guid, ApolloInstance> _instances = new();
@@ -49,12 +50,14 @@ public sealed class ApolloManager
         ILogger<ApolloManager> logger,
         IOptions<MultiSeatOptions> options,
         ApolloConfigBuilder configBuilder,
-        ProcessInjector processInjector)
+        ProcessInjector processInjector,
+        Monitoring.ApolloServerQuery serverQuery)
     {
         _logger = logger;
         _options = options.Value;
         _configBuilder = configBuilder;
         _processInjector = processInjector;
+        _serverQuery = serverQuery;
     }
 
     /// <summary>
@@ -287,6 +290,87 @@ public sealed class ApolloManager
         return _instances.TryGetValue(seatId, out var instance)
             ? instance.RestartCount
             : 0;
+    }
+
+    // ═══════════════════════════════════════════════════════════════════
+    //  CONFIGURATION ORCHESTRATION
+    //  These methods route SeatManager's configuration requests through
+    //  ApolloManager, keeping Apollo-specific details (sunshine.conf,
+    //  sunshine_state.json) out of the orchestration layer.
+    // ═══════════════════════════════════════════════════════════════════
+
+    /// <summary>
+    /// Update the display output target in the seat's Apollo config.
+    /// Called after SudoVDA UUID discovery so Apollo points at the correct virtual display.
+    /// </summary>
+    public void UpdateDisplayOutput(SeatInfo seat, string displayId)
+    {
+        var configPath = GetConfigPath(seat.Id);
+        if (configPath is not null)
+            _configBuilder.UpdateDisplayOutput(configPath, displayId);
+    }
+
+    /// <summary>
+    /// Regenerate the seat's Apollo config (sunshine.conf) from current seat state.
+    /// Called when seat properties change (e.g. resolution) and Apollo must re-read them.
+    /// </summary>
+    public void RebuildConfig(SeatInfo seat)
+    {
+        _configBuilder.BuildConfig(seat, _options.ApolloConfigDir);
+    }
+
+    /// <summary>
+    /// Clean up ephemeral Apollo config files for a seat on teardown.
+    /// Removes junction points; preserves sunshine_state.json and TLS credentials.
+    /// </summary>
+    public void CleanupSeatConfig(SeatInfo seat)
+    {
+        _configBuilder.CleanupConfig(seat.AccountName, _options.ApolloConfigDir);
+    }
+
+    /// <summary>
+    /// List Moonlight clients currently paired to this seat.
+    /// Reads from sunshine_state.json (Apollo's pairing state file).
+    /// </summary>
+    public IReadOnlyList<string> GetSeatPairedClients(SeatInfo seat)
+    {
+        return _configBuilder.GetPairedClients(seat.AccountName, _options.ApolloConfigDir);
+    }
+
+    /// <summary>
+    /// Remove a single paired Moonlight client from this seat.
+    /// Changes take effect after Apollo restarts.
+    /// </summary>
+    public bool UnpairSeatClient(SeatInfo seat, string clientName)
+    {
+        return _configBuilder.UnpairClient(seat.AccountName, _options.ApolloConfigDir, clientName);
+    }
+
+    /// <summary>
+    /// Remove all paired Moonlight clients from this seat.
+    /// The server UUID is preserved — clients just need to re-pair.
+    /// </summary>
+    public void UnpairAllSeatClients(SeatInfo seat)
+    {
+        _configBuilder.UnpairAllClients(seat.AccountName, _options.ApolloConfigDir);
+    }
+
+    // ═══════════════════════════════════════════════════════════════════
+    //  HEALTH / QUERY ORCHESTRATION
+    // ═══════════════════════════════════════════════════════════════════
+
+    /// <summary>
+    /// Query whether this seat's Apollo instance is reachable and streaming.
+    /// Sends the same HTTP serverinfo request a Moonlight client would.
+    /// Returns null when the instance did not answer.
+    /// </summary>
+    public async Task<Monitoring.ApolloServerInfo?> QueryHealthAsync(SeatInfo seat, CancellationToken ct)
+    {
+        if (seat.ApolloProcessId <= 0 || seat.PortBase <= 0)
+            return null;
+
+        return await _serverQuery.QueryAsync(
+            seat.PortBase + Shared.Constants.OffsetGfeHttp, ct);
     }
 
     // ═══════════════════════════════════════════════════════════════════
