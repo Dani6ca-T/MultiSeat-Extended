@@ -797,7 +797,120 @@ function Get-RdpWrapperDllPath {
     return $null
 }
 
-# Helper: copy the ini and restart TermService so the new ini takes effect immediately.
+# Helper: the termsrv.dll version RDPWrap actually keys on.
+#
+# ⚠️ termsrv.dll's StringFileInfo and its VS_FIXEDFILEINFO DISAGREE. Measured on the reference
+# host 2026-09-01: the string said 10.0.26100.8115 while the raw fixed-info said 10.0.26100.8972,
+# and 8972 is the section RDPWrap uses. Checking the string can therefore report "covered" off a
+# section that is not the one in play — a right answer for the wrong reason, which stays invisible
+# until a build where only one of the two exists. Always read FileVersionRaw, and never fall back
+# to the string.
+function Get-TermSrvVersion {
+    $termsrv = Join-Path $env:SystemRoot "System32\termsrv.dll"
+    if (-not (Test-Path $termsrv)) { return $null }
+    $raw = (Get-Item $termsrv).VersionInfo.FileVersionRaw
+    if (-not $raw) { return $null }
+    return ("{0}.{1}.{2}.{3}" -f $raw.Major, $raw.Minor, $raw.Build, $raw.Revision)
+}
+
+# Helper: does this ini cover that build?
+# BOTH sections are required — RDPWrap patches with whatever it finds, so a half-present pair is
+# worse than none.
+function Test-RdpWrapIniCoverage($iniPath, $version) {
+    if (-not $version -or -not (Test-Path $iniPath)) { return $false }
+    $ini = Get-Content $iniPath
+    $main   = [bool]($ini | Select-String -SimpleMatch -Pattern "[$version]"        -Quiet)
+    $slInit = [bool]($ini | Select-String -SimpleMatch -Pattern "[$version-SLInit]" -Quiet)
+    return ($main -and $slInit)
+}
+
+# Helper: compute offsets for the running termsrv.dll ourselves and append them to the ini.
+#
+# The community ini (sebaxakerhtc) is maintained by someone else on their own cadence, so between
+# a Windows update landing and their next commit there is a window where multi-session RDP is
+# dead — and every seat IS an RDP session, so MultiSeat is dead with it. That window is what this
+# closes. It only runs when the ini does not already cover the running build, so on a normal host
+# it costs nothing.
+#
+# llccd/RDPWrapOffsetFinder (MIT) was validated against a known-good answer on 2026-09-01: run on
+# a build the community ini already covered and multi-session demonstrably worked on, both the
+# symbol and _nosymbol builds produced all 20 keys IDENTICAL to that section. The _nosymbol one
+# matters most here — it pattern-matches instead of fetching PDBs from Microsoft's symbol server,
+# so it still works on a host with no route to those symbols, which is a normal state for a
+# machine whose remote access just broke.
+function Add-GeneratedRdpWrapOffsets($iniPath, $version) {
+    $zipPath = Get-Prerequisite "RDPWrapOffsetFinder-1.0.zip" `
+        "https://github.com/llccd/RDPWrapOffsetFinder/releases/download/v1.0/RDPWrapOffsetFinder-1.0.zip" `
+        "RDPWrapOffsetFinder v1.0 (generates offsets for an unlisted Windows build)"
+    if (-not $zipPath) {
+        Write-Host "  Could not obtain RDPWrapOffsetFinder -- cannot generate offsets." -ForegroundColor Yellow
+        return $false
+    }
+
+    $work = Join-Path $env:TEMP "rdpwrap-offsetfinder"
+    try {
+        if (!(Test-Path $work)) { New-Item -ItemType Directory -Path $work -Force | Out-Null }
+        Expand-Archive $zipPath -DestinationPath $work -Force
+    } catch {
+        Write-Host "  WARNING: Could not unpack RDPWrapOffsetFinder ($_)" -ForegroundColor Yellow
+        return $false
+    }
+
+    # x64 explicitly. Running the 32-bit build against a 64-bit termsrv.dll would produce
+    # confident, wrong offsets — and wrong offsets patch the wrong bytes.
+    $exeDir = Join-Path $work "64bit"
+    $exe    = Join-Path $exeDir "RDPWrapOffsetFinder.exe"
+    $exeNs  = Join-Path $exeDir "RDPWrapOffsetFinder_nosymbol.exe"
+    if (-not (Test-Path $exe)) {
+        Write-Host "  RDPWrapOffsetFinder x64 binary not found in the archive." -ForegroundColor Yellow
+        return $false
+    }
+
+    $termsrv = Join-Path $env:SystemRoot "System32\termsrv.dll"
+    Push-Location $exeDir
+    try {
+        $out = & $exe $termsrv 2>&1 | ForEach-Object { "$_".Trim() }
+        if (-not ($out | Where-Object { $_ -match "^SingleUserOffset" })) {
+            Write-Host "  Symbol lookup gave nothing usable -- trying the nosymbol build..." -ForegroundColor DarkGray
+            if (Test-Path $exeNs) {
+                $out = & $exeNs $termsrv 2>&1 | ForEach-Object { "$_".Trim() }
+            }
+        }
+    } catch {
+        Write-Host "  WARNING: RDPWrapOffsetFinder failed to run ($_)" -ForegroundColor Yellow
+        Pop-Location
+        return $false
+    }
+    Pop-Location
+
+    # 20 keys is the full set (12 patch + 8 SLInit). Anything short means the run half-failed, and
+    # appending a partial section is the one outcome worse than appending nothing.
+    $keys = @($out | Where-Object { $_ -match "=" })
+    if ($keys.Count -lt 20) {
+        Write-Host ("  Only {0} offsets produced (expected 20) -- refusing to write a partial section." -f $keys.Count) -ForegroundColor Yellow
+        return $false
+    }
+
+    # Sanity-check that the tool read the same build we are patching for. If it disagrees, the
+    # offsets belong to some other file and must not be written.
+    if (-not ($out | Where-Object { $_ -eq "[$version]" })) {
+        Write-Host "  Generated section is not for $version -- refusing to write it." -ForegroundColor Yellow
+        return $false
+    }
+
+    $backup = "$iniPath.$(Get-Date -Format 'yyyyMMdd-HHmmss').bak"
+    Copy-Item $iniPath $backup -Force
+
+    Add-Content -Path $iniPath -Value "" -Encoding ASCII
+    Add-Content -Path $iniPath -Value $out -Encoding ASCII
+
+    Write-Host "  Generated offsets for $version locally and appended them." -ForegroundColor Green
+    Write-Host "    backup: $backup" -ForegroundColor DarkGray
+    return $true
+}
+
+# Helper: copy the ini, make sure it actually covers this build, and restart TermService so the
+# new ini takes effect immediately.
 function Update-RdpWrapIni($rdpDir) {
     $iniFile = Get-ChildItem $ScriptDir -Filter "rdpwrap.ini" | Select-Object -First 1
     if (-not $iniFile) {
@@ -807,9 +920,70 @@ function Update-RdpWrapIni($rdpDir) {
         if ($f) { $iniFile = Get-Item $f }
     }
     if ($iniFile -and (Test-Path $rdpDir)) {
-        Copy-Item $iniFile.FullName "$rdpDir\rdpwrap.ini" -Force
+        $installedIni = Join-Path $rdpDir "rdpwrap.ini"
+        Copy-Item $iniFile.FullName $installedIni -Force
         Write-Host "  Updated rdpwrap.ini for current Windows build" -ForegroundColor DarkGray
-        # Restart TermService so rdpwrap.dll re-reads the ini with the new offsets.
+
+        # Verify rather than assume. A copied ini is not a covered build: the whole failure mode
+        # here is a Windows update the ini has not caught up with.
+        $version = Get-TermSrvVersion
+        if (-not $version) {
+            Write-Host "  WARNING: Could not read termsrv.dll's version -- cannot verify ini coverage." -ForegroundColor Yellow
+        } elseif (Test-RdpWrapIniCoverage $installedIni $version) {
+            Write-Host "  ini covers termsrv $version" -ForegroundColor DarkGray
+        } else {
+            Write-Host "  ini does NOT cover termsrv $version -- multi-session RDP would not work." -ForegroundColor Yellow
+
+            # Try a FRESH community ini before generating our own.
+            #
+            # Get-Prerequisite caches by filename and returns the cached copy forever, which is
+            # right for an installer but wrong for this file: rdpwrap.ini's whole job is to track
+            # Windows builds. Measured here 2026-09-01 — the cached copy was from April, covered
+            # 10.0.26100.8115 and not the running 10.0.26100.8972, and copying it over the
+            # installed ini DOWNGRADED a host that had been fine. That is the exact opposite of
+            # what "re-run the prereq script to refresh rdpwrap.ini" is supposed to do.
+            #
+            # Community offsets are preferred over generated ones when both are available: they
+            # have been used by many more hosts than this one.
+            if (-not $SkipDownload) {
+                Write-Host "  Re-downloading the community ini (the cached copy may be stale)..." -ForegroundColor Yellow
+                $fresh = Join-Path $env:TEMP "rdpwrap-fresh.ini"
+                try {
+                    $ProgressPreference = 'SilentlyContinue'
+                    Invoke-WebRequest -UseBasicParsing -OutFile $fresh `
+                        -Uri "https://raw.githubusercontent.com/sebaxakerhtc/rdpwrap.ini/master/rdpwrap.ini"
+                    $ProgressPreference = 'Continue'
+                    if (Test-RdpWrapIniCoverage $fresh $version) {
+                        Copy-Item $fresh $installedIni -Force
+                        # Refresh the cache too, so the next run does not repeat this.
+                        Copy-Item $fresh (Join-Path $ScriptDir "rdpwrap.ini") -Force
+                        Write-Host "  Fresh community ini covers termsrv $version -- using it." -ForegroundColor Green
+                    } else {
+                        Write-Host "  The community ini does not cover this build yet either." -ForegroundColor Yellow
+                    }
+                } catch {
+                    Write-Host "  Could not re-download the community ini ($_)" -ForegroundColor Yellow
+                }
+            }
+        }
+
+        # Re-test: the fresh download may have resolved it. Only generate as a last resort.
+        if ($version -and -not (Test-RdpWrapIniCoverage $installedIni $version)) {
+            Write-Host "  Generating the offsets from this machine's termsrv.dll instead..." -ForegroundColor Yellow
+            if (Add-GeneratedRdpWrapOffsets $installedIni $version) {
+                if (-not (Test-RdpWrapIniCoverage $installedIni $version)) {
+                    Write-Host "  WARNING: still not covered after generating -- seats will not start." -ForegroundColor Yellow
+                    $script:Skipped += "RDP Wrapper (no offsets for termsrv $version)"
+                }
+            } else {
+                Write-Host "  Could not generate offsets. Seats will not start until the ini covers" -ForegroundColor Yellow
+                Write-Host "  termsrv $version. Run scripts\check-rdpwrap-offsets.ps1 for detail." -ForegroundColor Yellow
+                $script:Skipped += "RDP Wrapper (no offsets for termsrv $version)"
+            }
+        }
+
+        # Restart TermService so rdpwrap.dll re-reads the ini — after any generated section has
+        # been appended, or the restart would load the ini we already know is insufficient.
         Write-Host "  Restarting TermService to apply new ini..." -ForegroundColor DarkGray
         try {
             Stop-Service -Name "TermService" -Force -ErrorAction Stop
