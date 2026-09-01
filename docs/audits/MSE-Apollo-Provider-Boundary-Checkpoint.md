@@ -510,11 +510,71 @@ SeatManager
 
 ---
 
-## 15. Verification
+## 15. Runtime Verification — 2026-09-01
 
-- **Source modified**: YES — `ApolloManager.cs`, `SeatManager.cs`
+```
+Runtime verification: PASS
+DI resolution:        PASS
+Apollo delegation:    PASS
+SeatManager flows:    PASS
+API startup/DI:       PASS (DI container resolves all types)
+Tests:                390 passed / 0 failed / 17 skipped
+```
+
+### DI wiring verified
+
+Program.cs registers (in order):
+1. `ApolloConfigBuilder` (line 263)
+2. `ApolloManager` (line 262) — depends on ApolloConfigBuilder + ApolloServerQuery
+3. `ApolloServerQuery` (line 266)
+4. `SeatManager` (line 286) — depends on ApolloManager only
+
+SeatManager constructor has NO reference to ApolloConfigBuilder or ApolloServerQuery.
+
+### ApolloManager delegation verified
+
+| Method | Call sites in SeatManager | Delegates to |
+|--------|--------------------------|-------------|
+| `UpdateDisplayOutput` | 5 (Provision, Start, Restart, LateDetect, ResetDisplay) | ApolloConfigBuilder |
+| `RebuildConfig` | 1 (SetResolution) | ApolloConfigBuilder |
+| `CleanupSeatConfig` | 1 (Teardown) | ApolloConfigBuilder |
+| `GetSeatPairedClients` | 1 (API) | ApolloConfigBuilder |
+| `UnpairSeatClient` | 1 (API) | ApolloConfigBuilder |
+| `UnpairAllSeatClients` | 1 (API) | ApolloConfigBuilder |
+| `QueryHealthAsync` | 1 (GetSeatServices) | ApolloServerQuery |
+
+### Static dependency check
+
+```
+SeatManager → ApolloConfigBuilder: 0 code refs (3 comment refs only)
+SeatManager → ApolloServerQuery:   0 code refs
+ApolloManager → ApolloConfigBuilder: valid (7 delegation methods)
+ApolloManager → ApolloServerQuery:  valid (QueryHealthAsync)
+```
+
+### Regression verified
+
+- `IAccountManager`: PASS — SeatManager uses `_accounts` via interface
+- `IVirtualDisplayManager`: PASS — SeatManager uses `_displayManager` via interface
+- `ISessionLauncher`: PASS — SeatManager uses `_sessionLauncher` via interface
+- Service Locator cleanup: PASS — InputEndpoints injects `InputRouter`, `InputHookManager` directly; no `SeatManager.InputRouter` / `SeatManager.InputHookManager` / `SeatManager.ApolloManager` property access
+- ProcessTracking: Untouched (temporarily moved for build verification, restored)
+- traycer: Untouched
+
+### Git safety
+
+- No tracked files modified
+- No staged files
+- No ProcessTracking changes
+- No traycer changes
+
+---
+
+## 16. Verification Summary
+
+- **Source modified**: YES — `ApolloManager.cs`, `SeatManager.cs` (in commit cdee422)
 - **ProcessTracking**: Untouched (temporarily moved for build verification, restored)
 - **traycer**: Untouched (separate branch)
-- **Files created**: This audit document (implementation result section added)
-- **Commit**: (see git log)
-- **Push**: (see git log)
+- **Commit**: cdee422 (already pushed)
+- **Push**: origin/master — already up to date
+- **Changes made**: NONE during this verification — cdee422 passed all checks
