@@ -118,9 +118,20 @@ public sealed class ApolloManager
             return pid;
         }
 
-        // Obtain actual OS start time for ProcessIdentity (PID reuse protection)
+        // Obtain actual OS start time for ProcessIdentity (PID reuse protection).
+        // If the start time cannot be obtained, the identity is invalid — kill the
+        // orphaned process and treat the start as a failure.
         var startedAt = GetProcessStartTime(pid);
-        var identity = new ProcessIdentity(pid, startedAt);
+        if (startedAt is null)
+        {
+            _logger.LogError(
+                "Seat {Id}: Apollo launched (PID {Pid}) but process start time could not be " +
+                "obtained — killing orphaned process", seat.Id, pid);
+            KillOrphanedProcess(pid);
+            return -1;
+        }
+
+        var identity = new ProcessIdentity(pid, startedAt.Value);
 
         var instance = new ApolloInstance(
             SeatId: seat.Id,
@@ -279,9 +290,19 @@ public sealed class ApolloManager
 
         if (pid > 0)
         {
-            // Obtain actual OS start time for new ProcessIdentity
+            // Obtain actual OS start time for new ProcessIdentity.
+            // If the start time cannot be obtained, kill the orphaned process.
             var startedAt = GetProcessStartTime(pid);
-            var newIdentity = new ProcessIdentity(pid, startedAt);
+            if (startedAt is null)
+            {
+                _logger.LogError(
+                    "Seat {Id}: Apollo relaunched (PID {Pid}) but process start time could not be " +
+                    "obtained — killing orphaned process", seat.Id, pid);
+                KillOrphanedProcess(pid);
+                return -1;
+            }
+
+            var newIdentity = new ProcessIdentity(pid, startedAt.Value);
 
             _instances[seat.Id] = prev with
             {
@@ -438,9 +459,12 @@ public sealed class ApolloManager
     /// <summary>
     /// Obtain the actual OS process start time for a PID.
     /// Used to construct <see cref="ProcessIdentity"/> for PID-reuse protection.
-    /// Falls back to UtcNow if the process exited between launch and now.
+    /// Returns null if the start time cannot be obtained (process exited, access denied, etc.).
+    /// Callers must NOT register a ProcessIdentity with a fallback timestamp — if the real
+    /// start time is unavailable, the launched process must be terminated and the start
+    /// treated as a failure.
     /// </summary>
-    private static DateTimeOffset GetProcessStartTime(int pid)
+    internal static DateTimeOffset? GetProcessStartTime(int pid)
     {
         try
         {
@@ -449,9 +473,41 @@ public sealed class ApolloManager
         }
         catch (ArgumentException)
         {
-            // Process already exited between launch and now — use current time as identity
-            return DateTimeOffset.UtcNow;
+            // PID does not exist — process already exited between launch and now
+            return null;
         }
+        catch (InvalidOperationException)
+        {
+            // Process object in invalid state
+            return null;
+        }
+        catch (System.ComponentModel.Win32Exception)
+        {
+            // Access denied or other OS error
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Kill an orphaned Apollo process that was launched but whose identity could not be
+    /// constructed. Called when GetProcessStartTime fails after a successful process launch.
+    /// Best-effort: if the kill fails, the process will be detected as an orphan on the
+    /// next seat provisioning cycle.
+    /// </summary>
+    private static void KillOrphanedProcess(int pid)
+    {
+        try
+        {
+            using var proc = Process.GetProcessById(pid);
+            if (!proc.HasExited)
+            {
+                proc.Kill(entireProcessTree: true);
+                proc.WaitForExit(3000);
+            }
+        }
+        catch (ArgumentException) { } // already exited
+        catch (InvalidOperationException) { }
+        catch (System.ComponentModel.Win32Exception) { }
     }
 
     // ═══════════════════════════════════════════════════════════════════
