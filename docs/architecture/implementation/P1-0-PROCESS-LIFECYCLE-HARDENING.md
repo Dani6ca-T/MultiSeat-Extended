@@ -8,6 +8,18 @@
 
 P1-0 fixes 8 issues (M1, M2, L1–L6) found in the P0 lifecycle hardening review. The core change is establishing a **single lifecycle model** for provider processes: event-driven monitoring (ProcessMonitor) is the primary signal, SessionHealthCheck is the reconciliation safety net.
 
+## Document Status
+
+> **This document describes the P1-0 target/design architecture, not a complete record of current production wiring.**
+>
+> - **L1–L6 are implemented** in ProcessTracking (WindowsProcessTracker, WindowsProcessMonitor, StartupOrphanDetector).
+> - **M1/M2 are not implemented/wired to production.** No production code subscribes to `IProcessMonitor.ProcessExited`, no `IProviderLifecycleConsumer` implementation exists, and `HandleProviderExitedAsync` is not a real method.
+> - **Current provider crash detection/recovery** remains: `SessionHealthCheck` (polling every 5s) → `ApolloManager.RestartAsync`.
+> - The event-driven `IProcessMonitor` / `IProviderLifecycleConsumer` flow shown in the Architecture section is **planned/design intent**, not current production behavior.
+> - References to `VibepolloManager` / `HandleProviderExitedAsync` in the target architecture should be understood as design-state terminology, not claims about currently existing production classes/methods.
+
+---
+
 ## Issues Fixed
 
 | ID | Severity | Description | Fix |
