@@ -21,7 +21,7 @@ public sealed class SystemStatus
     public long SystemMemoryMb { get; set; }
     public long AvailableMemoryMb { get; set; }
     public string WindowsBuild { get; set; } = string.Empty;
-    public bool RdpWrapperActive { get; set; }
+    public bool TermWrapActive { get; set; }
     public DateTimeOffset Timestamp { get; init; } = DateTimeOffset.UtcNow;
 }
 

@@ -562,8 +562,8 @@ public sealed class SessionLauncher : ISessionLauncher
                     $"RDP loopback session for '{accountName}' did not appear within timeout. " +
                     "Check the service log for the mstsc exit code logged above. " +
                     "Steps to diagnose: " +
-                    "(1) Re-run prerequisites\\install-prerequisites.ps1 to refresh rdpwrap.ini for your Windows build. " +
-                    "(2) Open RDPConf.exe and verify Listener state is 'Listening [fully supported]'. " +
+                    "(1) Run scripts\\check-termwrap-status.ps1 to confirm TermWrap is installed and TermService is redirecting to it. " +
+                    "(2) Open RDPConf.exe (or check HKLM\\...\\TermService\\Parameters\\ServiceDll) and verify it points at %ProgramFiles%\\RDP Wrapper\\TermWrap.dll. " +
                     "(3) Manually run: mstsc /v:127.0.0.2 and log in as the seat account to verify RDP works. " +
                     "(4) Check HKLM\\SYSTEM\\CurrentControlSet\\Control\\Terminal Server\\WinStations\\RDP-Tcp: UserAuthentication must be 0.");
             }
@@ -1116,8 +1116,8 @@ public sealed class SessionLauncher : ISessionLauncher
                         _logger.LogError(
                             "mstsc.exe (PID {Pid}) exited with code {Code} after {Ms}ms — " +
                             "the RDP connection attempt failed before session '{Account}' appeared. " +
-                            "Common causes: (1) rdpwrap.ini is outdated for your Windows build " +
-                            "(re-run prerequisites\\install-prerequisites.ps1), " +
+                            "Common causes: (1) TermWrap is not installed or TermService is not redirecting to it " +
+                            "(run prerequisites\\install-prerequisites.ps1 and reboot), " +
                             "(2) a certificate or credential dialog appeared that no one clicked, " +
                             "(3) Remote Desktop is disabled or the RDP port is blocked.",
                             mstsc.Id, mstsc.ExitCode, sw.ElapsedMilliseconds, accountName);

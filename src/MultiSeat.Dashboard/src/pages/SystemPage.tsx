@@ -231,9 +231,9 @@ export function SystemPage() {
                 <span className="stat-value">{health.windowsBuild}</span>
               </div>
               <div className="stat-item">
-                <span className="stat-label">RDP Wrapper</span>
+                <span className="stat-label">TermWrap</span>
                 <span className="stat-value">
-                  {health.rdpWrapperActive
+                  {health.termWrapActive
                     ? <span style={{ color: "var(--success)" }}>Active</span>
                     : <span style={{ color: "var(--danger)" }}>Inactive</span>}
                 </span>

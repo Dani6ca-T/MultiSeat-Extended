@@ -204,13 +204,16 @@ public class EndToEndTests
         Assert.Null(request.LaunchApp);
     }
 
-    // ── RdpWrapper detection test ─────────────────────────────────────
+    // ── RdpWrapper / TermWrap detection test ──────────────────────────
 
     [Fact]
     public void RdpWrapper_EnsureMultiSession_DoesNotCrash()
     {
         var wrapper = new RdpWrapper(new NullLogger<RdpWrapper>());
-        // Should not throw — returns true/false based on system state
+        // Should not throw — returns true/false based on system state.
+        // The RdpWrapper class also covers TermWrap: it accepts any TermService\ServiceDll
+        // redirect away from the stock termsrv.dll, with TermWrap.dll accepted without a
+        // warning and rdpwrap.dll accepted as a legacy install.
         var ex = Record.Exception(() => wrapper.EnsureMultiSession());
         Assert.Null(ex);
     }

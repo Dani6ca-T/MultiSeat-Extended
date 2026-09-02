@@ -145,18 +145,23 @@ Download: https://github.com/nefarius/ViGEmBus/releases
 
 ---
 
-### RDPWrap (Multi-Session RDP)
+### TermWrap (Multi-Session RDP)
 
-Windows Home and Pro editions normally allow only one concurrent RDP session. RDPWrap patches `termsrv.dll` to allow multiple simultaneous sessions.
+Windows Home and Pro editions normally allow only one concurrent RDP session. TermWrap
+([llccd/TermWrap](https://github.com/llccd/TermWrap), MIT) replaces the older stascorp/rdpwrap
++ `rdpwrap.ini` stack. It is a DLL that TermService loads instead of the stock `termsrv.dll`,
+then disassembles `termsrv.dll` in memory using Zydis on every TermService start, finds the
+patch sites by pattern, and patches them. There is no ini to keep current and no community
+release cadence to wait on.
 
 | Requirement | Details |
 |-------------|---------|
-| **RDPWrap** | v1.6.2+ |
+| **TermWrap** | v0.6 |
 | **Required for** | Windows 10/11 Home and Pro |
 | **Not needed for** | Windows Server (multi-session is built in) |
-| **Notes** | Must be kept updated when Windows updates `termsrv.dll` |
+| **Notes** | A reboot is required after install — `svchost` has cached the original `ServiceDll` for the running `TermService` group, so stop/start alone will not pick up the new DLL. |
 
-Download: https://github.com/stascorp/rdpwrap
+Download: https://github.com/llccd/TermWrap/releases
 
 ---
 
@@ -259,5 +264,9 @@ Default `PortBase` = 48100. Each additional seat adds 30 to the base (Seat 1 = 4
 
 - **NVIDIA consumer GPU concurrent sessions:** GTX/RTX consumer cards have a driver-enforced limit of 3–5 simultaneous NVENC sessions. Use an NVENC session limiter patcher or a professional GPU to exceed this.
 - **Virtual display disconnect:** If the mstsc session managing a seat's virtual display is disconnected, Apollo loses access to the display and streaming fails. MultiSeat keeps this session active automatically — do not manually disconnect it.
-- **Windows updates:** Windows updates that replace `termsrv.dll` will break RDPWrap until it is updated. Check the RDPWrap GitHub for updated `rdpwrap.ini` patches.
+- **Windows updates to termsrv.dll:** Not a failure mode with TermWrap. TermWrap self-discovers
+  the offsets it needs by disassembling `termsrv.dll` at every `TermService` start, so a Windows
+  update to `termsrv.dll` is taken in stride on the next reboot. (This was the entire reason for
+  the migration away from stascorp/rdpwrap + `rdpwrap.ini`, which would die here until the
+  community ini caught up.)
 - **Single GPU:** Multi-GPU configurations are not tested. All seats should use the same GPU for encoding.

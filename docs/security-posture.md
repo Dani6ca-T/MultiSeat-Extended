@@ -43,26 +43,19 @@ Disable-NetFirewallRule -DisplayGroup 'Remote Desktop'
 session created, Apollo up and answering, seat `Ready` in 12.7 s. Seats connect to `127.0.0.2`, and
 Windows Firewall does not filter loopback.
 
-### ⚠️ RDPWrap reopens it, and the group command does not close it
+### ✅ TermWrap does not touch the firewall
 
-`RDPWInst.exe -i` — the RDP Wrapper installer, which `install-prerequisites.ps1` runs — creates its
-own firewall rule as part of installing:
+The TermWrap installer (the `Install_termwrap_umwrap.reg` imported by
+`prerequisites\install-prerequisites.ps1`) only sets `ServiceDll` registry values — it does
+not run any `netsh advfirewall` calls, does not create firewall rules, and does not re-enable
+anything that has been disabled. The previous stascorp/rdpwrap installer (`RDPWInst.exe`) **did**
+open inbound 3389 as part of its install, and the rule it created was ungrouped, so closing
+RDP on a host required hunting it down by name. TermWrap is silent on the firewall — the
+state you leave the firewall in is the state you get.
 
-```
-netsh advfirewall firewall add rule name="Remote Desktop" dir=in protocol=tcp localport=3389 profile=any action=allow
-```
-
-That string is in the RDPWInst binary, and the rule it produces is **ungrouped**, so
-`Disable-NetFirewallRule -DisplayGroup 'Remote Desktop'` leaves it enabled and the port open.
-
-This matters because refreshing RDPWrap is routine: a Windows update to `termsrv.dll` breaks
-`rdpwrap.ini`, the documented remedy is to re-run the prerequisites script, and doing so **silently
-reopens 3389** on a host that had deliberately closed it. The prerequisites script now says so when
-it happens; it does not close the rule for you, because some hosts want RDP reachable.
-
-Check afterwards that nothing *else* still admits 3389. Besides the RDPWrap rule, a host can carry
-any other ungrouped rule the group command does not touch, and one enabled rule is enough to leave
-the port open:
+The script does not (and cannot) detect a hidden ungrouped rule the way the old one had to —
+because there is no install step that would create one. If a host has 3389 open, it was opened
+by something else, and the same checklist as before still applies.
 
 ```powershell
 Get-NetFirewallRule -Enabled True -Direction Inbound -Action Allow | ForEach-Object {

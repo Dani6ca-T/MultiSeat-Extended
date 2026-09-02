@@ -36,7 +36,7 @@ See [REQUIREMENTS.md](REQUIREMENTS.md) for the full hardware and software requir
 - VB-CABLE virtual audio (one per seat) — only under `SharedHost` audio; the default `PerSession` mode needs none
 - HidHide (controller isolation)
 - ViGEmBus (virtual controller driver)
-- RDPWrap (multi-session RDP on Windows Home/Pro)
+- TermWrap (concurrent RDP sessions — in-memory Zydis patcher, no ini to maintain)
 - PowerShell 7+ (`winget install Microsoft.PowerShell`)
 
 ---
@@ -76,7 +76,7 @@ This script automatically downloads and installs everything:
 | HidHide | Hides physical controllers from the host |
 | VB-CABLE (basic) | Virtual audio device for seat 0 — **`SharedHost` audio only**, skipped by default (free, auto-downloaded) |
 | VoiceMeeter Potato | 3 additional virtual audio devices for seats 1–3 — **`SharedHost` audio only**, skipped by default (free, auto-downloaded) |
-| RDPWrap + rdpwrap.ini | Enables concurrent RDP sessions on Windows Home/Pro |
+| TermWrap | Enables concurrent RDP sessions on Windows Home/Pro. In-memory Zydis patcher — no ini to keep current, survives Windows updates to `termsrv.dll` |
 | Apollo | Sunshine fork with multi-instance streaming support |
 | SudoVDA | Virtual display driver (one display per seat) |
 | .NET 9 SDK | Required to build and run MultiSeat.Service |
@@ -84,7 +84,7 @@ This script automatically downloads and installs everything:
 
 It also enables Remote Desktop and opens the required firewall ports automatically.
 
-> **Reboot** when prompted — HidHide and RDPWrap require it before the service will work.
+> **Reboot** when prompted — HidHide and TermWrap require it before the service will work.
 
 ### Step 3 — Install the MultiSeat service
 
@@ -313,8 +313,16 @@ Controller isolation is handled by HidHide, not the InputHook DLL. Ensure HidHid
 **Keyboard/mouse not isolated between seats**
 `EnableKeyboardMouseIsolation` is off by default, and turning it on currently does nothing: the low-level hooks are installed from the service process in Session 0, where `GetForegroundWindow()` returns NULL, so the filter always passes the event through. There is also no cross-session bleed to prevent in the RDP-loopback design — physical input goes to the console session, and Moonlight input is injected inside the seat session. Making this meaningful requires re-architecting the hook to run inside the seat session; a missing `MultiSeatInputHook.dll` is therefore harmless.
 
-**RDPWrap shows "Not supported" after a Windows update**
-Re-run `prerequisites\install-prerequisites.ps1` — it will fetch the latest `rdpwrap.ini` automatically.
+**TermWrap inactive or "Not supported" after a Windows update**
+TermWrap self-discovers the offsets it needs at every `TermService` start, so a Windows update to
+`termsrv.dll` is no longer a failure mode. If the dashboard still shows TermWrap as inactive:
+
+1. Run `.\scripts\check-termwrap-status.ps1` to see which check is failing.
+2. If the verdict is `legacy`, a stascorp/rdpwrap install is still active — re-run
+   `prerequisites\install-prerequisites.ps1` to migrate.
+3. If the verdict is `not-installed` or `broken`, the install never completed. Re-run the
+   prereq script **and reboot** — TermWrap's `ServiceDll` redirect does not take effect until
+   `TermService` is restarted by the SCM (which only happens on reboot, not on stop/start).
 
 **Multiple VB-CABLE devices needed**
 Each seat requires one VB-CABLE. After installing the first one via the prerequisites script, run `VBCABLE_Setup_x64.exe` manually for each additional seat (found in the extracted `VBCABLE_Driver_Pack45.zip`).

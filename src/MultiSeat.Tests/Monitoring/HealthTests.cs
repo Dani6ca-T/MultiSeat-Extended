@@ -63,14 +63,14 @@ public class HealthTests
     }
 
     [Fact]
-    public void RdpWrapperBeingInactiveIsTheHeaviestSinglePenalty()
+    public void TermWrapBeingInactiveIsTheHeaviestSinglePenalty()
     {
-        // Without RDPWrap there is no multi-session, so no seat can exist at all. It is weighted
+        // Without TermWrap there is no multi-session, so no seat can exist at all. It is weighted
         // like a critical CPU because the consequence is total, not gradual.
         var h = Health(rdp: false);
 
         Assert.Equal(70, h.Score);
-        Assert.Contains(h.Issues, i => i.Contains("RDP Wrapper", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(h.Issues, i => i.Contains("TermWrap", StringComparison.OrdinalIgnoreCase));
     }
 
     [Fact]

@@ -135,7 +135,7 @@ The parts most likely to surprise you:
 Two separate scripts — prereqs and service deploy are intentionally split:
 
 ```powershell
-# Step 1: Install all prerequisites (drivers, audio devices, RDPWrap, etc.)
+# Step 1: Install all prerequisites (drivers, audio devices, TermWrap, etc.)
 .\prerequisites\install-prerequisites.ps1
 # Reboot if prompted, then re-run to confirm clean.
 # Log: prerequisites\prereq.log
@@ -152,40 +152,40 @@ Two separate scripts — prereqs and service deploy are intentionally split:
 .\scripts\install-service.ps1 -Uninstall
 ```
 
-### RDPWrap offsets — the installer now verifies, it does not assume
+### TermWrap — concurrent RDP sessions, in-memory Zydis patcher
 
-RDPWrap patches `termsrv.dll` at byte offsets looked up in `rdpwrap.ini` **by DLL version**. A
-Windows update moves them, the ini stops matching, and multi-session RDP dies — which takes every
-seat with it, because a seat **is** an RDP session.
+MultiSeat uses [TermWrap](https://github.com/llccd/TermWrap) (MIT) for concurrent RDP sessions on
+Windows. TermWrap is a DLL that TermService loads instead of the stock `termsrv.dll`, then
+**disassembles `termsrv.dll` in memory using Zydis on every TermService start**, finds the patch
+sites by pattern, and patches them. There is no `rdpwrap.ini` to keep current and no community
+release cadence to wait on. **A Windows update to `termsrv.dll` no longer takes multi-session RDP
+down** — that was the entire point of the migration.
 
-The prereq script now checks coverage after copying the ini and escalates only as far as needed:
+Install: `prerequisites\install-prerequisites.ps1` downloads `TermWrap-0.6.zip` from
+`llccd/TermWrap/releases`, unpacks to `%ProgramFiles%\RDP Wrapper\`, and imports
+`Install_termwrap_umwrap.reg` (which redirects `TermService\ServiceDll` and `UmRdpService\ServiceDll`
+at the wrapper DLLs). A **reboot is required** — `svchost` has already cached the original
+`ServiceDll` path for the running service group, so stop/start of `TermService` alone does not pick
+up the new DLL.
 
-1. the ini covers the running build → nothing to do
-2. it does not → **re-download the community ini** (`sebaxakerhtc/rdpwrap.ini`) and refresh the cache
-3. the community has not caught up either → **generate the offsets locally** from this machine's
-   `termsrv.dll`, via `llccd/RDPWrapOffsetFinder` (MIT), after backing the ini up
-
-Community offsets are preferred wherever both exist — far more hosts have exercised them.
-Generation is a last resort, not the default. To ask about it without running the installer:
+Status:
 
 ```powershell
-.\scripts\check-rdpwrap-offsets.ps1            # read-only: 0 covered, 1 not, 2 cannot tell
-.\scripts\check-rdpwrap-offsets.ps1 -Apply     # generate + merge + restart TermService
+.\scripts\check-termwrap-status.ps1            # read-only: 0 ok, 1 not installed/legacy, 2 unknown
+.\scripts\check-termwrap-status.ps1 -Json      # for scripts
+.\scripts\check-termwrap-status.ps1 -Deep      # also Test-NetConnection 127.0.0.2:3389
 ```
 
-⚠️ **`termsrv.dll` reports two different versions and only one of them is right.** Its
-StringFileInfo and its `VS_FIXEDFILEINFO` disagree — measured here: the string said
-`10.0.26100.8115` while the raw said `10.0.26100.8972`, and **RDPWrap keys on the raw one**.
-`.VersionInfo.FileVersion` returns the string, so checking it can report "covered" off a section
-that is not the one in play. Read `FileVersionRaw`. Coverage also needs **both** `[version]` and
-`[version-SLInit]`: a half-present pair is worse than none, because RDPWrap patches with what it
-finds.
+Migration from a legacy stascorp/rdpwrap install is automatic: the prereq script detects
+`rdpwrap.dll` in `System32` (or `ServiceDll` pointing at it) and rewrites `ServiceDll` to the stock
+`termsrv.dll` before installing TermWrap. The service log will then keep emitting
+`Legacy stascorp/rdpwrap is active. Migrate to TermWrap` until you re-run the installer.
 
-⛔ **Why this check exists at all.** `Get-Prerequisite` caches downloads by filename forever, which
-is right for an installer and wrong for a file whose job is to track Windows builds. The cached
-`rdpwrap.ini` on the reference host was from April, did not cover the running build, and was being
-copied over a good one on **every** run — so "re-run the prereq script to refresh `rdpwrap.ini`"
-had been doing the opposite for months, silently, because nothing checked afterwards.
+**Why we no longer need `rdpwrap.ini` at all.** The old `RDPWrapOffsetFinder` (MIT) tool is still
+useful for ad-hoc forensic analysis of `termsrv.dll`, but MultiSeat no longer ships it as a
+prerequisite — the offsets it would have found are computed automatically at runtime by TermWrap
+itself. The previous failure mode ("Windows update replaced `termsrv.dll` → the community ini
+stopped covering the new build → every seat died") does not exist with TermWrap.
 
 ## Key Runtime Paths
 
@@ -366,13 +366,14 @@ a healthy jail — and it is why this is off by default. Set `SeatPadDevicePaths
 ## Known Constraints
 
 - NVIDIA consumer GPUs: 3–5 concurrent NVENC sessions max.
-- RDPWrap breaks after Windows updates to `termsrv.dll` — re-run the prereq script, which now
-  **verifies** the ini covers the running build instead of assuming it does (see below).
 - mstsc window for each seat must never be manually disconnected (session goes Disconnected, display APIs stop working).
 - Single GPU only — multi-GPU not tested.
 - Windows 11 build 26100+ / x64 only.
 - VoiceMeeter audio drivers only register after a reboot post-install.
 - Keyboard/mouse session isolation (`InputHookManager` + InputHook DLL) is **disabled by default and currently a no-op**. The low-level `WH_KEYBOARD_LL`/`WH_MOUSE_LL` hooks run in the SYSTEM service (Session 0), where `GetForegroundWindow()` returns NULL, so `ShouldPassThrough()` always passes — the filter never blocks. With the RDP-loopback design there is no cross-session K/M bleed anyway: physical input goes to the console session, and Moonlight input is `SendInput`'d inside the seat session. Re-enabling is only meaningful if the hook is re-architected to run inside the seat session.
+- TermWrap requires a reboot after install — `TermService` will not pick up its new `ServiceDll`
+  until the next service start. Stop/start is not enough: `svchost` has cached the path for the
+  running service group.
 
 ## Required Prerequisites
 
@@ -382,6 +383,6 @@ a healthy jail — and it is why this is off by default. Set `SeatPadDevicePaths
 - VoiceMeeter Potato (seats 1–3 audio) — **`SharedHost` audio only; not needed under `PerSession`**
 - HidHide v1.5.230 (controller isolation)
 - ViGEmBus v1.22.0 EXE — not MSI (virtual controller bus)
-- RDPWrap (multi-session RDP on Windows Home/Pro)
+- TermWrap v0.6 (concurrent RDP sessions — replaces stascorp/rdpwrap + rdpwrap.ini)
 - .NET 9 SDK
 - Node.js 20+

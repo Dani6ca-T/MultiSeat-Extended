@@ -773,294 +773,177 @@ if ($installAudioCables) {
 }  # end: if ($installAudioCables)
 
 # ----------------------------------------------------------------
-# 4. RDP Wrapper Library
+# 4. TermWrap (concurrent RDP sessions)
+#
+# TermWrap (llccd/TermWrap, MIT) replaces the old stascorp/rdpwrap + rdpwrap.ini stack.
+# Instead of looking up byte offsets in an ini keyed by termsrv.dll's version, TermWrap
+# disassembles termsrv.dll in memory at every TermService start (Zydis), finds the patch
+# sites by pattern, and patches them. There is no ini to keep current and no community
+# release cadence to wait on. A Windows update to termsrv.dll no longer takes multi-session
+# RDP down.
+#
+# It is a DLL that replaces TermService's ServiceDll: when TermService starts, svchost
+# loads TermWrap.dll, which loads the real termsrv.dll, patches it, and forwards the
+# service entrypoints. The only host-side state is:
+#   * %ProgramFiles%\RDP Wrapper\TermWrap.dll
+#   * HKLM\SYSTEM\CurrentControlSet\Services\TermService\Parameters\ServiceDll
+#     pointing at it (set by Install_termwrap_umwrap.reg)
+# Reboot is required for the ServiceDll redirect to take effect.
+#
+# What we install: TermWrap.dll + UmWrap.dll + Zydis.dll. EndpWrap.dll is NOT installed —
+# it wraps rdpendp.dll for audio-recording redirection, which is not a MultiSeat feature
+# (PerSession audio is the default) and the upstream README warns it can hang or crash
+# apps that load rdpendp.dll. Add only if a real caller needs microphone capture into
+# the seat.
 # ----------------------------------------------------------------
-Write-Step "RDP Wrapper Library (concurrent RDP sessions)"
+Write-Step "TermWrap (concurrent RDP sessions, in-memory Zydis patcher)"
 
-# Helper: get the resolved path that TermService's ServiceDll registry value points to.
-# RDP Wrapper v1.6.2+ registers the DLL via the TermService ServiceDll key rather than
-# copying it to System32.  Detect EITHER installation method.
-function Get-RdpWrapperDllPath {
-    # Method 1: classic install — dll lives in System32
-    $sys32dll = "$env:SystemRoot\System32\rdpwrap.dll"
-    if (Test-Path $sys32dll) { return $sys32dll }
+$TermWrapDir       = Join-Path $env:ProgramFiles "RDP Wrapper"
+$TermWrapDll       = Join-Path $TermWrapDir "TermWrap.dll"
+$TermWrapReg       = Join-Path $TermWrapDir "Install_termwrap_umwrap.reg"
+$TermWrapOnlyReg   = Join-Path $TermWrapDir "Install_termwrap_only.reg"
+$TermWrapZipLocal  = Join-Path $ScriptDir "TermWrap-0.6.zip"
+$TermWrapUrl       = "https://github.com/llccd/TermWrap/releases/download/v0.6/TermWrap-0.6.zip"
+$TermServiceDllKey = "HKLM:\SYSTEM\CurrentControlSet\Services\TermService\Parameters"
 
-    # Method 2: ServiceDll install — dll is registered as the TermService implementation
-    $svcDll = (Get-ItemProperty `
-        "HKLM:\SYSTEM\CurrentControlSet\Services\TermService\Parameters" `
-        -Name "ServiceDll" -ErrorAction SilentlyContinue).ServiceDll
-    if ($svcDll) {
-        $resolved = [System.Environment]::ExpandEnvironmentVariables($svcDll)
-        if ($resolved -match "rdpwrap" -and (Test-Path $resolved)) { return $resolved }
-    }
+# Helper: true when the ServiceDll redirect points at TermWrap.dll (or anything else non-stock
+# that the host intended as a multi-session patch — e.g. an older rdpwrap.dll still in place).
+function Test-TermWrapInstalled {
+    $svcDll = (Get-ItemProperty -Path $TermServiceDllKey -Name "ServiceDll" -ErrorAction SilentlyContinue).ServiceDll
+    if (-not $svcDll) { return $false }
+    $resolved = [System.Environment]::ExpandEnvironmentVariables($svcDll)
+    if (-not (Test-Path $resolved)) { return $false }
+    return ($resolved -like "*\TermWrap.dll" -or $resolved -like "*\rdpwrap.dll" -or $resolved -like "*\UmWrap.dll")
+}
 
+# Helper: which arch we are. x64 only — UmWrap is x64-only upstream and a 32-bit host has
+# different installer files. We don't support 32-bit hosts.
+function Test-TermWrapSupportedArch {
+    return [System.Environment]::Is64BitOperatingSystem
+}
+
+# Helper: pick the right .reg file for this SKU.
+# Install_termwrap_umwrap.reg wraps both TermService and UmRdpService (the latter enables
+# camera/USB redirection on Home/Server SKUs). On Pro/Enterprise, UmRdpService is already
+# unrestricted, so the redirect is a no-op but harmless. Use the umwrap variant everywhere —
+# one less branch, matches the upstream recommendation.
+function Resolve-TermWrapReg {
+    if (Test-Path $TermWrapReg)     { return $TermWrapReg }
+    if (Test-Path $TermWrapOnlyReg) { return $TermWrapOnlyReg }
     return $null
 }
 
-# Helper: the termsrv.dll version RDPWrap actually keys on.
-#
-# ⚠️ termsrv.dll's StringFileInfo and its VS_FIXEDFILEINFO DISAGREE. Measured on the reference
-# host 2026-09-01: the string said 10.0.26100.8115 while the raw fixed-info said 10.0.26100.8972,
-# and 8972 is the section RDPWrap uses. Checking the string can therefore report "covered" off a
-# section that is not the one in play — a right answer for the wrong reason, which stays invisible
-# until a build where only one of the two exists. Always read FileVersionRaw, and never fall back
-# to the string.
-function Get-TermSrvVersion {
-    $termsrv = Join-Path $env:SystemRoot "System32\termsrv.dll"
-    if (-not (Test-Path $termsrv)) { return $null }
-    $raw = (Get-Item $termsrv).VersionInfo.FileVersionRaw
-    if (-not $raw) { return $null }
-    return ("{0}.{1}.{2}.{3}" -f $raw.Major, $raw.Minor, $raw.Build, $raw.Revision)
-}
-
-# Helper: does this ini cover that build?
-# BOTH sections are required — RDPWrap patches with whatever it finds, so a half-present pair is
-# worse than none.
-function Test-RdpWrapIniCoverage($iniPath, $version) {
-    if (-not $version -or -not (Test-Path $iniPath)) { return $false }
-    $ini = Get-Content $iniPath
-    $main   = [bool]($ini | Select-String -SimpleMatch -Pattern "[$version]"        -Quiet)
-    $slInit = [bool]($ini | Select-String -SimpleMatch -Pattern "[$version-SLInit]" -Quiet)
-    return ($main -and $slInit)
-}
-
-# Helper: compute offsets for the running termsrv.dll ourselves and append them to the ini.
-#
-# The community ini (sebaxakerhtc) is maintained by someone else on their own cadence, so between
-# a Windows update landing and their next commit there is a window where multi-session RDP is
-# dead — and every seat IS an RDP session, so MultiSeat is dead with it. That window is what this
-# closes. It only runs when the ini does not already cover the running build, so on a normal host
-# it costs nothing.
-#
-# llccd/RDPWrapOffsetFinder (MIT) was validated against a known-good answer on 2026-09-01: run on
-# a build the community ini already covered and multi-session demonstrably worked on, both the
-# symbol and _nosymbol builds produced all 20 keys IDENTICAL to that section. The _nosymbol one
-# matters most here — it pattern-matches instead of fetching PDBs from Microsoft's symbol server,
-# so it still works on a host with no route to those symbols, which is a normal state for a
-# machine whose remote access just broke.
-function Add-GeneratedRdpWrapOffsets($iniPath, $version) {
-    $zipPath = Get-Prerequisite "RDPWrapOffsetFinder-1.0.zip" `
-        "https://github.com/llccd/RDPWrapOffsetFinder/releases/download/v1.0/RDPWrapOffsetFinder-1.0.zip" `
-        "RDPWrapOffsetFinder v1.0 (generates offsets for an unlisted Windows build)"
-    if (-not $zipPath) {
-        Write-Host "  Could not obtain RDPWrapOffsetFinder -- cannot generate offsets." -ForegroundColor Yellow
-        return $false
+# Helper: a legacy stascorp/rdpwrap install on this host? If so we need to unhook it before
+# TermWrap can take over — both redirect TermService\ServiceDll and conflict at runtime.
+function Test-LegacyRdpWrapInstalled {
+    if (Test-Path "$env:SystemRoot\System32\rdpwrap.dll") { return $true }
+    $svcDll = (Get-ItemProperty -Path $TermServiceDllKey -Name "ServiceDll" -ErrorAction SilentlyContinue).ServiceDll
+    if ($svcDll) {
+        $resolved = [System.Environment]::ExpandEnvironmentVariables($svcDll)
+        if ($resolved -like "*\rdpwrap.dll") { return $true }
     }
+    return $false
+}
 
-    $work = Join-Path $env:TEMP "rdpwrap-offsetfinder"
+# Helper: unhook a legacy rdpwrap install. We don't run RDPWInst -u here because that
+# touches registry keys we want to overwrite anyway. We just point ServiceDll back at the
+# stock termsrv.dll and let the rest be reaped by the next reboot.
+function Remove-LegacyRdpWrap {
+    Write-Host "  Legacy rdpwrap detected. Reverting TermService\ServiceDll to stock termsrv.dll..." -ForegroundColor Yellow
     try {
-        if (!(Test-Path $work)) { New-Item -ItemType Directory -Path $work -Force | Out-Null }
-        Expand-Archive $zipPath -DestinationPath $work -Force
+        Set-ItemProperty -Path $TermServiceDllKey -Name "ServiceDll" -Value "%SystemRoot%\System32\termsrv.dll" -Type ExpandString -Force
     } catch {
-        Write-Host "  WARNING: Could not unpack RDPWrapOffsetFinder ($_)" -ForegroundColor Yellow
-        return $false
+        Write-Host "  WARNING: could not reset ServiceDll to termsrv.dll ($_)" -ForegroundColor Yellow
+        Write-Host "  Run the upstream Revert_to_default.reg if needed, then re-run this script." -ForegroundColor Yellow
     }
-
-    # x64 explicitly. Running the 32-bit build against a 64-bit termsrv.dll would produce
-    # confident, wrong offsets — and wrong offsets patch the wrong bytes.
-    $exeDir = Join-Path $work "64bit"
-    $exe    = Join-Path $exeDir "RDPWrapOffsetFinder.exe"
-    $exeNs  = Join-Path $exeDir "RDPWrapOffsetFinder_nosymbol.exe"
-    if (-not (Test-Path $exe)) {
-        Write-Host "  RDPWrapOffsetFinder x64 binary not found in the archive." -ForegroundColor Yellow
-        return $false
-    }
-
-    $termsrv = Join-Path $env:SystemRoot "System32\termsrv.dll"
-    Push-Location $exeDir
-    try {
-        $out = & $exe $termsrv 2>&1 | ForEach-Object { "$_".Trim() }
-        if (-not ($out | Where-Object { $_ -match "^SingleUserOffset" })) {
-            Write-Host "  Symbol lookup gave nothing usable -- trying the nosymbol build..." -ForegroundColor DarkGray
-            if (Test-Path $exeNs) {
-                $out = & $exeNs $termsrv 2>&1 | ForEach-Object { "$_".Trim() }
-            }
-        }
-    } catch {
-        Write-Host "  WARNING: RDPWrapOffsetFinder failed to run ($_)" -ForegroundColor Yellow
-        Pop-Location
-        return $false
-    }
-    Pop-Location
-
-    # 20 keys is the full set (12 patch + 8 SLInit). Anything short means the run half-failed, and
-    # appending a partial section is the one outcome worse than appending nothing.
-    $keys = @($out | Where-Object { $_ -match "=" })
-    if ($keys.Count -lt 20) {
-        Write-Host ("  Only {0} offsets produced (expected 20) -- refusing to write a partial section." -f $keys.Count) -ForegroundColor Yellow
-        return $false
-    }
-
-    # Sanity-check that the tool read the same build we are patching for. If it disagrees, the
-    # offsets belong to some other file and must not be written.
-    if (-not ($out | Where-Object { $_ -eq "[$version]" })) {
-        Write-Host "  Generated section is not for $version -- refusing to write it." -ForegroundColor Yellow
-        return $false
-    }
-
-    $backup = "$iniPath.$(Get-Date -Format 'yyyyMMdd-HHmmss').bak"
-    Copy-Item $iniPath $backup -Force
-
-    Add-Content -Path $iniPath -Value "" -Encoding ASCII
-    Add-Content -Path $iniPath -Value $out -Encoding ASCII
-
-    Write-Host "  Generated offsets for $version locally and appended them." -ForegroundColor Green
-    Write-Host "    backup: $backup" -ForegroundColor DarkGray
-    return $true
+    # The classic rdpwrap.dll in System32 is overwritten by Windows servicing eventually;
+    # leaving it on disk is harmless because ServiceDll no longer points at it.
 }
 
-# Helper: copy the ini, make sure it actually covers this build, and restart TermService so the
-# new ini takes effect immediately.
-function Update-RdpWrapIni($rdpDir) {
-    $iniFile = Get-ChildItem $ScriptDir -Filter "rdpwrap.ini" | Select-Object -First 1
-    if (-not $iniFile) {
-        $f = Get-Prerequisite "rdpwrap.ini" `
-            "https://raw.githubusercontent.com/sebaxakerhtc/rdpwrap.ini/master/rdpwrap.ini" `
-            "rdpwrap.ini (Windows 11 26100+ patch)"
-        if ($f) { $iniFile = Get-Item $f }
-    }
-    if ($iniFile -and (Test-Path $rdpDir)) {
-        $installedIni = Join-Path $rdpDir "rdpwrap.ini"
-        Copy-Item $iniFile.FullName $installedIni -Force
-        Write-Host "  Updated rdpwrap.ini for current Windows build" -ForegroundColor DarkGray
-
-        # Verify rather than assume. A copied ini is not a covered build: the whole failure mode
-        # here is a Windows update the ini has not caught up with.
-        $version = Get-TermSrvVersion
-        if (-not $version) {
-            Write-Host "  WARNING: Could not read termsrv.dll's version -- cannot verify ini coverage." -ForegroundColor Yellow
-        } elseif (Test-RdpWrapIniCoverage $installedIni $version) {
-            Write-Host "  ini covers termsrv $version" -ForegroundColor DarkGray
-        } else {
-            Write-Host "  ini does NOT cover termsrv $version -- multi-session RDP would not work." -ForegroundColor Yellow
-
-            # Try a FRESH community ini before generating our own.
-            #
-            # Get-Prerequisite caches by filename and returns the cached copy forever, which is
-            # right for an installer but wrong for this file: rdpwrap.ini's whole job is to track
-            # Windows builds. Measured here 2026-09-01 — the cached copy was from April, covered
-            # 10.0.26100.8115 and not the running 10.0.26100.8972, and copying it over the
-            # installed ini DOWNGRADED a host that had been fine. That is the exact opposite of
-            # what "re-run the prereq script to refresh rdpwrap.ini" is supposed to do.
-            #
-            # Community offsets are preferred over generated ones when both are available: they
-            # have been used by many more hosts than this one.
-            if (-not $SkipDownload) {
-                Write-Host "  Re-downloading the community ini (the cached copy may be stale)..." -ForegroundColor Yellow
-                $fresh = Join-Path $env:TEMP "rdpwrap-fresh.ini"
-                try {
-                    $ProgressPreference = 'SilentlyContinue'
-                    Invoke-WebRequest -UseBasicParsing -OutFile $fresh `
-                        -Uri "https://raw.githubusercontent.com/sebaxakerhtc/rdpwrap.ini/master/rdpwrap.ini"
-                    $ProgressPreference = 'Continue'
-                    if (Test-RdpWrapIniCoverage $fresh $version) {
-                        Copy-Item $fresh $installedIni -Force
-                        # Refresh the cache too, so the next run does not repeat this.
-                        Copy-Item $fresh (Join-Path $ScriptDir "rdpwrap.ini") -Force
-                        Write-Host "  Fresh community ini covers termsrv $version -- using it." -ForegroundColor Green
-                    } else {
-                        Write-Host "  The community ini does not cover this build yet either." -ForegroundColor Yellow
-                    }
-                } catch {
-                    Write-Host "  Could not re-download the community ini ($_)" -ForegroundColor Yellow
-                }
-            }
-        }
-
-        # Re-test: the fresh download may have resolved it. Only generate as a last resort.
-        if ($version -and -not (Test-RdpWrapIniCoverage $installedIni $version)) {
-            Write-Host "  Generating the offsets from this machine's termsrv.dll instead..." -ForegroundColor Yellow
-            if (Add-GeneratedRdpWrapOffsets $installedIni $version) {
-                if (-not (Test-RdpWrapIniCoverage $installedIni $version)) {
-                    Write-Host "  WARNING: still not covered after generating -- seats will not start." -ForegroundColor Yellow
-                    $script:Skipped += "RDP Wrapper (no offsets for termsrv $version)"
-                }
-            } else {
-                Write-Host "  Could not generate offsets. Seats will not start until the ini covers" -ForegroundColor Yellow
-                Write-Host "  termsrv $version. Run scripts\check-rdpwrap-offsets.ps1 for detail." -ForegroundColor Yellow
-                $script:Skipped += "RDP Wrapper (no offsets for termsrv $version)"
-            }
-        }
-
-        # Restart TermService so rdpwrap.dll re-reads the ini — after any generated section has
-        # been appended, or the restart would load the ini we already know is insufficient.
-        Write-Host "  Restarting TermService to apply new ini..." -ForegroundColor DarkGray
-        try {
-            Stop-Service -Name "TermService" -Force -ErrorAction Stop
-            Start-Service -Name "TermService" -ErrorAction Stop
-            Write-Host "  TermService restarted OK" -ForegroundColor DarkGray
-        } catch {
-            Write-Host "  WARNING: Could not restart TermService ($_)" -ForegroundColor Yellow
-            Write-Host "  Reboot the machine to fully apply the updated rdpwrap.ini." -ForegroundColor Yellow
-            $script:NeedsReboot = $true
-        }
-    }
-}
-
-$existingDll = Get-RdpWrapperDllPath
-if ($existingDll) {
-    Write-OK "Already installed (dll: $existingDll)"
-    $rdpDir = Split-Path $existingDll
-    Update-RdpWrapIni $rdpDir
+# Already installed? Verify and stop.
+if (Test-TermWrapInstalled) {
+    Write-OK "Already installed (ServiceDll -> TermWrap.dll)"
+    $script:Installed += "TermWrap"
 } else {
-    $zip = Get-ChildItem $ScriptDir -Filter "RDPWrap*.zip" | Select-Object -First 1
-    if (-not $zip) {
-        $f = Get-Prerequisite "RDPWrap-v1.6.2.zip" `
-            "https://github.com/stascorp/rdpwrap/releases/download/v1.6.2/RDPWrap-v1.6.2.zip" `
-            "RDPWrap v1.6.2"
-        if ($f) { $zip = Get-Item $f }
-    }
-    if ($zip) {
-        $rdpDir = "C:\Program Files\RDP Wrapper"
-        if (!(Test-Path $rdpDir)) { New-Item -ItemType Directory -Path $rdpDir -Force | Out-Null }
-        Expand-Archive $zip.FullName -DestinationPath $rdpDir -Force
+    if (-not (Test-TermWrapSupportedArch)) {
+        Write-Skip "TermWrap requires a 64-bit Windows install (no x86 UmWrap is shipped upstream)"
+    } else {
+        # 1) Unhook legacy rdpwrap if present.
+        if (Test-LegacyRdpWrapInstalled) {
+            Remove-LegacyRdpWrap
+        }
 
-        # Copy ini BEFORE running the installer so RDPWInst picks up the correct offsets.
-        Update-RdpWrapIni $rdpDir
+        # 2) Make sure the install dir exists. The .reg files hardcode this path literally, so
+        #    it must be %ProgramFiles%\RDP Wrapper (with the space).
+        if (!(Test-Path $TermWrapDir)) {
+            New-Item -ItemType Directory -Path $TermWrapDir -Force | Out-Null
+        }
 
-        # Use RDPWInst.exe directly -- install.bat ends with `pause` which blocks
-        # in non-interactive (scripted) contexts.
-        $rdpInst = Get-ChildItem $rdpDir -Filter "RDPWInst.exe" | Select-Object -First 1
-        if ($rdpInst) {
-            Start-Process $rdpInst.FullName -ArgumentList "-i -o" -Wait -NoNewWindow
+        # 3) Get the zip — local cache wins, then download.
+        $zip = Get-ChildItem $ScriptDir -Filter "TermWrap-*.zip" -ErrorAction SilentlyContinue | Select-Object -First 1
+        if (-not $zip) {
+            $f = Get-Prerequisite "TermWrap-0.6.zip" $TermWrapUrl "TermWrap v0.6 (llccd/TermWrap, MIT)"
+            if ($f) { $zip = Get-Item $f }
+        }
 
-            # RDPWInst opens 3389 to the network as part of installing, by running:
-            #   netsh advfirewall firewall add rule name="Remote Desktop" dir=in
-            #                     protocol=tcp localport=3389 profile=any action=allow
-            # (that string is in the RDPWInst binary). The rule it creates is ungrouped, so
-            # `Disable-NetFirewallRule -DisplayGroup 'Remote Desktop'` does NOT turn it off and a
-            # host that deliberately closed RDP gets it silently reopened by a routine RDPWrap
-            # refresh — which is the normal remedy after a Windows update breaks rdpwrap.ini.
-            #
-            # Not disabled here: some hosts genuinely want RDP reachable, and this script should not
-            # quietly decide otherwise. It is said instead, because being reopened without being
-            # told is the part that actually costs someone.
-            $rdpRule = Get-NetFirewallRule -Enabled True -Direction Inbound -Action Allow -ErrorAction SilentlyContinue |
-                       Where-Object { ($_ | Get-NetFirewallPortFilter -ErrorAction SilentlyContinue).LocalPort -contains '3389' }
-            if ($rdpRule) {
-                Write-Host "  NOTE: RDPWInst opened inbound TCP/3389 to the network (rule 'Remote Desktop')." -ForegroundColor Yellow
-                Write-Host "        MultiSeat does NOT need it — seats connect over loopback, which is not" -ForegroundColor Yellow
-                Write-Host "        filtered, and this is verified. With NLA off (see docs/security-posture.md)" -ForegroundColor Yellow
-                Write-Host "        an open 3389 is worth closing deliberately:" -ForegroundColor Yellow
-                foreach ($r in $rdpRule) {
-                    Write-Host ("          Disable-NetFirewallRule -Name '{0}'   # {1}" -f $r.Name, $r.DisplayName) -ForegroundColor Yellow
+        if ($zip) {
+            try {
+                Expand-Archive $zip.FullName -DestinationPath $TermWrapDir -Force
+
+                # The zip lays out dlls under x64\ and x86\ subfolders, but the .reg files point
+                # ServiceDll at the root of %ProgramFiles%\RDP Wrapper\. Per the upstream README
+                # ("Copy the dlls for your architecture to '%ProgramFiles%\RDP Wrapper\' and
+                # merge Install_termwrap_umwrap.reg"), we have to flatten x64\ into the install
+                # dir. We only ship the x64 build — UmWrap is x64-only upstream and a 32-bit
+                # host would have failed Test-TermWrapSupportedArch above.
+                $x64 = Join-Path $TermWrapDir "x64"
+                if (Test-Path $x64) {
+                    Get-ChildItem $x64 -Filter "*.dll" | ForEach-Object {
+                        Copy-Item $_.FullName $TermWrapDir -Force
+                    }
+                    Write-Host "  Copied x64\*.dll to $TermWrapDir" -ForegroundColor DarkGray
+                } else {
+                    Write-Host "  WARNING: x64\ subfolder not found in archive — install may be incomplete" -ForegroundColor Yellow
+                }
+            } catch {
+                Write-Host "  WARNING: Could not unpack TermWrap-0.6.zip ($_)" -ForegroundColor Yellow
+                $script:Skipped += "TermWrap (unpack failed)"
+                $zip = $null
+            }
+        }
+
+        if ($zip) {
+            # 4) Pick the right .reg and import it. reg import is the supported way to set
+            #    ServiceDll — it handles the hex(2) expansion and elevation prompts.
+            $regPath = Resolve-TermWrapReg
+            if (-not $regPath) {
+                Write-Host "  No Install_termwrap_*.reg found in $TermWrapDir after unpack." -ForegroundColor Yellow
+                $script:Skipped += "TermWrap (Install_*.reg missing)"
+            } else {
+                Write-Host "  Importing $(Split-Path $regPath -Leaf)..." -ForegroundColor DarkGray
+                $regOut = & reg.exe import $regPath 2>&1
+                if ($LASTEXITCODE -ne 0) {
+                    Write-Host "  WARNING: reg import returned $LASTEXITCODE" -ForegroundColor Yellow
+                    $regOut | ForEach-Object { Write-Host "    $_" -ForegroundColor DarkGray }
+                    $script:Skipped += "TermWrap (reg import failed)"
+                } else {
+                    if (Test-TermWrapInstalled) {
+                        Write-OK "Installed ($TermWrapDir\TermWrap.dll, ServiceDll redirected)"
+                        $script:Installed += "TermWrap"
+                        # A reboot is REQUIRED — TermService will not pick up the new ServiceDll
+                        # until it next starts. Stop/Start here does not help, because svchost
+                        # has already cached the path for the running group.
+                        $script:NeedsReboot = $true
+                    } else {
+                        Write-Host "  WARNING: reg import succeeded but ServiceDll does not point at TermWrap.dll." -ForegroundColor Yellow
+                        Write-Host "  Check $TermServiceDllKey manually." -ForegroundColor Yellow
+                        $script:Skipped += "TermWrap (ServiceDll not set)"
+                    }
                 }
             }
-
-            $installedDll = Get-RdpWrapperDllPath
-            if ($installedDll) {
-                Write-OK "Installed (dll: $installedDll)"
-                $Installed += "RDP Wrapper"
-                $NeedsReboot = $true
-            } else {
-                Write-Host "  WARNING: RDPWInst ran but rdpwrap.dll not found -- reboot and re-run to verify." -ForegroundColor Yellow
-                $Skipped += "RDP Wrapper (dll not found post-install)"
-            }
         } else {
-            Write-Skip "No RDPWInst.exe found in RDPWrap zip"
+            Write-Skip "TermWrap  --  get TermWrap-0.6.zip from https://github.com/llccd/TermWrap/releases and place it in prerequisites\"
         }
-    } else {
-        Write-Skip "RDPWrap  --  get from https://github.com/stascorp/rdpwrap/releases"
     }
 }
 

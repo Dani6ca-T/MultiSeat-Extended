@@ -101,7 +101,7 @@ public sealed class MetricsCollector : IDisposable
             Disks = disks,
             Health = health,
             WindowsBuild = Environment.OSVersion.VersionString,
-            RdpWrapperActive = rdpActive,
+            TermWrapActive = rdpActive,
             SystemMemoryMb = totalMb,
             AvailableMemoryMb = availMb
         };
@@ -299,7 +299,7 @@ public sealed class MetricsCollector : IDisposable
 
         if (gpuPct >= 95) { issues.Add($"GPU near capacity: {gpuPct}%"); score -= 15; }
 
-        if (!rdpActive) { issues.Add("RDP Wrapper inactive — multi-session unavailable"); score -= 30; }
+        if (!rdpActive) { issues.Add("TermWrap inactive — multi-session unavailable"); score -= 30; }
 
         score = Math.Max(0, score);
         var status = score >= 70 ? HealthStatus.Healthy
