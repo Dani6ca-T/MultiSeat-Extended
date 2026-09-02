@@ -138,8 +138,23 @@ public sealed class SessionHealthCheck
                 seat.SessionId = await _sessionLauncher.LaunchSessionAsync(
                     seat.AccountName, ct, RdpGeometry.ForClient(seat.Width, seat.Height));
 
+                // Wait for the session to become ACTIVE before starting Apollo.
+                // Apollo needs a live session for QueryDisplayConfig / DXGI; starting it
+                // against a DISCONNECTED session triggers a restart feedback loop.
+                if (!await WaitForSessionActiveAsync(
+                        id => _sessionLauncher.IsSessionActive(id),
+                        seat.SessionId, ct))
+                {
+                    _logger.LogWarning(
+                        "Seat {Id}: session {Sid} did not become ACTIVE within 10s after reconnect — aborting",
+                        seat.Id, seat.SessionId);
+                    seat.Status = SeatStatus.Error;
+                    seat.ErrorMessage = "RDP session did not become active after reconnect";
+                    return true;
+                }
+
                 // Give the display pipeline a moment to reinitialize after the session
-                // transitions back to Active — SudoVDA and DXGI need a beat to be ready.
+                // transitions to Active — SudoVDA and DXGI need a beat to be ready.
                 await Task.Delay(2000, ct);
 
                 _logger.LogInformation(
@@ -258,5 +273,28 @@ public sealed class SessionHealthCheck
         {
             return false;
         }
+    }
+
+    /// <summary>
+    /// Poll <paramref name="isSessionActive"/> until the session reports Active
+    /// or the 10-second timeout expires.
+    /// </summary>
+    /// <returns>true if the session became Active within the timeout.</returns>
+    internal static async Task<bool> WaitForSessionActiveAsync(
+        Func<int, bool> isSessionActive,
+        int sessionId,
+        CancellationToken ct,
+        int pollMs = 500,
+        int timeoutMs = 10_000)
+    {
+        var waited = 0;
+        while (waited < timeoutMs && !ct.IsCancellationRequested)
+        {
+            if (isSessionActive(sessionId))
+                return true;
+            await Task.Delay(pollMs, ct);
+            waited += pollMs;
+        }
+        return isSessionActive(sessionId);
     }
 }
