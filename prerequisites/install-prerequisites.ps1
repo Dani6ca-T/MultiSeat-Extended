@@ -297,10 +297,29 @@ if ($vigemDevice) {
     Write-Host "  [DIAG] ViGEmBus PnP device: $($vigemDevice.FriendlyName) [$($vigemDevice.Status)] $($vigemDevice.InstanceId)" -ForegroundColor DarkGray
 }
 
+# Only 'Error'/'Degraded' count as broken. 'Unknown' must NOT: sources 2 and 3 of Get-ViGEmNodes
+# report it for a perfectly healthy node (the registry backstop cannot see driver state at all),
+# and that backstop is the only source on hosts where Get-PnpDevice returns nothing for root nodes.
+# Treating 'Unknown' as broken would delete a working node on exactly those hosts.
+$vigemBadStatuses = @('Error', 'Degraded')
+
 $vigemOk = $false
 if ($vigemDevice -and $vigemDevice.Status -eq 'OK') {
     Write-OK "Already installed (service + PnP device OK)"
     $vigemOk = $true
+} elseif ($vigemDevice -and $vigemBadStatuses -contains $vigemDevice.Status) {
+    # A node that exists but failed to bind a driver — e.g. Code 28 CM_PROB_FAILED_INSTALL, seen on
+    # the reference host 2026-09-02, where Apollo logged "ViGEmBus is not installed or running"
+    # while the service showed Running and Add/Remove Programs showed 1.22.0.
+    #
+    # Reinstalling does NOT repair this. The WiX Burn bootstrapper sees its own version already
+    # registered and exits 0 in about two seconds without touching the device; `msiexec /fa` repair
+    # exits 0 and does nothing either. Both were measured. The node has to be removed so the
+    # SetupAPI fallback further down can recreate it and bind the staged INF.
+    Write-Host "  ViGEmBus PnP device present but broken (Status: $($vigemDevice.Status)) — removing the dead node..." -ForegroundColor Yellow
+    & pnputil /remove-device $vigemDevice.InstanceId 2>&1 | Out-Null
+    Write-Host "  [DIAG] Removed failed node: $($vigemDevice.InstanceId)" -ForegroundColor DarkGray
+    $vigemDevice = $null
 } elseif ($vigem -and $vigem.Status -eq 'Running' -and -not $vigemDevice) {
     Write-Host "  ViGEmBus service running but PnP device missing — reinstalling..." -ForegroundColor Yellow
 } elseif ($vigem -and $vigem.Status -ne 'Running') {
@@ -330,6 +349,14 @@ if (-not $vigemOk) {
     # Detection is by InstanceId (Get-ViGEmNodes) so a just-created node whose driver hasn't
     # loaded yet is recognised and we don't stack up duplicate nodes on re-runs (issue #9).
     $vigemDevice = @(Get-ViGEmNodes) | Select-Object -First 1
+
+    # Apollo opens the device, not the service, so a node left in a broken state is worth exactly
+    # as much as no node at all. Drop it and let the SetupAPI path below build a fresh one.
+    if ($vigemDevice -and $vigemBadStatuses -contains $vigemDevice.Status) {
+        Write-Host "  [DIAG] Node still $($vigemDevice.Status) after the installer — removing so it can be recreated" -ForegroundColor DarkGray
+        & pnputil /remove-device $vigemDevice.InstanceId 2>&1 | Out-Null
+        $vigemDevice = $null
+    }
 
     if (-not $vigemDevice) {
         # Find a staged ViGEmBus INF in the DriverStore to use for device node creation.
@@ -405,6 +432,14 @@ public class ViGEmInstaller {
     if ($vigemDevice -and $vigemDevice.Status -eq 'OK') {
         Write-OK "Installed (PnP device OK, service: $($vigem.Status))"
         $Installed += "ViGEm"
+    } elseif ($vigemDevice -and $vigemBadStatuses -contains $vigemDevice.Status) {
+        # Recreated and still broken. A reboot will not help here and saying so sends people down
+        # the wrong path — the driver package itself is the suspect. Do NOT count this as installed:
+        # Apollo will log "ViGEmBus is not installed or running" and gamepads will not work.
+        Write-Host "  WARNING: ViGEmBus PnP device is $($vigemDevice.Status) after reinstall — gamepads will NOT work." -ForegroundColor Red
+        Write-Host "  Apollo will log 'ViGEmBus is not installed or running'. Check the node with:" -ForegroundColor Yellow
+        Write-Host "    Get-PnpDevice -InstanceId '$($vigemDevice.InstanceId)' | Select-Object Status,Problem" -ForegroundColor Yellow
+        $Skipped += "ViGEm (device $($vigemDevice.Status) after reinstall)"
     } elseif ($vigem) {
         Write-Host "  WARNING: Service present ($($vigem.Status)) but PnP device not yet visible — reboot may be required." -ForegroundColor Yellow
         $Installed += "ViGEm"
