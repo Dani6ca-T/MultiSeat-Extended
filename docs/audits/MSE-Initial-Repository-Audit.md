@@ -165,7 +165,7 @@ prerequisites/                       — Installer scripts
 | `IProcessGroupManager` | Per-seat group lifecycle | Implemented (WindowsProcessGroupManager) |
 | `IProcessMonitor` | Event-driven process exit | Implemented (WindowsProcessMonitor) |
 | `IProcessTracker` | Ownership tracking | Implemented (WindowsProcessTracker) |
-| `IProviderLifecycleConsumer` | Provider crash recovery | Implemented (SeatManager) |
+| `IProviderLifecycleConsumer` | Provider crash recovery | NOT IMPLEMENTED — no production consumers exist |
 
 ### Interfaces in MultiSeat.Service
 

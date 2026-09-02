@@ -57,7 +57,7 @@ SessionHealthCheck is now a **reconciliation safety net**:
 | `MultiSeat.Service/ProcessTracking/WindowsProcessMonitor.cs` | L5 fix | Entry cleanup in exit handler, expected exit filtering |
 | `MultiSeat.Service/ProcessTracking/StartupOrphanDetector.cs` | L3+L4 fixes | Removed dead dep, improved matching |
 | `MultiSeat.Service/Streaming/VibepolloManager.cs` | M1 fix | ProcessExited subscription, ProviderExited event, lifecycle wiring |
-| `MultiSeat.Service/Sessions/SeatManager.cs` | M1+M2 fix | IProviderLifecycleConsumer implementation, crash recovery |
+| `MultiSeat.Service/Sessions/SeatManager.cs` | M1+M2 fix | NOT IMPLEMENTED — no IProviderLifecycleConsumer wiring exists |
 | `MultiSeat.Service/Monitoring/SessionHealthCheck.cs` | M2 fix | Reconciliation safety net role, delegates to lifecycle consumer |
 | `MultiSeat.Tests/ProcessTracking/ProcessTrackerTests.cs` | Tests | 10 new tests for L1+L2 |
 | `MultiSeat.Tests/ProcessTracking/ProcessMonitorTests.cs` | Tests | 4 new tests for L5 |
