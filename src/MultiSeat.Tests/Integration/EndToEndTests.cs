@@ -1,4 +1,5 @@
 using System.Runtime.InteropServices;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using MultiSeat.Service.Accounts;
@@ -296,5 +297,34 @@ public class EndToEndTests
         Assert.NotNull(info);
         Assert.DoesNotContain("Detection pending", info!.Name);
         Assert.True(info.VramTotalMb > 0);
+    }
+
+    // ── DI registration smoke tests ──────────────────────────────────
+
+    [Fact]
+    public void DI_ISessionLauncher_ResolvesToSessionLauncher()
+    {
+        // Verifies that ISessionLauncher is registered in the host DI container
+        // and resolves to the concrete SessionLauncher singleton.
+        // Regression test for the startup blocker where only the concrete type
+        // was registered, causing SeatManager activation to fail.
+        var services = new ServiceCollection();
+        services.AddLogging();
+        services.Configure<MultiSeatOptions>(_ => { });
+        services.AddSingleton<AccountManager>();
+        services.AddSingleton<IAccountManager>(sp => sp.GetRequiredService<AccountManager>());
+        services.AddSingleton<SessionLauncher>();
+        services.AddSingleton<ISessionLauncher>(sp => sp.GetRequiredService<SessionLauncher>());
+
+        using var provider = services.BuildServiceProvider();
+        using var scope = provider.CreateScope();
+
+        var resolved = scope.ServiceProvider.GetService<ISessionLauncher>();
+        Assert.NotNull(resolved);
+        Assert.IsType<SessionLauncher>(resolved);
+
+        // Verify singleton: same instance on second resolve
+        var resolved2 = scope.ServiceProvider.GetService<ISessionLauncher>();
+        Assert.Same(resolved, resolved2);
     }
 }

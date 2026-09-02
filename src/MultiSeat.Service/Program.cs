@@ -270,6 +270,7 @@ builder.Services.AddWindowsService(options =>
 builder.Services.AddSingleton<AccountManager>();
 builder.Services.AddSingleton<IAccountManager>(sp => sp.GetRequiredService<AccountManager>());
 builder.Services.AddSingleton<SessionLauncher>();
+builder.Services.AddSingleton<ISessionLauncher>(sp => sp.GetRequiredService<SessionLauncher>());
 builder.Services.AddSingleton<RdpWrapper>();
 builder.Services.AddSingleton<ProcessInjector>();
 builder.Services.AddSingleton<VirtualDisplayManager>();
