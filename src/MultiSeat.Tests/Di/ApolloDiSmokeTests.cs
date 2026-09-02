@@ -8,9 +8,11 @@ using MultiSeat.Service.Display;
 using MultiSeat.Service.Emulators;
 using MultiSeat.Service.Input;
 using MultiSeat.Service.Monitoring;
+using MultiSeat.Service.ProcessTracking;
 using MultiSeat.Service.Sessions;
 using MultiSeat.Service.Storage;
 using MultiSeat.Service.Streaming;
+using MultiSeat.Shared;
 using Xunit;
 
 namespace MultiSeat.Tests.Di;
@@ -70,6 +72,8 @@ public class ApolloDiSmokeTests
         services.AddSingleton<GpuMonitor>();
         services.AddSingleton<MetricsCollector>();
         services.AddSingleton<SessionHealthCheck>();
+        services.AddSingleton<IProcessTracker, WindowsProcessTracker>();
+        services.AddSingleton<IProcessMonitor, WindowsProcessMonitor>();
         services.AddSingleton<SharedLibraryProvisioner>();
         services.AddSingleton<IEmulatorConfigSeeder, RetroArchConfigSeeder>();
         services.AddSingleton<SeatManager>();

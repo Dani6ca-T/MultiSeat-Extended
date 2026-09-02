@@ -8,9 +8,11 @@ using MultiSeat.Service.Display;
 using MultiSeat.Service.Emulators;
 using MultiSeat.Service.Input;
 using MultiSeat.Service.Monitoring;
+using MultiSeat.Service.ProcessTracking;
 using MultiSeat.Service.Sessions;
 using MultiSeat.Service.Storage;
 using MultiSeat.Service.Streaming;
+using MultiSeat.Shared;
 
 // ── Click-dialog-by-PID helper mode ──────────────────────────────────
 // Finds any visible top-level window owned by <pid> that contains a child
@@ -290,6 +292,10 @@ builder.Services.AddSingleton<SeatPresetStore>();
 builder.Services.AddSingleton<GpuMonitor>();
 builder.Services.AddSingleton<MetricsCollector>();
 builder.Services.AddSingleton<SessionHealthCheck>();
+
+// ── ProcessTracking (Phase 1: identity + lifecycle observation) ──────
+builder.Services.AddSingleton<IProcessTracker, WindowsProcessTracker>();
+builder.Services.AddSingleton<IProcessMonitor, WindowsProcessMonitor>();
 
 // Shared game library + emulator config seeders (register each seeder as IEmulatorConfigSeeder
 // so SeatManager picks them up; add Dolphin/PCSX2 seeders here later with no other changes).

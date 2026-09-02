@@ -4,6 +4,7 @@ using System.Text.RegularExpressions;
 using Microsoft.Extensions.Options;
 using MultiSeat.Service.Configuration;
 using MultiSeat.Service.Sessions;
+using MultiSeat.Shared;
 using MultiSeat.Shared.Models;
 
 namespace MultiSeat.Service.Streaming;
@@ -42,6 +43,8 @@ public sealed class ApolloManager
     private readonly ApolloConfigBuilder _configBuilder;
     private readonly ProcessInjector _processInjector;
     private readonly Monitoring.ApolloServerQuery _serverQuery;
+    private readonly IProcessTracker _tracker;
+    private readonly IProcessMonitor _monitor;
 
     // Seat → Apollo instance tracking
     private readonly ConcurrentDictionary<Guid, ApolloInstance> _instances = new();
@@ -51,13 +54,17 @@ public sealed class ApolloManager
         IOptions<MultiSeatOptions> options,
         ApolloConfigBuilder configBuilder,
         ProcessInjector processInjector,
-        Monitoring.ApolloServerQuery serverQuery)
+        Monitoring.ApolloServerQuery serverQuery,
+        IProcessTracker tracker,
+        IProcessMonitor monitor)
     {
         _logger = logger;
         _options = options.Value;
         _configBuilder = configBuilder;
         _processInjector = processInjector;
         _serverQuery = serverQuery;
+        _tracker = tracker;
+        _monitor = monitor;
     }
 
     /// <summary>
@@ -111,8 +118,13 @@ public sealed class ApolloManager
             return pid;
         }
 
+        // Obtain actual OS start time for ProcessIdentity (PID reuse protection)
+        var startedAt = GetProcessStartTime(pid);
+        var identity = new ProcessIdentity(pid, startedAt);
+
         var instance = new ApolloInstance(
             SeatId: seat.Id,
+            Identity: identity,
             ProcessId: pid,
             ConfigPath: configPath,
             SessionId: seat.SessionId,
@@ -121,6 +133,10 @@ public sealed class ApolloManager
             RestartCount: 0);
 
         _instances[seat.Id] = instance;
+
+        // Register ownership and start lifecycle monitoring
+        _tracker.Register(identity, seat.Id, ManagedProcessType.Provider);
+        _monitor.StartMonitoring(identity, seat.Id, ManagedProcessType.Provider);
 
         _logger.LogInformation(
             "Seat {Id}: Apollo started (PID {Pid}) — Moonlight can connect on port {Port}",
@@ -138,6 +154,10 @@ public sealed class ApolloManager
     {
         if (!_instances.TryGetValue(seat.Id, out var instance))
             return;
+
+        // Mark expected exit before killing (required by IProcessMonitor contract)
+        if (instance.Identity is { } identity)
+            _monitor.MarkExpectedExit(identity);
 
         if (instance.ProcessId > 0)
         {
@@ -161,6 +181,13 @@ public sealed class ApolloManager
             }
         }
 
+        // Clean up ProcessTracking (process is dead)
+        if (identity is { } tid)
+        {
+            _tracker.Unregister(tid);
+            _monitor.StopMonitoring(tid);
+        }
+
         // Reset restart count — a sleep reconnect is not a crash
         _instances[seat.Id] = instance with { ProcessId = 0, RestartCount = 0 };
     }
@@ -171,28 +198,43 @@ public sealed class ApolloManager
     /// </summary>
     public void Stop(SeatInfo seat)
     {
+        _instances.TryGetValue(seat.Id, out var instance);
+        var identity = instance?.Identity;
+
+        // Mark expected exit BEFORE killing (required by IProcessMonitor contract)
+        if (identity is { } id)
+            _monitor.MarkExpectedExit(id);
+
         _instances.TryRemove(seat.Id, out _);
 
-        if (seat.ApolloProcessId <= 0) return;
-
-        try
+        if (seat.ApolloProcessId > 0)
         {
-            var proc = Process.GetProcessById(seat.ApolloProcessId);
-            if (!proc.HasExited)
+            try
             {
-                proc.Kill(entireProcessTree: true);
-                proc.WaitForExit(5000);
+                var proc = Process.GetProcessById(seat.ApolloProcessId);
+                if (!proc.HasExited)
+                {
+                    proc.Kill(entireProcessTree: true);
+                    proc.WaitForExit(5000);
+                }
+                _logger.LogInformation("Seat {Id}: Apollo stopped (PID {Pid})",
+                    seat.Id, seat.ApolloProcessId);
             }
-            _logger.LogInformation("Seat {Id}: Apollo stopped (PID {Pid})",
-                seat.Id, seat.ApolloProcessId);
+            catch (ArgumentException)
+            {
+                // Process already exited
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Seat {Id}: error stopping Apollo", seat.Id);
+            }
         }
-        catch (ArgumentException)
+
+        // Clean up ProcessTracking
+        if (identity is { } tid)
         {
-            // Process already exited
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(ex, "Seat {Id}: error stopping Apollo", seat.Id);
+            _tracker.Unregister(tid);
+            _monitor.StopMonitoring(tid);
         }
     }
 
@@ -223,6 +265,13 @@ public sealed class ApolloManager
             "Seat {Id}: restarting Apollo (attempt {N}/{Max})",
             seat.Id, prev.RestartCount + 1, MaxRestartAttempts);
 
+        // Unregister old identity (process already dead — detected by SessionHealthCheck)
+        if (prev.Identity is { } oldIdentity)
+        {
+            _tracker.Unregister(oldIdentity);
+            _monitor.StopMonitoring(oldIdentity);
+        }
+
         // Re-use existing config — restart in the seat's own session (same as initial start)
         var pid = await _processInjector.LaunchApolloInSessionAsync(
             seat.SessionId, seat.AccountName,
@@ -230,14 +279,23 @@ public sealed class ApolloManager
 
         if (pid > 0)
         {
+            // Obtain actual OS start time for new ProcessIdentity
+            var startedAt = GetProcessStartTime(pid);
+            var newIdentity = new ProcessIdentity(pid, startedAt);
+
             _instances[seat.Id] = prev with
             {
+                Identity = newIdentity,
                 ProcessId = pid,
                 StartedAt = DateTimeOffset.UtcNow,
                 RestartCount = prev.RestartCount + 1,
                 SessionId = seat.SessionId,
                 AccountName = seat.AccountName
             };
+
+            // Register and monitor the new process
+            _tracker.Register(newIdentity, seat.Id, ManagedProcessType.Provider);
+            _monitor.StartMonitoring(newIdentity, seat.Id, ManagedProcessType.Provider);
 
             seat.ApolloProcessId = pid;
             _logger.LogInformation(
@@ -371,6 +429,29 @@ public sealed class ApolloManager
 
         return await _serverQuery.QueryAsync(
             seat.PortBase + Shared.Constants.OffsetGfeHttp, ct);
+    }
+
+    // ═══════════════════════════════════════════════════════════════════
+    //  PROCESS IDENTITY HELPERS
+    // ═══════════════════════════════════════════════════════════════════
+
+    /// <summary>
+    /// Obtain the actual OS process start time for a PID.
+    /// Used to construct <see cref="ProcessIdentity"/> for PID-reuse protection.
+    /// Falls back to UtcNow if the process exited between launch and now.
+    /// </summary>
+    private static DateTimeOffset GetProcessStartTime(int pid)
+    {
+        try
+        {
+            using var proc = Process.GetProcessById(pid);
+            return proc.StartTime.ToUniversalTime();
+        }
+        catch (ArgumentException)
+        {
+            // Process already exited between launch and now — use current time as identity
+            return DateTimeOffset.UtcNow;
+        }
     }
 
     // ═══════════════════════════════════════════════════════════════════
@@ -707,6 +788,7 @@ public sealed class ApolloManager
 /// </summary>
 internal sealed record ApolloInstance(
     Guid SeatId,
+    ProcessIdentity Identity,
     int ProcessId,
     string ConfigPath,
     int SessionId,

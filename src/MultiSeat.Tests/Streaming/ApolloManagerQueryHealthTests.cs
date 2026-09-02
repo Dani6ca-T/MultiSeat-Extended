@@ -5,6 +5,7 @@ using MultiSeat.Service.Configuration;
 using MultiSeat.Service.Monitoring;
 using MultiSeat.Service.Sessions;
 using MultiSeat.Service.Streaming;
+using MultiSeat.Shared;
 using MultiSeat.Shared.Models;
 using Moq;
 using Xunit;
@@ -46,12 +47,17 @@ public class ApolloManagerQueryHealthTests
             Options.Create(_options),
             sessionLauncher);
 
+        var tracker = Mock.Of<IProcessTracker>();
+        var monitor = Mock.Of<IProcessMonitor>();
+
         _manager = new ApolloManager(
             logger,
             Options.Create(_options),
             configBuilder,
             processInjector,
-            serverQuery);
+            serverQuery,
+            tracker,
+            monitor);
     }
 
     [Fact]
