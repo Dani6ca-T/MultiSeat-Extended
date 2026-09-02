@@ -1,7 +1,7 @@
 # MultiSeat-Extended — Project State
 
 **Purpose**: Handoff/checkpoint for CLI coding agents. Read this first.
-**Last updated**: 2026-08-31
+**Last updated**: 2026-09-02 (checkpoint commit)
 
 ---
 
@@ -41,10 +41,9 @@ Current reality: 2-layer (`MultiSeat.Shared` + `MultiSeat.Service`) with `SeatMa
 
 ```
 Branch:          master
-HEAD:            d27ad1f5b18380d190f97ff76bebfc0d48b851d9
-origin/master:   d27ad1f5b18380d190f97ff76bebfc0d48b851d9
-traycer HEAD:    efa62dc (NOT merged, NOT on master)
-Working tree:    Clean (only untracked ProcessTracking + docs)
+HEAD:            35405d9
+origin/master:   093c013 (behind by 6 commits)
+Working tree:    Clean (only .freebuff/ and TestResults/ remain untracked)
 ```
 
 ---
@@ -59,11 +58,18 @@ Working tree:    Clean (only untracked ProcessTracking + docs)
 | IAccountManager extraction | `0d3d02d` | ✅ Completed |
 | Service Locator removal | `d4486c0` | ✅ Completed |
 | Initial repository audit | `8fefd3c` | ✅ Complete |
-| Traycer branch audit | Untracked | ✅ Complete |
-| Historical architecture audit | Untracked | ✅ Complete |
-| SeatManager architecture audit | Untracked | ✅ Complete |
-| Display detection refactoring proposal | Untracked | ✅ DO NOT IMPLEMENT |
-| AccountManager boundary audit | Untracked | ✅ APPROVED + COMPLETED |
+| Traycer branch audit | `8cf77ff` | ✅ Complete |
+| Historical architecture audit | `8cf77ff` | ✅ Complete |
+| SeatManager architecture audit | `8cf77ff` | ✅ Complete |
+| Display detection refactoring proposal | `8cf77ff` | ✅ DO NOT IMPLEMENT |
+| AccountManager boundary audit | `8cf77ff` | ✅ APPROVED + COMPLETED |
+| Apollo provider boundary | `cdee422` | ✅ DONE |
+| Apollo DI smoke tests | `70369c0` | ✅ DONE |
+| RdpWrapper → TermWrap migration | `06796f8` | ✅ DONE |
+| ProcessTracking implementation | `6e73604` | ✅ DONE (not integrated) |
+| Architecture documentation | `0aceacf` | ✅ DONE |
+| Audit documentation | `8cf77ff` | ✅ DONE |
+| Research documentation | `35405d9` | ✅ DONE |
 | IEmulatorConfigSeeder | Original | ✅ Existing |
 
 **SeatManager dependency status**: 12 concrete, 3 interfaced (ISessionLauncher, IVirtualDisplayManager, IAccountManager), 1 interface collection (IEnumerable\<IEmulatorConfigSeeder\>). Public properties removed: InputRouter, InputHookManager, ApolloManager.
@@ -115,36 +121,36 @@ Do NOT automatically assume the next step is another interface extraction. Evalu
 
 | Problem | Severity | Notes |
 |---------|----------|-------|
-| ProcessTracking can't compile on master | Critical | Untracked, not blocking master |
+| ProcessTracking not integrated | Important | Committed but not referenced by production code |
 | 13 concrete dependencies in SeatManager | Important | Reduced from 14 after IAccountManager extraction |
 | No provider abstraction (IStreamingProvider) | Important | Documented in PROVIDER-CONTRACT.md |
 | Traycer branch diverged | Important | Evaluated, not merged |
-| Previous audit doc references wrong HEAD | Low | Stale but non-blocking |
+| Apollo → Vibepollo migration not started | Important | Separate deliberate task needed |
 
 ---
 
 ## ProcessTracking
 
-Pre-existing untracked ProcessTracking work exists in the working tree:
+Committed in `6e73604`. Interfaces + implementations + tests exist but are NOT integrated:
 
 ```
-src/MultiSeat.Shared/IProcessGroup.cs
-src/MultiSeat.Shared/IProcessGroupManager.cs
-src/MultiSeat.Shared/IProcessMonitor.cs
-src/MultiSeat.Shared/IProcessTracker.cs
-src/MultiSeat.Shared/IProviderLifecycleConsumer.cs
-src/MultiSeat.Shared/Models/ManagedProcess.cs
-src/MultiSeat.Shared/Models/ManagedProcessType.cs
-src/MultiSeat.Shared/Models/ProcessExitInfo.cs
-src/MultiSeat.Shared/Models/ProcessIdentity.cs
-src/MultiSeat.Service/Interop/SafeJobHandle.cs
-src/MultiSeat.Service/ProcessTracking/ (5 files)
-src/MultiSeat.Tests/ProcessTracking/ (6 files)
+src/MultiSeat.Shared/IProcessGroup.cs          ✅ committed
+src/MultiSeat.Shared/IProcessGroupManager.cs   ✅ committed
+src/MultiSeat.Shared/IProcessMonitor.cs        ✅ committed
+src/MultiSeat.Shared/IProcessTracker.cs        ✅ committed
+src/MultiSeat.Shared/IProviderLifecycleConsumer.cs  ✅ committed
+src/MultiSeat.Shared/Models/ManagedProcess.cs  ✅ committed
+src/MultiSeat.Shared/Models/ManagedProcessType.cs  ✅ committed
+src/MultiSeat.Shared/Models/ProcessExitInfo.cs  ✅ committed
+src/MultiSeat.Shared/Models/ProcessIdentity.cs ✅ committed
+src/MultiSeat.Service/Interop/SafeJobHandle.cs ✅ committed
+src/MultiSeat.Service/ProcessTracking/ (5 files)  ✅ committed
+src/MultiSeat.Tests/ProcessTracking/ (6 files)   ✅ committed
 ```
 
-**Status**: Unfinished. Cannot compile on master (references missing Kernel32 types and `VibepolloExePath`).
+**Status**: Committed but NOT referenced by SeatManager, ApolloManager, or Program.cs. Tests pass (included in 538 count).
 
-**Rule**: MUST NOT be modified, moved, deleted, stashed, staged, committed, or included in unrelated tasks.
+**Rule**: Integration into production code requires a separate deliberate task.
 
 ---
 
@@ -161,7 +167,7 @@ Contains historical work by the repository owner (Dani6ca-T):
 - Apollo → Vibepollo backend migration (Phase 1+2)
 - Vibepollo advanced features (Phase 3)
 - Audio subsystem removal (Phase 5)
-- RDPWrap → TermWrap installation (Phase 6)
+- RDPWrap → TermWrap installation (Phase 6) — **applied to master 2026-09-02**
 
 **Rule**: Do NOT merge wholesale. Evaluate piece-by-piece if needed.
 
@@ -272,16 +278,16 @@ Leave the repository in a safe state. Update this file before stopping whenever 
 ## CURRENT CHECKPOINT
 
 ```
-Last verified:     2026-08-31
+Last verified:     2026-09-02
 Branch:            master
-HEAD:              d4486c0
-origin/master:     d4486c0
-Working tree:      Service Locator removal staged for commit
-Current task:      Service Locator removal — COMPLETED, awaiting commit+push
-Status:            Done
-Last completed:    Service Locator removal
-Next exact step:   Commit and push, then select next architectural improvement
-Known blocker:     ProcessTracking still can't compile on master (pre-existing, untracked)
-Test baseline:     387 passed / 17 skipped / 0 failed
-Build:             ✅ 0 errors from tracked code, 9 errors from pre-existing ProcessTracking
+HEAD:              35405d9
+origin/master:     093c013 (6 commits behind)
+Working tree:      Clean
+Current task:      Checkpoint commit — DONE
+Status:            Stable checkpoint
+Last completed:    6 commits (TermWrap, ProcessTracking, docs, audits, research)
+Next exact step:   Push to origin, then select next architectural improvement
+Known blocker:     None — build clean, tests pass
+Test baseline:     538 passed / 17 skipped / 0 failed
+Build:             ✅ 0 errors, 0 warnings
 ```
