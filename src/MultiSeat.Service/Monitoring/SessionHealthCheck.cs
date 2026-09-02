@@ -167,26 +167,23 @@ public sealed class SessionHealthCheck
                 seat.SessionId = await _sessionLauncher.LaunchSessionAsync(
                     seat.AccountName, ct, RdpGeometry.ForClient(seat.Width, seat.Height));
 
-                // Do not start Apollo against a session that is not ACTIVE yet. Apollo calls
-                // QueryDisplayConfig at startup, and a Disconnected session answers
-                // ERROR_ACCESS_DENIED — so it comes up without a display, dies, and the
-                // health check restarts it into the same state. A fixed delay is not enough
-                // on its own: it is a guess about how long the session takes, and losing that
-                // race produces exactly this loop.
+                // Wait for the session to become ACTIVE before starting Apollo.
+                // Apollo needs a live session for QueryDisplayConfig / DXGI; starting it
+                // against a DISCONNECTED session triggers a restart feedback loop.
                 if (!await WaitForSessionActiveAsync(
-                        id => _sessionLauncher.IsSessionActive(id), seat.SessionId, ct))
+                        id => _sessionLauncher.IsSessionActive(id),
+                        seat.SessionId, ct))
                 {
                     _logger.LogWarning(
                         "Seat {Id}: session {Sid} did not become ACTIVE within 10s after reconnect — aborting",
                         seat.Id, seat.SessionId);
-                    try { _sessionLauncher.DisconnectSession(seat.SessionId); } catch { /* best effort */ }
-                    seat.TransitionTo(SeatStatus.Error, _logger);
+                    seat.Status = SeatStatus.Error;
                     seat.ErrorMessage = "RDP session did not become active after reconnect";
                     return true;
                 }
 
                 // Give the display pipeline a moment to reinitialize after the session
-                // transitions back to Active — SudoVDA and DXGI need a beat to be ready.
+                // transitions to Active — SudoVDA and DXGI need a beat to be ready.
                 await Task.Delay(2000, ct);
 
                 _logger.LogInformation(
@@ -389,12 +386,9 @@ public sealed class SessionHealthCheck
         uptime is not null && uptime <= ApolloStartupWindow;
 
     /// <summary>
-    /// Poll until the session reports Active, or the timeout expires.
+    /// Poll <paramref name="isSessionActive"/> until the session reports Active
+    /// or the 10-second timeout expires.
     /// </summary>
-    /// <remarks>
-    /// Takes the probe as a delegate rather than calling SessionLauncher directly so the timing
-    /// can be tested without a Windows session.
-    /// </remarks>
     /// <returns>true if the session became Active within the timeout.</returns>
     internal static async Task<bool> WaitForSessionActiveAsync(
         Func<int, bool> isSessionActive,
@@ -403,13 +397,6 @@ public sealed class SessionHealthCheck
         int pollMs = 500,
         int timeoutMs = 10_000)
     {
-        // Deviation from the ported original, which only observed cancellation through the
-        // Task.Delay inside the loop: an already-cancelled token skipped the loop entirely and
-        // returned a plain false, which the caller cannot tell from "the session never came up"
-        // and so parks the seat in Error during an ordinary shutdown. Cancelling always throws
-        // here, matching both Task.Delay below and LaunchSessionAsync in the same try block.
-        ct.ThrowIfCancellationRequested();
-
         var waited = 0;
         while (waited < timeoutMs && !ct.IsCancellationRequested)
         {
@@ -418,8 +405,6 @@ public sealed class SessionHealthCheck
             await Task.Delay(pollMs, ct);
             waited += pollMs;
         }
-
-        // One last look: the final sleep may have covered the transition.
         return isSessionActive(sessionId);
     }
 }
