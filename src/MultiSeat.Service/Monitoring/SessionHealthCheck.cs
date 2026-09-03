@@ -21,7 +21,7 @@ public sealed class SessionHealthCheck
 {
     private readonly ILogger<SessionHealthCheck> _logger;
     private readonly ISessionLauncher _sessionLauncher;
-    private readonly ApolloManager _apolloManager;
+    private readonly IStreamingProvider _streaming;
     private readonly SeatManager _seatManager;
     private readonly OnConnectAppLauncher _onConnectApps;
     private readonly ClientResolutionFollower _resolutionFollower;
@@ -30,7 +30,7 @@ public sealed class SessionHealthCheck
     public SessionHealthCheck(
         ILogger<SessionHealthCheck> logger,
         ISessionLauncher sessionLauncher,
-        ApolloManager apolloManager,
+        IStreamingProvider streaming,
         SeatManager seatManager,
         OnConnectAppLauncher onConnectApps,
         ClientResolutionFollower resolutionFollower,
@@ -38,7 +38,7 @@ public sealed class SessionHealthCheck
     {
         _logger = logger;
         _sessionLauncher = sessionLauncher;
-        _apolloManager = apolloManager;
+        _streaming = streaming;
         _seatManager = seatManager;
         _onConnectApps = onConnectApps;
         _resolutionFollower = resolutionFollower;
@@ -163,7 +163,7 @@ public sealed class SessionHealthCheck
             using var lease = await _lifecycleGate.AcquireAsync(seat.Id, ct);
 
             // Try auto-restart
-            var newPid = await _apolloManager.RestartAsync(seat, ct);
+            var newPid = await _streaming.RestartAsync(seat, ct);
 
             if (newPid > 0)
             {
@@ -298,7 +298,7 @@ public sealed class SessionHealthCheck
             // Without this, RestartAsync launches a second Apollo alongside the first,
             // causing a port conflict. KillForReconnect also resets RestartCount so
             // sleep cycles don't exhaust the crash-restart limit.
-            _apolloManager.KillForReconnect(seat);
+            _streaming.KillForReconnect(seat);
 
             // Pass the geometry: if the stale session has to be logged off and recreated,
             // the replacement must come back at the seat's own size rather than inheriting
@@ -332,7 +332,7 @@ public sealed class SessionHealthCheck
             _logger.LogInformation(
                 "Seat {Id}: session reconnected — restarting Apollo",
                 seat.Id);
-            var newPid = await _apolloManager.RestartAsync(seat, ct);
+            var newPid = await _streaming.RestartAsync(seat, ct);
             if (newPid > 0)
             {
                 seat.ApolloProcessId = newPid;
@@ -353,8 +353,8 @@ public sealed class SessionHealthCheck
             }
 
             // Apollo restart came back with -1 (start failed or restart-limit hit).
-                // The previous shape of the function silently returned false here, leaving
-                // the seat in Connecting forever — fix that by parking it in Error.
+            // The previous shape of the function silently returned false here, leaving
+            // the seat in Connecting forever — fix that by parking it in Error.
             _logger.LogError(
                 "Seat {Id}: Apollo failed to restart after session reconnect", seat.Id);
             seat.Status = SeatStatus.Error;

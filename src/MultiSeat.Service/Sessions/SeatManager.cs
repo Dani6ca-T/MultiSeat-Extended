@@ -39,6 +39,7 @@ public sealed class SeatManager
     private readonly ISessionLauncher _sessionLauncher;
     private readonly ProcessInjector _processInjector;
     private readonly IVirtualDisplayManager _displayManager;
+    private readonly IStreamingProvider _streaming;
     private readonly ApolloManager _apolloManager;
     private readonly PortAllocator _portAllocator;
     private readonly FirewallManager _firewall;
@@ -58,6 +59,7 @@ public sealed class SeatManager
         ISessionLauncher sessionLauncher,
         ProcessInjector processInjector,
         IVirtualDisplayManager displayManager,
+        IStreamingProvider streaming,
         ApolloManager apolloManager,
         PortAllocator portAllocator,
         FirewallManager firewall,
@@ -76,6 +78,7 @@ public sealed class SeatManager
         _sessionLauncher = sessionLauncher;
         _processInjector = processInjector;
         _displayManager = displayManager;
+        _streaming = streaming;
         _apolloManager = apolloManager;
         _portAllocator = portAllocator;
         _firewall = firewall;
@@ -309,7 +312,7 @@ public sealed class SeatManager
             seat.ProvisioningStep = "Apollo";
             await BroadcastState(seat);
 
-            seat.ApolloProcessId = await _apolloManager.StartAsync(seat, ct);
+            seat.ApolloProcessId = await _streaming.StartAsync(seat, ct);
             _logger.LogInformation("Seat {Id}: Apollo PID {Pid}", seat.Id, seat.ApolloProcessId);
 
             // ── 6.5: Discover SudoVDA UUID from Apollo's startup log ──────
@@ -347,9 +350,9 @@ public sealed class SeatManager
 
                     // Restart Apollo with the correct output_name (UUID).
                     // Brief delay to let Apollo finish writing logs before we kill it.
-                    _apolloManager.Stop(seat);
+                    _streaming.Stop(seat);
                     await Task.Delay(2000, ct);
-                    seat.ApolloProcessId = await _apolloManager.StartAsync(seat, ct);
+                    seat.ApolloProcessId = await _streaming.StartAsync(seat, ct);
 
                     // ── 6.6/6.7: Display isolation + refresh-rate clamp ─────
                     await ApplyDisplayIsolationAsync(seat, ct);
@@ -486,7 +489,7 @@ public sealed class SeatManager
         try { _hidHide.UncloakForSession(seat); } catch { /* best effort */ }
         try { UnassignControllersForSeat(seat.Id); } catch { /* best effort */ }
         try { _controllerManager.DestroyController(seat); } catch { /* best effort */ }
-        try { _apolloManager.Stop(seat); } catch { /* best effort */ }
+        try { _streaming.Stop(seat); } catch { /* best effort */ }
         try { _audioRouter.ReleaseCable(seat); } catch { /* best effort */ }
         try { await _firewall.ClosePortsAsync(seat, ct); } catch { /* best effort */ }
         try { await _displayManager.DestroyDisplayAsync(seat, ct); } catch { /* best effort */ }
@@ -515,18 +518,18 @@ public sealed class SeatManager
         var seat = GetSeat(seatId);
         if (seat is null) return new SeatServices();
 
-        var apolloAlive = seat.ApolloProcessId > 0 && _apolloManager.IsAlive(seatId);
+        var apolloAlive = seat.ApolloProcessId > 0 && _streaming.IsAlive(seatId);
 
         Monitoring.ApolloServerInfo? server = null;
         if (apolloAlive)
-            server = await _apolloManager.QueryHealthAsync(seat, ct);
+            server = await _streaming.QueryHealthAsync(seat, ct);
 
         return new SeatServices
         {
             Apollo = apolloAlive,
             ApolloReachable = server is not null,
             ApolloStreaming = server?.Streaming ?? false,
-            ApolloRestarts = _apolloManager.GetRestartCount(seatId),
+            ApolloRestarts = _streaming.GetRestartCount(seatId),
             Display = !string.IsNullOrEmpty(seat.DisplayDevicePath),
             // PerSession: the endpoint is created by Windows with the session itself, so there
             // is no device assignment that could be missing — report healthy, and let
@@ -551,7 +554,7 @@ public sealed class SeatManager
         // ApolloProcessId; must serialize with recovery/reconnect/range-changers.
         using var lease = await _lifecycleGate.AcquireAsync(seatId, CancellationToken.None);
 
-        _apolloManager.Stop(seat);
+        _streaming.Stop(seat);
         seat.ApolloProcessId = 0;
         _ = BroadcastState(seat);
         _logger.LogInformation("Seat {Id}: Apollo stopped by user", seatId);
@@ -570,7 +573,7 @@ public sealed class SeatManager
         if (seat.SessionId < 0)
             throw new InvalidOperationException("No active session — provision the seat first.");
 
-        seat.ApolloProcessId = await _apolloManager.StartAsync(seat, ct);
+        seat.ApolloProcessId = await _streaming.StartAsync(seat, ct);
 
         // Re-apply display config
         if (!string.IsNullOrEmpty(seat.DisplayDevicePath))
@@ -591,10 +594,10 @@ public sealed class SeatManager
         // resolution change, nvenc change).
         using var lease = await _lifecycleGate.AcquireAsync(seatId, ct);
 
-        _apolloManager.Stop(seat);
+        _streaming.Stop(seat);
         seat.ApolloProcessId = 0;
 
-        seat.ApolloProcessId = await _apolloManager.StartAsync(seat, ct);
+        seat.ApolloProcessId = await _streaming.StartAsync(seat, ct);
 
         if (!string.IsNullOrEmpty(seat.DisplayDevicePath))
             _apolloManager.UpdateDisplayOutput(seat, seat.DisplayDevicePath);
@@ -817,9 +820,9 @@ public sealed class SeatManager
 
         seat.NvencPreset = preset;
 
-        _apolloManager.KillForReconnect(seat);
+        _streaming.KillForReconnect(seat);
         await Task.Delay(500, ct);
-        seat.ApolloProcessId = await _apolloManager.StartAsync(seat, ct);
+        seat.ApolloProcessId = await _streaming.StartAsync(seat, ct);
 
         if (seat.AutoStart)
         {
@@ -884,14 +887,14 @@ public sealed class SeatManager
 
         // Take the session down and bring it back at the new size. Apollo is stopped first so it
         // is not capturing a desktop that is about to change under it.
-        _apolloManager.KillForReconnect(seat);
+        _streaming.KillForReconnect(seat);
         _sessionLauncher.DisconnectSession(seat.SessionId);
 
         seat.SessionId = await _sessionLauncher.LaunchSessionAsync(seat.AccountName, ct, geometry);
 
         // Apollo advertises the seat's resolution in its config, so regenerate before starting.
         _apolloManager.RebuildConfig(seat);
-        seat.ApolloProcessId = await _apolloManager.StartAsync(seat, ct);
+        seat.ApolloProcessId = await _streaming.StartAsync(seat, ct);
 
         if (seat.AutoStart)
         {

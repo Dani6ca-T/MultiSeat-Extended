@@ -36,7 +36,7 @@ namespace MultiSeat.Service.Streaming;
 /// Requires Apollo (Sunshine fork) installed:
 ///   https://github.com/ClassicOldSong/Apollo
 /// </summary>
-public sealed class ApolloManager
+public sealed class ApolloManager : IStreamingProvider
 {
     private readonly ILogger<ApolloManager> _logger;
     private readonly MultiSeatOptions _options;

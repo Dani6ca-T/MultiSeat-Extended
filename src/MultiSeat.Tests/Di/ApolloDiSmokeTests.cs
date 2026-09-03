@@ -55,6 +55,7 @@ public class ApolloDiSmokeTests
         services.AddSingleton<VirtualDisplayManager>();
         services.AddSingleton<IVirtualDisplayManager>(sp => sp.GetRequiredService<VirtualDisplayManager>());
         services.AddSingleton<ApolloManager>();
+        services.AddSingleton<IStreamingProvider>(sp => sp.GetRequiredService<ApolloManager>());
         services.AddSingleton<ApolloConfigBuilder>();
         services.AddSingleton<OnConnectAppLauncher>();
         services.AddSingleton<ClientResolutionFollower>();
