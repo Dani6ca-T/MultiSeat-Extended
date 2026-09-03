@@ -6,6 +6,7 @@ const STATUS_COLORS: Record<SeatStatus, string> = {
   Configuring: "#f59e0b",
   Ready: "#10b981",
   Streaming: "#3b82f6",
+  Connecting: "#f59e0b",
   TearingDown: "#ef4444",
   Error: "#ef4444",
 };
@@ -16,6 +17,7 @@ const STATUS_LABELS: Record<SeatStatus, string> = {
   Configuring: "Configuring...",
   Ready: "Ready",
   Streaming: "Streaming",
+  Connecting: "Reconnecting...",
   TearingDown: "Tearing Down...",
   Error: "Error",
 };
@@ -23,7 +25,7 @@ const STATUS_LABELS: Record<SeatStatus, string> = {
 export function StatusBadge({ status }: { status: SeatStatus }) {
   const color = STATUS_COLORS[status] ?? "#6b7280";
   const label = STATUS_LABELS[status] ?? status;
-  const isAnimated = status === "Provisioning" || status === "Configuring" || status === "TearingDown";
+  const isAnimated = status === "Provisioning" || status === "Configuring" || status === "Connecting" || status === "TearingDown";
 
   return (
     <span

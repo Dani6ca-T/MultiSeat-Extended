@@ -138,6 +138,7 @@ public class HealthTests
     [Theory]
     [InlineData(SeatStatus.Ready)]
     [InlineData(SeatStatus.Streaming)]
+    [InlineData(SeatStatus.Connecting)]
     public void ALiveSeatIsChecked(SeatStatus status)
     {
         Assert.True(SessionHealthCheck.IsWorthChecking(status));

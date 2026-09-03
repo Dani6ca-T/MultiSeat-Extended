@@ -8,6 +8,7 @@ export type SeatStatus =
   | "Configuring"
   | "Ready"
   | "Streaming"
+  | "Connecting"
   | "TearingDown"
   | "Error";
 

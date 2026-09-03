@@ -121,69 +121,25 @@ public sealed class SessionHealthCheck
             _logger.LogWarning(
                 "Seat {Id}: session {Sid} is Disconnected (PC may have slept) — reconnecting",
                 seat.Id, seat.SessionId);
-            try
+
+            // Surface the reconnect as its own state so the dashboard does not claim the
+            // seat is Ready/Streaming while the session, Apollo, and display pipeline are
+            // being torn down and rebuilt. Capture the previous operational state so a
+            // successful recovery returns to exactly where the seat was — a Ready seat
+            // reconnects to Ready, a Streaming seat reconnects to Streaming. Failures
+            // still fall to Error, the same way they did before this state existed.
+            var previousStatus = seat.Status;
+            if (previousStatus is SeatStatus.Ready or SeatStatus.Streaming)
             {
-                // Kill the existing Apollo first — it survived sleep but with a broken
-                // display pipeline (DXGI/QueryDisplayConfig fail on Disconnected sessions).
-                // Without this, RestartAsync launches a second Apollo alongside the first,
-                // causing a port conflict. KillForReconnect also resets RestartCount so
-                // sleep cycles don't exhaust the crash-restart limit.
-                _apolloManager.KillForReconnect(seat);
-
-                // Pass the geometry: if the stale session has to be logged off and recreated,
-                // the replacement must come back at the seat's own size rather than inheriting
-                // the console desktop's.
-                //
-                // Keep the id it answers with: that path returns a NEW session, and the
-                // Apollo restart and display isolation just below both act on SessionId.
-                seat.SessionId = await _sessionLauncher.LaunchSessionAsync(
-                    seat.AccountName, ct, RdpGeometry.ForClient(seat.Width, seat.Height));
-
-                // Wait for the session to become ACTIVE before starting Apollo.
-                // Apollo needs a live session for QueryDisplayConfig / DXGI; starting it
-                // against a DISCONNECTED session triggers a restart feedback loop.
-                if (!await WaitForSessionActiveAsync(
-                        id => _sessionLauncher.IsSessionActive(id),
-                        seat.SessionId, ct))
-                {
-                    _logger.LogWarning(
-                        "Seat {Id}: session {Sid} did not become ACTIVE within 10s after reconnect — aborting",
-                        seat.Id, seat.SessionId);
-                    try { _sessionLauncher.DisconnectSession(seat.SessionId); } catch { /* best effort */ }
-                    seat.Status = SeatStatus.Error;
-                    seat.ErrorMessage = "RDP session did not become active after reconnect";
-                    return true;
-                }
-
-                // Give the display pipeline a moment to reinitialize after the session
-                // transitions to Active — SudoVDA and DXGI need a beat to be ready.
-                await Task.Delay(2000, ct);
-
-                _logger.LogInformation(
-                    "Seat {Id}: session reconnected — restarting Apollo",
-                    seat.Id);
-                var newPid = await _apolloManager.RestartAsync(seat, ct);
-                if (newPid > 0)
-                {
-                    seat.ApolloProcessId = newPid;
-                    _logger.LogInformation(
-                        "Seat {Id}: Apollo restarted after reconnect (PID {Pid})",
-                        seat.Id, newPid);
-
-                    // The session disconnect/reconnect wiped display-isolation state
-                    // (SudoVDA is no longer primary; the RDP adapter has come back at
-                    // its 1024×768 wake default). Without this, Apollo's mode change
-                    // ends up on the wrong display and the stream stays at 1024×768.
-                    await _seatManager.ApplyDisplayIsolationAsync(seat, ct);
-                    return true;
-                }
+                seat.Status = SeatStatus.Connecting;
+                // Broadcast the Connecting state before the recovery work begins. CheckAllSeatsAsync
+                // only broadcasts once, after every seat has been processed in turn, so without
+                // this the dashboard would skip past Connecting and only see the post-recovery
+                // state — which is exactly the misleading behaviour this state exists to fix.
+                try { await WebSocketHub.BroadcastSeatUpdateAsync(seat); }
+                catch (Exception ex) { _logger.LogDebug(ex, "Failed to broadcast Connecting state for seat {Id}", seat.Id); }
             }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex,
-                    "Seat {Id}: failed to reconnect session after sleep", seat.Id);
-            }
-            return false;
+            return await TryReconnectAsync(seat, previousStatus, ct);
         }
 
         // ── Check 2: Is Apollo still running? ─────────────────────
@@ -300,4 +256,120 @@ public sealed class SessionHealthCheck
         }
         return isSessionActive(sessionId);
     }
+
+    /// <summary>
+    /// Automatic session-recovery path, extracted from <see cref="CheckSeatAsync"/> only so the
+    /// state-transition outcomes are testable in isolation. The Apollo / mstsc / SudoVDA work is
+    /// unchanged from the version that lived inline; only the state writes are now grouped.
+    ///
+    /// Caller has already set <c>seat.Status = SeatStatus.Connecting</c> when <paramref name="previousStatus"/>
+    /// is <see cref="SeatStatus.Ready"/> or <see cref="SeatStatus.Streaming"/>. On success we restore
+    /// exactly that state, so a Ready seat reconnects to Ready and a Streaming seat reconnects to
+    /// Streaming. On any failure we transition to <see cref="SeatStatus.Error"/>, matching the
+    /// behaviour of the 10-second-active-timeout branch and the dead-session branch above.
+    /// </summary>
+    private async Task<bool> TryReconnectAsync(SeatInfo seat, SeatStatus previousStatus, CancellationToken ct)
+    {
+        try
+        {
+            // Kill the existing Apollo first — it survived sleep but with a broken
+            // display pipeline (DXGI/QueryDisplayConfig fail on Disconnected sessions).
+            // Without this, RestartAsync launches a second Apollo alongside the first,
+            // causing a port conflict. KillForReconnect also resets RestartCount so
+            // sleep cycles don't exhaust the crash-restart limit.
+            _apolloManager.KillForReconnect(seat);
+
+            // Pass the geometry: if the stale session has to be logged off and recreated,
+            // the replacement must come back at the seat's own size rather than inheriting
+            // the console desktop's.
+            //
+            // Keep the id it answers with: that path returns a NEW session, and the
+            // Apollo restart and display isolation just below both act on SessionId.
+            seat.SessionId = await _sessionLauncher.LaunchSessionAsync(
+                seat.AccountName, ct, RdpGeometry.ForClient(seat.Width, seat.Height));
+
+            // Wait for the session to become ACTIVE before starting Apollo.
+            // Apollo needs a live session for QueryDisplayConfig / DXGI; starting it
+            // against a DISCONNECTED session triggers a restart feedback loop.
+            if (!await WaitForSessionActiveAsync(
+                    id => _sessionLauncher.IsSessionActive(id),
+                    seat.SessionId, ct))
+            {
+                _logger.LogWarning(
+                    "Seat {Id}: session {Sid} did not become ACTIVE within 10s after reconnect — aborting",
+                    seat.Id, seat.SessionId);
+                try { _sessionLauncher.DisconnectSession(seat.SessionId); } catch { /* best effort */ }
+                seat.Status = SeatStatus.Error;
+                seat.ErrorMessage = "RDP session did not become active after reconnect";
+                return true;
+            }
+
+            // Give the display pipeline a moment to reinitialize after the session
+            // transitions to Active — SudoVDA and DXGI need a beat to be ready.
+            await Task.Delay(2000, ct);
+
+            _logger.LogInformation(
+                "Seat {Id}: session reconnected — restarting Apollo",
+                seat.Id);
+            var newPid = await _apolloManager.RestartAsync(seat, ct);
+            if (newPid > 0)
+            {
+                seat.ApolloProcessId = newPid;
+                _logger.LogInformation(
+                    "Seat {Id}: Apollo restarted after reconnect (PID {Pid})",
+                    seat.Id, newPid);
+
+                // The session disconnect/reconnect wiped display-isolation state
+                // (SudoVDA is no longer primary; the RDP adapter has come back at
+                // its 1024×768 wake default). Without this, Apollo's mode change
+                // ends up on the wrong display and the stream stays at 1024×768.
+                await _seatManager.ApplyDisplayIsolationAsync(seat, ct);
+
+                // Successful recovery — return the seat to exactly the state it was in
+                // before the disconnect. Ready stays Ready, Streaming stays Streaming.
+                seat.Status = previousStatus;
+                return true;
+            }
+
+            // Apollo restart came back with -1 (start failed or restart-limit hit).
+                // The previous shape of the function silently returned false here, leaving
+                // the seat in Connecting forever — fix that by parking it in Error.
+            _logger.LogError(
+                "Seat {Id}: Apollo failed to restart after session reconnect", seat.Id);
+            seat.Status = SeatStatus.Error;
+            seat.ErrorMessage = "Apollo failed to restart after session reconnect";
+            return true;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex,
+                "Seat {Id}: failed to reconnect session after sleep", seat.Id);
+            seat.Status = SeatStatus.Error;
+            seat.ErrorMessage = "Failed to reconnect session after sleep";
+            return true;
+        }
+    }
+
+    /// <summary>
+    /// The state-transition rule for the automatic session-recovery path. Pure function: given
+    /// the state the seat was in before recovery and whether recovery succeeded, return the
+    /// state it should be in after recovery.
+    ///
+    /// Success restores the previous operational state (Ready/Streaming) so the dashboard returns
+    /// to what it showed before the disconnect. Failure parks the seat in Error exactly like the
+    /// 10-second-active-timeout branch. Any previous state outside Ready/Streaming is a programming
+    /// error and falls to Error — that path is not reachable from CheckSeatAsync because IsWorthChecking
+    /// gates it.
+    ///
+    /// This helper is the spec; TryReconnectAsync applies it directly at the relevant branches
+    /// (the inline log lines and DisconnectSession calls differ per failure mode, so the branches
+    /// stay inline rather than collapsing through here). Keeping it as a separate function lets
+    /// the transition rule be pinned by unit tests without standing up ApolloManager/SeatManager.
+    /// </summary>
+    internal static SeatStatus ResolveRecoveryStatus(SeatStatus previousStatus, bool recoverySucceeded) =>
+        recoverySucceeded
+            ? (previousStatus is SeatStatus.Ready or SeatStatus.Streaming
+                ? previousStatus
+                : SeatStatus.Error)
+            : SeatStatus.Error;
 }

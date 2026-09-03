@@ -7,6 +7,7 @@ public enum SeatStatus
     Configuring,
     Ready,
     Streaming,
+    Connecting,
     TearingDown,
     Error
 }

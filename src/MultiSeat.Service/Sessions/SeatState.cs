@@ -10,8 +10,9 @@ public static class SeatStateExtensions
         [Shared.Models.SeatStatus.Idle] = [Shared.Models.SeatStatus.Provisioning],
         [Shared.Models.SeatStatus.Provisioning] = [Shared.Models.SeatStatus.Configuring, Shared.Models.SeatStatus.Error, Shared.Models.SeatStatus.TearingDown],
         [Shared.Models.SeatStatus.Configuring] = [Shared.Models.SeatStatus.Ready, Shared.Models.SeatStatus.Error, Shared.Models.SeatStatus.TearingDown],
-        [Shared.Models.SeatStatus.Ready] = [Shared.Models.SeatStatus.Streaming, Shared.Models.SeatStatus.TearingDown],
-        [Shared.Models.SeatStatus.Streaming] = [Shared.Models.SeatStatus.Ready, Shared.Models.SeatStatus.TearingDown, Shared.Models.SeatStatus.Error],
+        [Shared.Models.SeatStatus.Ready] = [Shared.Models.SeatStatus.Streaming, Shared.Models.SeatStatus.TearingDown, Shared.Models.SeatStatus.Connecting],
+        [Shared.Models.SeatStatus.Streaming] = [Shared.Models.SeatStatus.Ready, Shared.Models.SeatStatus.TearingDown, Shared.Models.SeatStatus.Error, Shared.Models.SeatStatus.Connecting],
+        [Shared.Models.SeatStatus.Connecting] = [Shared.Models.SeatStatus.Ready, Shared.Models.SeatStatus.Streaming, Shared.Models.SeatStatus.Error, Shared.Models.SeatStatus.TearingDown],
         [Shared.Models.SeatStatus.TearingDown] = [Shared.Models.SeatStatus.Idle],
         [Shared.Models.SeatStatus.Error] = [Shared.Models.SeatStatus.TearingDown, Shared.Models.SeatStatus.Provisioning],
     };
