@@ -1,3 +1,5 @@
+using System.Security.AccessControl;
+using System.Security.Principal;
 using System.Text;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
@@ -1166,6 +1168,106 @@ public class StreamingTests
     }
 
     private static string Quote(string s) => (char)34 + s + (char)34;
+
+
+    // -- The seat must be able to write its own log ---------------------
+    //
+    // A seat is a standard user. A log left by an earlier run is owned by Administrators with
+    // BUILTIN\Users:(RX), so the seat cannot open it - and Apollo then runs, serves, and logs
+    // NOWHERE. Measured on the reference host: a healthy seat Apollo serving TLS had written
+    // nothing, purely because a stale root-owned apollo.log was in the way. That is the same
+    // evidence a seat Apollo that died in config::parse leaves, from an unrelated cause.
+
+    private static (string root, string seatsDir, MultiSeatOptions opts) FakeApollo()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"multiseat-test-{Guid.NewGuid():N}");
+        var apollo = Path.Combine(root, "ApolloVibe");
+        Directory.CreateDirectory(Path.Combine(apollo, "assets"));
+        Directory.CreateDirectory(Path.Combine(apollo, "tools"));
+        File.WriteAllText(Path.Combine(apollo, "assets", "apps.json"), "{}");
+        return (root, Path.Combine(root, "seats"),
+                new MultiSeatOptions { ApolloExePath = Path.Combine(apollo, "sunshine.exe") });
+    }
+
+    [Fact]
+    public void BuildConfig_PreservesExistingLogs_InBothLayouts()
+    {
+        var (root, seatsDir, opts) = FakeApollo();
+        try
+        {
+            var seat = new SeatInfo { AccountName = "MultiSeatSeat01", PortBase = 47984 };
+            var seatDir = Path.Combine(seatsDir, seat.AccountName);
+            Directory.CreateDirectory(Path.Combine(seatDir, "logs"));
+
+            var flat = Path.Combine(seatDir, "apollo.log");
+            var rotated = Path.Combine(seatDir, "logs", "apollo-20260903-120000-000.log");
+            File.WriteAllText(flat, "earlier run");
+            File.WriteAllText(rotated, "earlier rotated run");
+
+            new ApolloConfigBuilder(new TestLogger<ApolloConfigBuilder>(), Options.Create(opts))
+                .BuildConfig(seat, seatsDir);
+
+            // Making the log writable must never cost the log itself.
+            Assert.Equal("earlier run", File.ReadAllText(flat));
+            Assert.Equal("earlier rotated run", File.ReadAllText(rotated));
+        }
+        finally { DeleteTestDir(root); }
+    }
+
+    [Fact]
+    public void BuildConfig_GrantsTheSeatWriteOnAnExistingLog()
+    {
+        // Uses the current user as the seat account: the grant resolves a real local SID, so a
+        // fabricated name would make this pass without testing anything.
+        var account = Environment.UserName;
+        SecurityIdentifier sid;
+        try
+        {
+            sid = (SecurityIdentifier)new NTAccount(Environment.MachineName, account)
+                .Translate(typeof(SecurityIdentifier));
+        }
+        catch (IdentityNotMappedException)
+        {
+            return; // not a local account on this host - covered by the reference-host run
+        }
+
+        var (root, seatsDir, opts) = FakeApollo();
+        try
+        {
+            var seat = new SeatInfo { AccountName = account, PortBase = 47984 };
+            var seatDir = Path.Combine(seatsDir, seat.AccountName);
+            Directory.CreateDirectory(seatDir);
+
+            var flat = Path.Combine(seatDir, "apollo.log");
+            File.WriteAllText(flat, "left by an earlier run");
+
+            // Strip inherited access so the seat provably has none to begin with.
+            var before = new FileInfo(flat).GetAccessControl();
+            before.SetAccessRuleProtection(isProtected: true, preserveInheritance: false);
+            before.AddAccessRule(new FileSystemAccessRule(
+                new SecurityIdentifier(WellKnownSidType.LocalSystemSid, null),
+                FileSystemRights.FullControl, AccessControlType.Allow));
+            new FileInfo(flat).SetAccessControl(before);
+
+            Assert.DoesNotContain(
+                new FileInfo(flat).GetAccessControl()
+                    .GetAccessRules(true, true, typeof(SecurityIdentifier))
+                    .Cast<FileSystemAccessRule>(),
+                r => r.IdentityReference.Value == sid.Value);
+
+            new ApolloConfigBuilder(new TestLogger<ApolloConfigBuilder>(), Options.Create(opts))
+                .BuildConfig(seat, seatsDir);
+
+            Assert.Contains(
+                new FileInfo(flat).GetAccessControl()
+                    .GetAccessRules(true, true, typeof(SecurityIdentifier))
+                    .Cast<FileSystemAccessRule>(),
+                r => r.IdentityReference.Value == sid.Value
+                     && r.AccessControlType == AccessControlType.Allow
+                     && (r.FileSystemRights & FileSystemRights.Write) != 0);
+        }
+        finally { DeleteTestDir(root); }
+    }
 
 }
 
