@@ -109,11 +109,8 @@ public sealed class SessionHealthCheck
             _logger.LogWarning(
                 "Seat {Id}: Windows session {Sid} no longer active",
                 seat.Id, seat.SessionId);
-            // Release the seat's mstsc on the way to Error. Nothing else will: teardown is
-            // what normally calls DisconnectSession, and a seat parked in Error may never be
-            // torn down — leaving a hidden mstsc alive for the rest of the host's uptime.
             try { _sessionLauncher.DisconnectSession(seat.SessionId); } catch { /* best effort */ }
-            seat.TransitionTo(SeatStatus.Error, _logger);
+            seat.Status = SeatStatus.Error;
             seat.ErrorMessage = "Windows session terminated unexpectedly";
             return true;
         }
@@ -177,6 +174,7 @@ public sealed class SessionHealthCheck
                     _logger.LogWarning(
                         "Seat {Id}: session {Sid} did not become ACTIVE within 10s after reconnect — aborting",
                         seat.Id, seat.SessionId);
+                    try { _sessionLauncher.DisconnectSession(seat.SessionId); } catch { /* best effort */ }
                     seat.Status = SeatStatus.Error;
                     seat.ErrorMessage = "RDP session did not become active after reconnect";
                     return true;
@@ -275,10 +273,9 @@ public sealed class SessionHealthCheck
             }
             else
             {
-                // Restart failed — give up, and release the session's mstsc with it.
-                WarnIfApolloDiedOnStartup(seat);
+                // Restart failed — give up
                 try { _sessionLauncher.DisconnectSession(seat.SessionId); } catch { /* best effort */ }
-                seat.TransitionTo(SeatStatus.Error, _logger);
+                seat.Status = SeatStatus.Error;
                 seat.ErrorMessage = "Apollo streaming server crashed and could not be restarted";
                 return true;
             }
