@@ -807,15 +807,43 @@ public sealed class ApolloConfigBuilder
 
     /// <summary>
     /// Create a directory junction (mklink /J) at linkPath pointing to targetPath.
-    /// Skips silently if the link already exists. Junction points work without
-    /// SeCreateSymbolicLinkPrivilege so they work in SYSTEM context.
+    /// Junction points work without SeCreateSymbolicLinkPrivilege so they work in SYSTEM context.
+    ///
+    /// A junction whose target has gone away is repaired rather than skipped, because the
+    /// failure it causes is invisible. Apollo resolves SUNSHINE_ASSETS_DIR — the literal
+    /// relative string "assets" on Windows — against its working directory, which for a seat
+    /// is the per-seat dir. So a stale assets junction makes apply_config() throw while copying
+    /// assets/apps.json, and Apollo exits inside config::parse — which runs BEFORE
+    /// logging::init. The seat's Apollo then dies having written no log at all.
+    ///
+    /// ⚠️ Neither obvious probe detects this: Directory.Exists() returns true for a dangling
+    /// junction, and ResolveLinkTarget() still hands back the target path for one. The test
+    /// that works is the reparse-point attribute plus whether LinkTarget itself exists.
+    /// Measured on Windows 11 26200; deleting the link leaves the target untouched.
     /// </summary>
     // Characters that would allow escaping a double-quoted cmd.exe argument.
     private static readonly char[] CmdMetachars = { '"', '\'' };
 
     private void CreateJunctionIfMissing(string linkPath, string targetPath)
     {
-        if (Directory.Exists(linkPath)) return;
+        if (Directory.Exists(linkPath))
+        {
+            if (!IsDanglingLink(linkPath)) return;
+
+            // Stale junction left by an Apollo that moved or was uninstalled. Removing the
+            // link does not touch whatever it pointed at; it is recreated below.
+            try
+            {
+                Directory.Delete(linkPath);
+                _logger.LogWarning(
+                    "Removed stale junction {Link} — its target no longer exists; recreating", linkPath);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Could not remove stale junction {Link}", linkPath);
+                return;
+            }
+        }
 
         if (!Directory.Exists(targetPath))
         {
@@ -850,6 +878,35 @@ public sealed class ApolloConfigBuilder
         catch (Exception ex)
         {
             _logger.LogWarning(ex, "Could not create junction {Link} -> {Target}", linkPath, targetPath);
+        }
+    }
+
+    /// <summary>
+    /// True when <paramref name="path"/> is a reparse point (junction or symlink) whose target
+    /// no longer exists. A plain directory returns false, and so does a healthy link.
+    /// </summary>
+    internal static bool IsDanglingLink(string path)
+    {
+        try
+        {
+            var info = new DirectoryInfo(path);
+            if (!info.Attributes.HasFlag(FileAttributes.ReparsePoint)) return false;
+
+            var target = info.LinkTarget;
+            if (target is null) return false;
+
+            // Junctions record an absolute target, but a relative one would otherwise be
+            // resolved against the process working directory rather than the link's parent.
+            if (!Path.IsPathRooted(target))
+                target = Path.GetFullPath(
+                    Path.Combine(Path.GetDirectoryName(path) ?? ".", target));
+
+            return !Directory.Exists(target);
+        }
+        catch
+        {
+            // An unreadable link is not something we can repair; leave it alone.
+            return false;
         }
     }
 

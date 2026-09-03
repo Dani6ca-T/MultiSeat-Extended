@@ -1045,6 +1045,128 @@ public class StreamingTests
         }
         finally { DeleteTestDir(seatDir); }
     }
+
+    // -- Dangling junction repair --------------------------------------
+    //
+    // Apollo resolves SUNSHINE_ASSETS_DIR ("assets", a RELATIVE string on Windows) against its
+    // working directory, which for a seat is the per-seat dir. A stale assets junction therefore
+    // makes apply_config() throw copying assets/apps.json, and Apollo exits inside config::parse
+    // - before logging::init - so the seat's Apollo dies having written no log at all.
+
+    [Fact]
+    public void IsDanglingLink_PlainDirectory_IsNotDangling()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), $"multiseat-test-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(dir);
+        try
+        {
+            Assert.False(ApolloConfigBuilder.IsDanglingLink(dir));
+        }
+        finally { DeleteTestDir(dir); }
+    }
+
+    [Fact]
+    public void IsDanglingLink_HealthyJunction_IsNotDangling()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"multiseat-test-{Guid.NewGuid():N}");
+        var target = Path.Combine(root, "target");
+        var link = Path.Combine(root, "link");
+        Directory.CreateDirectory(target);
+        try
+        {
+            MakeJunction(link, target);
+            Assert.True(Directory.Exists(link), "precondition: junction was created");
+            Assert.False(ApolloConfigBuilder.IsDanglingLink(link));
+        }
+        finally { DeleteTestDir(root); }
+    }
+
+    [Fact]
+    public void IsDanglingLink_TargetRemoved_IsDangling()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"multiseat-test-{Guid.NewGuid():N}");
+        var target = Path.Combine(root, "target");
+        var link = Path.Combine(root, "link");
+        Directory.CreateDirectory(target);
+        try
+        {
+            MakeJunction(link, target);
+            Directory.Delete(target, recursive: true);
+
+            // The two probes you would reach for first both fail here: Directory.Exists is
+            // still true, and ResolveLinkTarget still returns the vanished target path.
+            Assert.True(Directory.Exists(link), "Directory.Exists cannot detect this");
+            Assert.True(ApolloConfigBuilder.IsDanglingLink(link));
+        }
+        finally { DeleteTestDir(root); }
+    }
+
+    [Fact]
+    public void BuildConfig_StaleAssetsJunction_IsRepointedAtTheCurrentApollo()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"multiseat-test-{Guid.NewGuid():N}");
+        var seatsDir = Path.Combine(root, "seats");
+        var apolloA = Path.Combine(root, "ApolloOld");
+        var apolloB = Path.Combine(root, "ApolloNew");
+
+        try
+        {
+            foreach (var a in new[] { apolloA, apolloB })
+            {
+                Directory.CreateDirectory(Path.Combine(a, "assets"));
+                Directory.CreateDirectory(Path.Combine(a, "tools"));
+                File.WriteAllText(Path.Combine(a, "assets", "apps.json"), "{}");
+            }
+
+            var seat = new SeatInfo { AccountName = "MultiSeatSeat01", PortBase = 47984 };
+
+            // Provisioned once against the old Apollo...
+            new ApolloConfigBuilder(
+                new TestLogger<ApolloConfigBuilder>(),
+                Options.Create(new MultiSeatOptions
+                {
+                    ApolloExePath = Path.Combine(apolloA, "sunshine.exe")
+                })).BuildConfig(seat, seatsDir);
+
+            var seatAssets = Path.Combine(seatsDir, seat.AccountName, "assets");
+            Assert.True(File.Exists(Path.Combine(seatAssets, "apps.json")),
+                "precondition: the first provision linked assets");
+
+            // ...then Apollo is replaced, leaving the junction dangling.
+            Directory.Delete(apolloA, recursive: true);
+            Assert.True(ApolloConfigBuilder.IsDanglingLink(seatAssets),
+                "precondition: the junction is now stale");
+
+            new ApolloConfigBuilder(
+                new TestLogger<ApolloConfigBuilder>(),
+                Options.Create(new MultiSeatOptions
+                {
+                    ApolloExePath = Path.Combine(apolloB, "sunshine.exe")
+                })).BuildConfig(seat, seatsDir);
+
+            // Without the repair the stale link survives and Apollo dies with no log.
+            Assert.False(ApolloConfigBuilder.IsDanglingLink(seatAssets));
+            Assert.True(File.Exists(Path.Combine(seatAssets, "apps.json")),
+                "Apollo must be able to resolve assets/apps.json from the seat dir");
+        }
+        finally { DeleteTestDir(root); }
+    }
+
+    private static void MakeJunction(string link, string target)
+    {
+        using var p = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(
+            "cmd.exe", $"/C mklink /J {Quote(link)} {Quote(target)}")
+        {
+            CreateNoWindow = true,
+            UseShellExecute = false,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+        })!;
+        p.WaitForExit(5000);
+    }
+
+    private static string Quote(string s) => (char)34 + s + (char)34;
+
 }
 
 /// <summary>
