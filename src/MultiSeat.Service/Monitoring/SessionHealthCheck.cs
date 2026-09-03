@@ -25,6 +25,7 @@ public sealed class SessionHealthCheck
     private readonly SeatManager _seatManager;
     private readonly OnConnectAppLauncher _onConnectApps;
     private readonly ClientResolutionFollower _resolutionFollower;
+    private readonly SeatLifecycleGate _lifecycleGate;
 
     public SessionHealthCheck(
         ILogger<SessionHealthCheck> logger,
@@ -32,7 +33,8 @@ public sealed class SessionHealthCheck
         ApolloManager apolloManager,
         SeatManager seatManager,
         OnConnectAppLauncher onConnectApps,
-        ClientResolutionFollower resolutionFollower)
+        ClientResolutionFollower resolutionFollower,
+        SeatLifecycleGate lifecycleGate)
     {
         _logger = logger;
         _sessionLauncher = sessionLauncher;
@@ -40,6 +42,7 @@ public sealed class SessionHealthCheck
         _seatManager = seatManager;
         _onConnectApps = onConnectApps;
         _resolutionFollower = resolutionFollower;
+        _lifecycleGate = lifecycleGate;
     }
 
     /// <summary>
@@ -151,6 +154,13 @@ public sealed class SessionHealthCheck
             _logger.LogWarning(
                 "Seat {Id}: Apollo (PID {Pid}) crashed — attempting restart",
                 seat.Id, seat.ApolloProcessId);
+
+            // Per-seat lifecycle gate. Apollo restart mutates ApolloProcessId and the
+            // ApolloManager instance record; serializing against TryReconnectAsync and the
+            // Apollo endpoints prevents the interleavings that leave orphaned processes.
+            // The dead-session branch (Check 1) above is intentionally outside the gate:
+            // it only writes Status, never touches the lifecycle state.
+            using var lease = await _lifecycleGate.AcquireAsync(seat.Id, ct);
 
             // Try auto-restart
             var newPid = await _apolloManager.RestartAsync(seat, ct);
@@ -267,11 +277,22 @@ public sealed class SessionHealthCheck
     /// exactly that state, so a Ready seat reconnects to Ready and a Streaming seat reconnects to
     /// Streaming. On any failure we transition to <see cref="SeatStatus.Error"/>, matching the
     /// behaviour of the 10-second-active-timeout branch and the dead-session branch above.
+    ///
+    /// The entire body runs under the per-seat lifecycle gate, so concurrent operations on the
+    /// same seat (POST /session-reconnect, SetResolutionAsync, StopApollo, etc.) wait instead of
+    /// interleaving. Different seats remain parallel.
     /// </summary>
     private async Task<bool> TryReconnectAsync(SeatInfo seat, SeatStatus previousStatus, CancellationToken ct)
     {
         try
         {
+            // Per-seat lifecycle gate. Acquired first so a parallel /session-reconnect or
+            // SetResolutionAsync for the same seat waits for the recovery to finish (success or
+            // Error) before acting. Released by the `using` regardless of how the inner code
+            // exits — including OperationCanceledException, which the catch below converts to
+            // Error so the seat cannot remain stuck in Connecting.
+            using var lease = await _lifecycleGate.AcquireAsync(seat.Id, ct);
+
             // Kill the existing Apollo first — it survived sleep but with a broken
             // display pipeline (DXGI/QueryDisplayConfig fail on Disconnected sessions).
             // Without this, RestartAsync launches a second Apollo alongside the first,
@@ -338,6 +359,19 @@ public sealed class SessionHealthCheck
                 "Seat {Id}: Apollo failed to restart after session reconnect", seat.Id);
             seat.Status = SeatStatus.Error;
             seat.ErrorMessage = "Apollo failed to restart after session reconnect";
+            return true;
+        }
+        catch (OperationCanceledException)
+        {
+            // Without this catch the seat would stay in Connecting when the worker stops:
+            // WaitAsync / LaunchSessionAsync / RestartAsync throw OCE, the generic catch below
+            // does not catch it, and the seat was set to Connecting before TryReconnectAsync ran.
+            // Mirror the generic failure path: log, park in Error. The semaphore is released
+            // by the `using` above regardless of how this block exits.
+            _logger.LogWarning(
+                "Seat {Id}: session reconnect canceled", seat.Id);
+            seat.Status = SeatStatus.Error;
+            seat.ErrorMessage = "Session reconnect canceled";
             return true;
         }
         catch (Exception ex)

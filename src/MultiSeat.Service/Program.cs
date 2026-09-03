@@ -282,6 +282,7 @@ builder.Services.AddSingleton<ClientResolutionFollower>();
 builder.Services.AddSingleton<MultiSeat.Service.Monitoring.ApolloServerQuery>();
 builder.Services.AddSingleton<MultiSeat.Service.Monitoring.HostApolloMonitor>();
 builder.Services.AddSingleton<PortAllocator>();
+builder.Services.AddSingleton<SeatLifecycleGate>();
 builder.Services.AddSingleton<AudioDeviceEnumerator>();
 builder.Services.AddSingleton<AudioRouter>();
 builder.Services.AddSingleton<ControllerManager>();

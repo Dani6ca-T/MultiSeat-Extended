@@ -49,6 +49,7 @@ public sealed class SeatManager
     private readonly HidHideConfigurator _hidHide;
     private readonly OnConnectAppLauncher _onConnectApps;
     private readonly IEnumerable<IEmulatorConfigSeeder> _emulatorSeeders;
+    private readonly SeatLifecycleGate _lifecycleGate;
 
     public SeatManager(
         ILogger<SeatManager> logger,
@@ -66,7 +67,8 @@ public sealed class SeatManager
         InputHookManager inputHookManager,
         HidHideConfigurator hidHide,
         OnConnectAppLauncher onConnectApps,
-        IEnumerable<IEmulatorConfigSeeder> emulatorSeeders)
+        IEnumerable<IEmulatorConfigSeeder> emulatorSeeders,
+        SeatLifecycleGate lifecycleGate)
     {
         _logger = logger;
         _options = options.Value;
@@ -84,6 +86,7 @@ public sealed class SeatManager
         _hidHide = hidHide;
         _onConnectApps = onConnectApps;
         _emulatorSeeders = emulatorSeeders;
+        _lifecycleGate = lifecycleGate;
     }
 
     public int ActiveSeatCount => _seats.Count(s => s.Value.Status is not SeatStatus.Idle and not SeatStatus.Error);
@@ -122,6 +125,11 @@ public sealed class SeatManager
 
         _seats.TryAdd(seat.Id, seat);
         await BroadcastState(seat);
+
+        // Per-seat lifecycle gate. Acquired AFTER TryAdd so the gate's per-id semaphore
+        // exists and any parallel recovery/reconnect/StopApollo for this id waits instead
+        // of racing. Released when the try-block leaves scope (success or failure).
+        using var lease = await _lifecycleGate.AcquireAsync(seat.Id, ct);
 
         try
         {
@@ -449,6 +457,14 @@ public sealed class SeatManager
 
         seat.Status = SeatStatus.TearingDown;
         await BroadcastState(seat);
+
+        // Per-seat lifecycle gate. Acquired AFTER the dictionary remove so a parallel
+        // recovery tick (which captured the seat object before remove) cannot re-enter
+        // after teardown starts. The gate makes the teardown's Apollo Stop + Disconnect +
+        // DestroyDisplay sequence atomic with respect to any in-flight lifecycle operation
+        // for the same seat.
+        using var lease = await _lifecycleGate.AcquireAsync(seatId, CancellationToken.None);
+
         await TeardownSeatInternalAsync(seat, ct);
         _logger.LogInformation("Seat {Id}: torn down", seat.Id);
     }
@@ -526,10 +542,15 @@ public sealed class SeatManager
     }
 
     /// <summary>Stop Apollo for a seat without tearing down everything else.</summary>
-    public void StopApollo(Guid seatId)
+    public async Task StopApollo(Guid seatId)
     {
         var seat = GetSeat(seatId)
             ?? throw new InvalidOperationException("Seat not found.");
+
+        // Per-seat lifecycle gate. Stops the Apollo instance record and mutates
+        // ApolloProcessId; must serialize with recovery/reconnect/range-changers.
+        using var lease = await _lifecycleGate.AcquireAsync(seatId, CancellationToken.None);
+
         _apolloManager.Stop(seat);
         seat.ApolloProcessId = 0;
         _ = BroadcastState(seat);
@@ -541,6 +562,10 @@ public sealed class SeatManager
     {
         var seat = GetSeat(seatId)
             ?? throw new InvalidOperationException("Seat not found.");
+
+        // Per-seat lifecycle gate. Starts Apollo, mutates ApolloProcessId, updates
+        // ApolloManager's instance record. Must serialize with recovery/reconnect.
+        using var lease = await _lifecycleGate.AcquireAsync(seatId, ct);
 
         if (seat.SessionId < 0)
             throw new InvalidOperationException("No active session — provision the seat first.");
@@ -560,6 +585,11 @@ public sealed class SeatManager
     {
         var seat = GetSeat(seatId)
             ?? throw new InvalidOperationException("Seat not found.");
+
+        // Per-seat lifecycle gate. Stop + Start are a compound lifecycle mutation; the gate
+        // makes them atomic with respect to other lifecycle callers (recovery, reconnect,
+        // resolution change, nvenc change).
+        using var lease = await _lifecycleGate.AcquireAsync(seatId, ct);
 
         _apolloManager.Stop(seat);
         seat.ApolloProcessId = 0;
@@ -781,6 +811,10 @@ public sealed class SeatManager
         var seat = GetSeat(seatId)
             ?? throw new InvalidOperationException("Seat not found.");
 
+        // Per-seat lifecycle gate. KillForReconnect + Start mutate ApolloProcessId and the
+        // ApolloManager instance record; must serialize with recovery and reconnect.
+        using var lease = await _lifecycleGate.AcquireAsync(seatId, ct);
+
         seat.NvencPreset = preset;
 
         _apolloManager.KillForReconnect(seat);
@@ -838,6 +872,12 @@ public sealed class SeatManager
         _logger.LogInformation(
             "Seat {Id}: changing resolution {OldW}x{OldH} -> {W}x{H}",
             seatId, seat.Width, seat.Height, width, height);
+
+        // Per-seat lifecycle gate. KillForReconnect + DisconnectSession + LaunchSessionAsync
+        // + Start mutate SessionId, ApolloProcessId, and the ApolloManager instance record.
+        // The gate makes the whole compound change atomic with respect to recovery, reconnect,
+        // and other lifecycle callers.
+        using var lease = await _lifecycleGate.AcquireAsync(seatId, ct);
 
         seat.Width = width;
         seat.Height = height;

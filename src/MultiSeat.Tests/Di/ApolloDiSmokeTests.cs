@@ -76,6 +76,7 @@ public class ApolloDiSmokeTests
         services.AddSingleton<IProcessMonitor, WindowsProcessMonitor>();
         services.AddSingleton<SharedLibraryProvisioner>();
         services.AddSingleton<IEmulatorConfigSeeder, RetroArchConfigSeeder>();
+        services.AddSingleton<SeatLifecycleGate>();
         services.AddSingleton<SeatManager>();
 
         return services.BuildServiceProvider();
