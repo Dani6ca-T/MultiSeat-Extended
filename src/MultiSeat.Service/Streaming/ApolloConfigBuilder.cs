@@ -76,6 +76,7 @@ public sealed class ApolloConfigBuilder
         EnsureSeatConfigDir(seatDir, seat.AccountName);
         EnsureSeatStateFile(seatDir, seat.AccountName);
         EnsureSeatAppsJson(seatDir, seat.AccountName);
+        EnsureSeatLogWritable(seatDir, seat.AccountName);
 
         var sb = new StringBuilder(2048);
 
@@ -544,6 +545,42 @@ public sealed class ApolloConfigBuilder
         + "then be refused on the next request";
     private const string AppsJsonConsequence =
         "changes made to this seat's app list in Apollo's web UI will not save";
+    private const string LogFileConsequence =
+        "this seat's Apollo will run but write no log at all, so the next fault on this seat has "
+        + "to be diagnosed blind";
+
+    /// <summary>
+    /// Make sure the seat can write the log its Apollo is about to open.
+    ///
+    /// A seat is a standard user. It owns what it creates, but a log left behind by an earlier
+    /// run — one made while seats were administrators, or by the service — is owned by
+    /// Administrators with BUILTIN\Users:(RX), so the seat cannot open it for writing. Apollo
+    /// does not complain: it runs, serves, streams, and logs nowhere.
+    ///
+    /// That is worse than it sounds, because the absent log then looks exactly like the symptom
+    /// of a seat Apollo that died early (see ApolloManager.ResolveLogPath and the config::parse
+    /// ordering) — the same evidence, two unrelated causes. Measured on the reference host:
+    /// a healthy seat Apollo serving TLS on its ports had written nothing anywhere, purely
+    /// because a stale root-owned apollo.log was in the way.
+    ///
+    /// Nothing is created here. A seat dir already grants Users:Write, so when no log exists
+    /// Apollo makes its own and owns it; only a pre-existing unwritable one needs the grant.
+    /// </summary>
+    private void EnsureSeatLogWritable(string seatDir, string accountName)
+    {
+        // Both layouts ApolloManager.ResolveLogPath knows about: the flat apollo.log we ask
+        // for via log_path, and the timestamped files builds that ignore it write under logs\.
+        foreach (var dir in new[] { seatDir, Path.Combine(seatDir, "logs") })
+        {
+            if (!Directory.Exists(dir)) continue;
+
+            if (dir != seatDir)
+                GrantSeatWriteToDirectory(dir, accountName, LogFileConsequence);
+
+            foreach (var log in Directory.EnumerateFiles(dir, "apollo*.log"))
+                GrantSeatWrite(log, accountName, LogFileConsequence);
+        }
+    }
 
     private void EnsureSeatStateFile(string seatDir, string accountName)
     {
@@ -758,6 +795,37 @@ public sealed class ApolloConfigBuilder
             _logger.LogWarning(
                 ex,
                 "Could not grant {Account} write access to {Path} — {Consequence}",
+                accountName, path, consequence);
+        }
+    }
+
+    /// <summary>
+    /// Directory counterpart of <see cref="GrantSeatWrite"/>: grants the seat Modify on the
+    /// directory itself and on anything created in it later, so a build that rotates its log
+    /// can keep writing new files rather than only the ones present at provision time.
+    /// </summary>
+    private void GrantSeatWriteToDirectory(string path, string accountName, string consequence)
+    {
+        try
+        {
+            var sid = (SecurityIdentifier)new NTAccount(Environment.MachineName, accountName)
+                .Translate(typeof(SecurityIdentifier));
+
+            var info = new DirectoryInfo(path);
+            var acl = info.GetAccessControl();
+            acl.AddAccessRule(new FileSystemAccessRule(
+                sid,
+                FileSystemRights.Modify,
+                InheritanceFlags.ObjectInherit | InheritanceFlags.ContainerInherit,
+                PropagationFlags.None,
+                AccessControlType.Allow));
+            info.SetAccessControl(acl);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(
+                ex,
+                "Could not grant {Account} write access to directory {Path} — {Consequence}",
                 accountName, path, consequence);
         }
     }
