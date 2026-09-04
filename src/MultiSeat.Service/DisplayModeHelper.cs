@@ -68,6 +68,88 @@ internal static class DisplayModeHelper
     /// All changes are applied atomically using the CDS_NORESET / batch-commit pattern.
     /// Returns exit code 0 on success, 1 on failure (non-fatal — logged by SeatManager).
     /// </summary>
+    /// <summary>
+    /// Read-only dump of every display device this session can see, active or not, with its
+    /// monitor child and current mode. Written to <paramref name="outPath"/> because a process
+    /// launched into a seat session has nowhere to print.
+    ///
+    /// Exists because "the seat has no display" and "my probe cannot see displays" look identical
+    /// from outside, and a hand-rolled P/Invoke got that wrong twice. This uses the same interop
+    /// SetupDisplayIsolation relies on, so a blank answer here means the session really is blank.
+    ///
+    /// The question it was built to answer: a seat's SudoVDA display is *added* but never becomes
+    /// active ("RDP indirect display likely still owns the topology"), so is it present-and-inactive
+    /// - and therefore activatable - or absent entirely?
+    /// </summary>
+    internal static int ListSessionDisplays(string? outPath)
+    {
+        var sb = new System.Text.StringBuilder();
+        void Line(string t) => sb.AppendLine(t);
+
+        Line($"session   : {Environment.GetEnvironmentVariable("SESSIONNAME")}");
+        Line($"user      : {Environment.UserName}");
+        Line("");
+        Line("=== display adapters visible to this session ===");
+
+        var found = 0;
+        var adapters = new List<string>();
+        var dd = new User32.DisplayDevice { cb = Marshal.SizeOf<User32.DisplayDevice>() };
+        for (uint i = 0; User32.EnumDisplayDevices(null, i, ref dd, 0); i++)
+        {
+            found++;
+            adapters.Add((dd.DeviceID ?? "") + " " + (dd.DeviceString ?? ""));
+            var active  = (dd.StateFlags & User32.DISPLAY_DEVICE_ACTIVE) != 0;
+            var primary = (dd.StateFlags & User32.DISPLAY_DEVICE_PRIMARY_DEVICE) != 0;
+
+            Line($"  [{i}] {dd.DeviceName}");
+            Line($"      string : {dd.DeviceString}");
+            Line($"      id     : {dd.DeviceID}");
+            Line($"      flags  : 0x{dd.StateFlags:X8}  {(active ? "ACTIVE" : "inactive")}{(primary ? " PRIMARY" : "")}");
+
+            // The monitor child carries the IddCx path that identifies WHICH virtual display.
+            var mon = new User32.DisplayDevice { cb = Marshal.SizeOf<User32.DisplayDevice>() };
+            if (User32.EnumDisplayDevices(dd.DeviceName, 0, ref mon, 0))
+                Line($"      monitor: {mon.DeviceString}  |  {mon.DeviceID}");
+            else
+                Line("      monitor: (none attached)");
+
+            var mode = new User32.DEVMODE { dmSize = (ushort)Marshal.SizeOf<User32.DEVMODE>() };
+            if (User32.EnumDisplaySettingsEx(dd.DeviceName, User32.ENUM_CURRENT_SETTINGS, ref mode, 0))
+                Line($"      mode   : {mode.dmPelsWidth}x{mode.dmPelsHeight} @ {mode.dmDisplayFrequency}Hz at ({mode.dmPositionX},{mode.dmPositionY})");
+            else
+                Line("      mode   : (no current mode - not attached to the desktop)");
+
+            Line("");
+            dd.cb = Marshal.SizeOf<User32.DisplayDevice>();
+        }
+
+        Line($"total adapters enumerated: {found}");
+        if (found == 0)
+        {
+            Line("  ZERO - this session genuinely presents no display devices to GDI.");
+        }
+        else
+        {
+            // Measured 2026-09-04: a seat session lists 16 adapters and every one of them is
+            // RdpIdd_IndirectDisplay. SudoVDA does not appear at all - not even inactive - because
+            // it is a console-session IddCx driver and a terminal session has its own device
+            // namespace. That is why SetupDisplayIsolation can never find it from inside a seat.
+            var rdp = adapters.Count(a => a.Contains("RdpIdd", StringComparison.OrdinalIgnoreCase));
+            var sudo = adapters.Count(a => a.Contains("sudomaker", StringComparison.OrdinalIgnoreCase));
+            Line($"  RdpIdd adapters: {rdp}   SudoMaker adapters: {sudo}");
+            Line(sudo == 0
+                ? "  NO SudoMaker adapter in this session. It cannot be made primary here - it is "
+                  + "not in this session's device namespace at all."
+                : "  A SudoMaker entry listed as 'inactive' is present-but-not-attached, so it is a "
+                  + "candidate for activation.");
+        }
+
+        var text = sb.ToString();
+        if (string.IsNullOrWhiteSpace(outPath)) Console.Write(text);
+        else File.WriteAllText(outPath, text);
+        return found == 0 ? 1 : 0;
+    }
+
     internal static int SetupDisplayIsolation(string? sudoVdaIddCxPath)
     {
         if (string.IsNullOrWhiteSpace(sudoVdaIddCxPath))

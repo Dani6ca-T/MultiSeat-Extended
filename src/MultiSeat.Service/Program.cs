@@ -213,6 +213,14 @@ if (args.Length == 2 && args[0] == "--setup-display-isolation")
 }
 
 // ── Set-display-hz helper mode ────────────────────────────────────────
+// Read-only: dump every display device the calling session can see, active or not.
+// Usage: MultiSeat.Service.exe --list-session-displays [outputFile]
+// A process launched into a seat session has nowhere to print, so pass a file.
+if (args.Length >= 1 && args[0] == "--list-session-displays")
+{
+    return MultiSeat.Service.DisplayModeHelper.ListSessionDisplays(args.Length > 1 ? args[1] : null);
+}
+
 // 2-arg form: invoked inside a seat's RDP session — targets the session-primary display
 // (Microsoft Remote Display Adapter) via ChangeDisplaySettingsEx(null, ...).
 // Usage: MultiSeat.Service.exe --set-display-hz <hz>
