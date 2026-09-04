@@ -24,20 +24,20 @@ Recovery remains polling-based via `SessionHealthCheck → ApolloManager.Restart
 SeatManager.ProvisionSeatAsync
     → ApolloManager.StartAsync(seat, ct)
     → returns int PID
-    → seat.ApolloProcessId = PID
+    → seat.StreamingProcessId = PID
 
 SessionHealthCheck.CheckSeatAsync (every 5s)
-    → IsProcessAlive(seat.ApolloProcessId)  [Process.GetProcessById]
+    → IsProcessAlive(seat.StreamingProcessId)  [Process.GetProcessById]
     → if dead: _apolloManager.RestartAsync(seat, ct)
-    → seat.ApolloProcessId = newPid
+    → seat.StreamingProcessId = newPid
 
 SeatManager.TeardownSeatInternalAsync
     → ApolloManager.Stop(seat)  [Process.Kill(entireProcessTree)]
-    → seat.ApolloProcessId = 0
+    → seat.StreamingProcessId = 0
 ```
 
 Key facts:
-- ApolloManager uses raw `int` PID (`seat.ApolloProcessId`)
+- ApolloManager uses raw `int` PID (`seat.StreamingProcessId`)
 - ApolloManager._instances tracks `(SeatId → ApolloInstance with PID + StartedAt + RestartCount)`
 - No ProcessTracking code is wired into any production flow
 - Recovery is a direct method call, not an event-driven chain

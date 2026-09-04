@@ -218,18 +218,18 @@ public sealed class ApolloManager : IStreamingProvider
 
         _instances.TryRemove(seat.Id, out _);
 
-        if (seat.ApolloProcessId > 0)
+        if (seat.StreamingProcessId > 0)
         {
             try
             {
-                var proc = Process.GetProcessById(seat.ApolloProcessId);
+                var proc = Process.GetProcessById(seat.StreamingProcessId);
                 if (!proc.HasExited)
                 {
                     proc.Kill(entireProcessTree: true);
                     proc.WaitForExit(5000);
                 }
                 _logger.LogInformation("Seat {Id}: Apollo stopped (PID {Pid})",
-                    seat.Id, seat.ApolloProcessId);
+                    seat.Id, seat.StreamingProcessId);
             }
             catch (ArgumentException)
             {
@@ -318,7 +318,7 @@ public sealed class ApolloManager : IStreamingProvider
             _tracker.Register(newIdentity, seat.Id, ManagedProcessType.Provider);
             _monitor.StartMonitoring(newIdentity, seat.Id, ManagedProcessType.Provider);
 
-            seat.ApolloProcessId = pid;
+            seat.StreamingProcessId = pid;
             _logger.LogInformation(
                 "Seat {Id}: Apollo restarted (PID {Pid})", seat.Id, pid);
         }
@@ -343,7 +343,7 @@ public sealed class ApolloManager : IStreamingProvider
     /// </summary>
     public string? GetWebUiUrl(SeatInfo seat)
     {
-        if (seat.ApolloProcessId <= 0 || seat.PortBase <= 0)
+        if (seat.StreamingProcessId <= 0 || seat.PortBase <= 0)
             return null;
 
         // Apollo's 'port' config key = HTTP; HTTPS web UI = port + 1
@@ -445,7 +445,7 @@ public sealed class ApolloManager : IStreamingProvider
     /// </summary>
     public async Task<Monitoring.ApolloServerInfo?> QueryHealthAsync(SeatInfo seat, CancellationToken ct)
     {
-        if (seat.ApolloProcessId <= 0 || seat.PortBase <= 0)
+        if (seat.StreamingProcessId <= 0 || seat.PortBase <= 0)
             return null;
 
         return await _serverQuery.QueryAsync(

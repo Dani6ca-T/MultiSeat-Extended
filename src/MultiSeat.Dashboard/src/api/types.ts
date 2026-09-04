@@ -22,7 +22,7 @@ export interface SeatInfo {
   fps: number;
   displayDevicePath: string | null;
   portBase: number;
-  apolloProcessId: number;
+  streamingProcessId: number;
   audioDeviceId: string | null;
   vacCableIndex: number;
   viGEmControllerIndex: number;

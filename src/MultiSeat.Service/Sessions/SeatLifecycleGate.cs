@@ -5,7 +5,7 @@ namespace MultiSeat.Service.Sessions;
 /// <summary>
 /// Per-seat mutual exclusion for lifecycle-critical operations.
 ///
-/// Anything that mutates <c>seat.SessionId</c>, <c>seat.ApolloProcessId</c>, the Apollo instance
+/// Anything that mutates <c>seat.SessionId</c>, <c>seat.StreamingProcessId</c>, the Apollo instance
 /// record for the seat, or the keep-alive mstsc for the seat's session must run through this gate.
 /// A successful <see cref="AcquireAsync"/> returns an <see cref="IDisposable"/> lease whose
 /// <c>Dispose</c> releases the semaphore; using it with a <c>using</c> block is the intended pattern.

@@ -66,13 +66,13 @@ public class ApolloManagerQueryHealthTests
         var seat = new SeatInfo
         {
             AccountName = "TestSeat",
-            ApolloProcessId = 0, // No process
+            StreamingProcessId = 0, // No process
             PortBase = 48100
         };
 
         var result = await _manager.QueryHealthAsync(seat, CancellationToken.None);
 
-        // With ApolloProcessId=0, the method returns null without calling QueryAsync
+        // With StreamingProcessId=0, the method returns null without calling QueryAsync
         Assert.Null(result);
     }
 
@@ -82,7 +82,7 @@ public class ApolloManagerQueryHealthTests
         var seat = new SeatInfo
         {
             AccountName = "TestSeat",
-            ApolloProcessId = -1, // Invalid
+            StreamingProcessId = -1, // Invalid
             PortBase = 48100
         };
 
@@ -97,7 +97,7 @@ public class ApolloManagerQueryHealthTests
         var seat = new SeatInfo
         {
             AccountName = "TestSeat",
-            ApolloProcessId = 1234,
+            StreamingProcessId = 1234,
             PortBase = 0 // No port
         };
 
@@ -112,7 +112,7 @@ public class ApolloManagerQueryHealthTests
         var seat = new SeatInfo
         {
             AccountName = "TestSeat",
-            ApolloProcessId = -1,
+            StreamingProcessId = -1,
             PortBase = 0
         };
 
@@ -127,7 +127,7 @@ public class ApolloManagerQueryHealthTests
         var seat = new SeatInfo
         {
             AccountName = "TestSeat",
-            ApolloProcessId = 1234,
+            StreamingProcessId = 1234,
             PortBase = 48100
         };
 
@@ -144,14 +144,14 @@ public class ApolloManagerQueryHealthTests
     [Fact]
     public async Task QueryHealthAsync_DoesNotReturnNullFromGuard_WhenValidProcessAndPort()
     {
-        // This test verifies that when ApolloProcessId > 0 and PortBase > 0,
+        // This test verifies that when StreamingProcessId > 0 and PortBase > 0,
         // the method does NOT hit the early-return null guard.
         // It goes through to QueryAsync, which may return null or a result
         // depending on whether an Apollo instance is actually running.
         var seat = new SeatInfo
         {
             AccountName = "TestSeat",
-            ApolloProcessId = 1234,  // valid PID
+            StreamingProcessId = 1234,  // valid PID
             PortBase = 48100         // valid port
         };
 
@@ -172,7 +172,7 @@ public class ApolloManagerQueryHealthTests
         var seat = new SeatInfo
         {
             AccountName = "TestSeat",
-            ApolloProcessId = 1234,
+            StreamingProcessId = 1234,
             PortBase = 48100
         };
 
@@ -192,7 +192,7 @@ public class ApolloManagerQueryHealthTests
         var seat = new SeatInfo
         {
             AccountName = "TestSeat",
-            ApolloProcessId = 1234,
+            StreamingProcessId = 1234,
             PortBase = 48100
         };
 

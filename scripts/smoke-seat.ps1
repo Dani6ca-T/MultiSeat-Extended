@@ -170,8 +170,8 @@ try {
         ("session {0} (console is {1})" -f $sid, $consoleSession) `
         'a seat in the console session injects its input onto the console desktop (issue #18)'
 
-    $apollo = Get-Process -Id $seat.apolloProcessId -ErrorAction SilentlyContinue
-    Record 'Apollo is running' ($null -ne $apollo) ("pid {0}" -f $seat.apolloProcessId)
+    $apollo = Get-Process -Id $seat.streamingProcessId -ErrorAction SilentlyContinue
+    Record 'Apollo is running' ($null -ne $apollo) ("pid {0}" -f $seat.streamingProcessId)
 
     if ($apollo) {
         Record 'Apollo is in the SEAT session' ($apollo.SessionId -eq $sid) `
@@ -262,8 +262,8 @@ finally {
             $left = Get-Seats
             Record 'seat is gone' ($left.Count -eq 0) ("{0} seat(s) remain" -f $left.Count)
 
-            Record 'Apollo stopped' ($null -eq (Get-Process -Id $seat.apolloProcessId -ErrorAction SilentlyContinue)) `
-                ("pid {0}" -f $seat.apolloProcessId)
+            Record 'Apollo stopped' ($null -eq (Get-Process -Id $seat.streamingProcessId -ErrorAction SilentlyContinue)) `
+                ("pid {0}" -f $seat.streamingProcessId)
 
             $ruleName = "MultiSeat-Seat-$($seat.id -replace '-','')"
             & netsh advfirewall firewall show rule name="$ruleName-TCP" 2>&1 | Out-Null

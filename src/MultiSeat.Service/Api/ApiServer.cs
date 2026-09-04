@@ -104,7 +104,7 @@ public static class ApiServer
         // Static files are exempt; /api and /ws are not.
         //
         // /ws USED TO BE EXEMPT, which was a hole rather than a convenience: /ws/seats
-        // broadcasts whole SeatInfo objects — account names, session ids, ports, Apollo PIDs,
+        // broadcasts whole SeatInfo objects — account names, session ids, ports, streaming PIDs,
         // audio device ids — so with authentication switched on, anyone who could reach the
         // port could still stream all of it by opening a socket instead of calling the API.
         app.Use(async (context, next) =>

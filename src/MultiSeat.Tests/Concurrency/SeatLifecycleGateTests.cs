@@ -6,7 +6,7 @@ namespace MultiSeat.Tests.Concurrency;
 
 /// <summary>
 /// Tests for the per-seat lifecycle gate — the mutual-exclusion primitive that serializes
-/// operations which mutate <c>seat.SessionId</c>, <c>seat.ApolloProcessId</c>, the ApolloManager
+/// operations which mutate <c>seat.SessionId</c>, <c>seat.StreamingProcessId</c>, the ApolloManager
 /// instance record, and the keep-alive mstsc for the same seat.
 ///
 /// All tests are deterministic: they rely on <see cref="TaskCompletionSource{TResult}"/> and

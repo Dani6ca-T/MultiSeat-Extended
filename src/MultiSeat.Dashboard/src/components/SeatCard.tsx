@@ -194,8 +194,8 @@ export function SeatCard({ seat, onUpdate }: Props) {
             value={moonlightPort ? String(moonlightPort) : "--"}
           />
           <StatItem
-            label="Apollo PID"
-            value={seat.apolloProcessId > 0 ? String(seat.apolloProcessId) : "--"}
+            label="Stream PID"
+            value={seat.streamingProcessId > 0 ? String(seat.streamingProcessId) : "--"}
           />
         </div>
 

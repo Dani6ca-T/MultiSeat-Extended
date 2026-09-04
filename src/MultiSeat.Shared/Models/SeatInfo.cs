@@ -27,7 +27,7 @@ public sealed class SeatInfo
 
     // Networking
     public int PortBase { get; set; }
-    public int ApolloProcessId { get; set; }
+    public int StreamingProcessId { get; set; }
 
     // Emulator netplay — RetroArch host port for this seat (PortBase + offset; 0 = disabled).
     // Seats connect to each other over loopback at 127.0.0.1:<this port>.

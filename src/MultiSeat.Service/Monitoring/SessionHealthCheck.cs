@@ -146,16 +146,16 @@ public sealed class SessionHealthCheck
         }
 
         // ── Check 2: Is Apollo still running? ─────────────────────
-        var apolloAlive = IsProcessAlive(seat.ApolloProcessId);
+        var apolloAlive = IsProcessAlive(seat.StreamingProcessId);
 
-        if (!apolloAlive && seat.ApolloProcessId > 0 &&
+        if (!apolloAlive && seat.StreamingProcessId > 0 &&
             seat.Status is SeatStatus.Ready or SeatStatus.Streaming)
         {
             _logger.LogWarning(
                 "Seat {Id}: Apollo (PID {Pid}) crashed — attempting restart",
-                seat.Id, seat.ApolloProcessId);
+                seat.Id, seat.StreamingProcessId);
 
-            // Per-seat lifecycle gate. Apollo restart mutates ApolloProcessId and the
+            // Per-seat lifecycle gate. Apollo restart mutates StreamingProcessId and the
             // ApolloManager instance record; serializing against TryReconnectAsync and the
             // Apollo endpoints prevents the interleavings that leave orphaned processes.
             // The dead-session branch (Check 1) above is intentionally outside the gate:
@@ -167,7 +167,7 @@ public sealed class SessionHealthCheck
 
             if (newPid > 0)
             {
-                seat.ApolloProcessId = newPid;
+                seat.StreamingProcessId = newPid;
                 _logger.LogInformation(
                     "Seat {Id}: Apollo restarted successfully (PID {Pid})",
                     seat.Id, newPid);
@@ -335,7 +335,7 @@ public sealed class SessionHealthCheck
             var newPid = await _streaming.RestartAsync(seat, ct);
             if (newPid > 0)
             {
-                seat.ApolloProcessId = newPid;
+                seat.StreamingProcessId = newPid;
                 _logger.LogInformation(
                     "Seat {Id}: Apollo restarted after reconnect (PID {Pid})",
                     seat.Id, newPid);

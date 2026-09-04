@@ -312,8 +312,8 @@ public sealed class SeatManager
             seat.ProvisioningStep = "Apollo";
             await BroadcastState(seat);
 
-            seat.ApolloProcessId = await _streaming.StartAsync(seat, ct);
-            _logger.LogInformation("Seat {Id}: Apollo PID {Pid}", seat.Id, seat.ApolloProcessId);
+            seat.StreamingProcessId = await _streaming.StartAsync(seat, ct);
+            _logger.LogInformation("Seat {Id}: Apollo PID {Pid}", seat.Id, seat.StreamingProcessId);
 
             // ── 6.5: Discover SudoVDA UUID from Apollo's startup log ──────
             // Apollo enumerates displays at startup and writes device UUIDs to its log.
@@ -352,7 +352,7 @@ public sealed class SeatManager
                     // Brief delay to let Apollo finish writing logs before we kill it.
                     _streaming.Stop(seat);
                     await Task.Delay(2000, ct);
-                    seat.ApolloProcessId = await _streaming.StartAsync(seat, ct);
+                    seat.StreamingProcessId = await _streaming.StartAsync(seat, ct);
 
                     // ── 6.6/6.7: Display isolation + refresh-rate clamp ─────
                     await ApplyDisplayIsolationAsync(seat, ct);
@@ -518,7 +518,7 @@ public sealed class SeatManager
         var seat = GetSeat(seatId);
         if (seat is null) return new SeatServices();
 
-        var apolloAlive = seat.ApolloProcessId > 0 && _streaming.IsAlive(seatId);
+        var apolloAlive = seat.StreamingProcessId > 0 && _streaming.IsAlive(seatId);
 
         Monitoring.ApolloServerInfo? server = null;
         if (apolloAlive)
@@ -551,11 +551,11 @@ public sealed class SeatManager
             ?? throw new InvalidOperationException("Seat not found.");
 
         // Per-seat lifecycle gate. Stops the Apollo instance record and mutates
-        // ApolloProcessId; must serialize with recovery/reconnect/range-changers.
+        // StreamingProcessId; must serialize with recovery/reconnect/range-changers.
         using var lease = await _lifecycleGate.AcquireAsync(seatId, CancellationToken.None);
 
         _streaming.Stop(seat);
-        seat.ApolloProcessId = 0;
+        seat.StreamingProcessId = 0;
         _ = BroadcastState(seat);
         _logger.LogInformation("Seat {Id}: Apollo stopped by user", seatId);
     }
@@ -566,21 +566,21 @@ public sealed class SeatManager
         var seat = GetSeat(seatId)
             ?? throw new InvalidOperationException("Seat not found.");
 
-        // Per-seat lifecycle gate. Starts Apollo, mutates ApolloProcessId, updates
+        // Per-seat lifecycle gate. Starts Apollo, mutates StreamingProcessId, updates
         // ApolloManager's instance record. Must serialize with recovery/reconnect.
         using var lease = await _lifecycleGate.AcquireAsync(seatId, ct);
 
         if (seat.SessionId < 0)
             throw new InvalidOperationException("No active session — provision the seat first.");
 
-        seat.ApolloProcessId = await _streaming.StartAsync(seat, ct);
+        seat.StreamingProcessId = await _streaming.StartAsync(seat, ct);
 
         // Re-apply display config
         if (!string.IsNullOrEmpty(seat.DisplayDevicePath))
             _apolloManager.UpdateDisplayOutput(seat, seat.DisplayDevicePath);
 
         _ = BroadcastState(seat);
-        _logger.LogInformation("Seat {Id}: Apollo started by user (PID {Pid})", seatId, seat.ApolloProcessId);
+        _logger.LogInformation("Seat {Id}: Apollo started by user (PID {Pid})", seatId, seat.StreamingProcessId);
     }
 
     /// <summary>Restart Apollo for a seat (stop + start).</summary>
@@ -595,18 +595,18 @@ public sealed class SeatManager
         using var lease = await _lifecycleGate.AcquireAsync(seatId, ct);
 
         _streaming.Stop(seat);
-        seat.ApolloProcessId = 0;
+        seat.StreamingProcessId = 0;
 
-        seat.ApolloProcessId = await _streaming.StartAsync(seat, ct);
+        seat.StreamingProcessId = await _streaming.StartAsync(seat, ct);
 
         if (!string.IsNullOrEmpty(seat.DisplayDevicePath))
             _apolloManager.UpdateDisplayOutput(seat, seat.DisplayDevicePath);
 
-        if (seat.ApolloProcessId > 0)
+        if (seat.StreamingProcessId > 0)
             await ApplyDisplayIsolationAsync(seat, ct);
 
         _ = BroadcastState(seat);
-        _logger.LogInformation("Seat {Id}: Apollo restarted by user (PID {Pid})", seatId, seat.ApolloProcessId);
+        _logger.LogInformation("Seat {Id}: Apollo restarted by user (PID {Pid})", seatId, seat.StreamingProcessId);
     }
 
     /// <summary>
@@ -631,7 +631,7 @@ public sealed class SeatManager
     public async Task<bool> TryLateDisplayDetectionAsync(SeatInfo seat, CancellationToken ct)
     {
         if (!string.IsNullOrEmpty(seat.DisplayDevicePath)) return false; // already known
-        if (seat.ApolloProcessId <= 0) return false;                     // Apollo not running
+        if (seat.StreamingProcessId <= 0) return false;                     // Apollo not running
 
         string text;
         try
@@ -814,7 +814,7 @@ public sealed class SeatManager
         var seat = GetSeat(seatId)
             ?? throw new InvalidOperationException("Seat not found.");
 
-        // Per-seat lifecycle gate. KillForReconnect + Start mutate ApolloProcessId and the
+        // Per-seat lifecycle gate. KillForReconnect + Start mutate StreamingProcessId and the
         // ApolloManager instance record; must serialize with recovery and reconnect.
         using var lease = await _lifecycleGate.AcquireAsync(seatId, ct);
 
@@ -822,7 +822,7 @@ public sealed class SeatManager
 
         _streaming.KillForReconnect(seat);
         await Task.Delay(500, ct);
-        seat.ApolloProcessId = await _streaming.StartAsync(seat, ct);
+        seat.StreamingProcessId = await _streaming.StartAsync(seat, ct);
 
         if (seat.AutoStart)
         {
@@ -840,7 +840,7 @@ public sealed class SeatManager
         _ = BroadcastState(seat);
         _logger.LogInformation(
             "Seat {Id}: NVENC preset changed to {Preset} (Apollo PID {Pid})",
-            seatId, preset, seat.ApolloProcessId);
+            seatId, preset, seat.StreamingProcessId);
     }
 
     /// <summary>
@@ -877,7 +877,7 @@ public sealed class SeatManager
             seatId, seat.Width, seat.Height, width, height);
 
         // Per-seat lifecycle gate. KillForReconnect + DisconnectSession + LaunchSessionAsync
-        // + Start mutate SessionId, ApolloProcessId, and the ApolloManager instance record.
+        // + Start mutate SessionId, StreamingProcessId, and the ApolloManager instance record.
         // The gate makes the whole compound change atomic with respect to recovery, reconnect,
         // and other lifecycle callers.
         using var lease = await _lifecycleGate.AcquireAsync(seatId, ct);
@@ -894,7 +894,7 @@ public sealed class SeatManager
 
         // Apollo advertises the seat's resolution in its config, so regenerate before starting.
         _apolloManager.RebuildConfig(seat);
-        seat.ApolloProcessId = await _streaming.StartAsync(seat, ct);
+        seat.StreamingProcessId = await _streaming.StartAsync(seat, ct);
 
         if (seat.AutoStart)
         {
@@ -912,7 +912,7 @@ public sealed class SeatManager
         _ = BroadcastState(seat);
         _logger.LogInformation(
             "Seat {Id}: resolution now {W}x{H} on session {Sid} (Apollo PID {Pid})",
-            seatId, width, height, seat.SessionId, seat.ApolloProcessId);
+            seatId, width, height, seat.SessionId, seat.StreamingProcessId);
     }
 
     /// <summary>Recreate the virtual display for a seat.</summary>
