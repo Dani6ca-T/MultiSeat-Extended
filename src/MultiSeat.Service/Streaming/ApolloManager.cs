@@ -371,6 +371,18 @@ public sealed class ApolloManager : IStreamingProvider
             : 0;
     }
 
+    /// <summary>
+    /// How long the current Apollo instance for a seat has been running.
+    /// Returns null when there is no instance record for the seat.
+    /// </summary>
+    public TimeSpan? GetUptime(Guid seatId)
+    {
+        if (!_instances.TryGetValue(seatId, out var instance))
+            return null;
+
+        return DateTimeOffset.UtcNow - instance.StartedAt;
+    }
+
     // ═══════════════════════════════════════════════════════════════════
     //  CONFIGURATION ORCHESTRATION
     //  These methods route SeatManager's configuration requests through

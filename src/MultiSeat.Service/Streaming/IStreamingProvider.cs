@@ -60,4 +60,11 @@ public interface IStreamingProvider
     /// How many automatic crash-restart attempts have been made for this seat.
     /// </summary>
     int GetRestartCount(Guid seatId);
+
+    /// <summary>
+    /// How long the current streaming server instance has been running for a seat.
+    /// Returns null when there is no live instance record (e.g. never started, or
+    /// already stopped).
+    /// </summary>
+    TimeSpan? GetUptime(Guid seatId);
 }

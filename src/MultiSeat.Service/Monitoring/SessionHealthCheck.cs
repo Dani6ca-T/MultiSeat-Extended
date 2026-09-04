@@ -99,6 +99,27 @@ public sealed class SessionHealthCheck
         status is not (SeatStatus.Idle or SeatStatus.Provisioning
                        or SeatStatus.TearingDown or SeatStatus.Error);
 
+    /// <summary>
+    /// How long after start an Apollo death is classified as a startup failure rather than
+    /// a runtime crash. A process that dies this quickly likely never finished initializing
+    /// (encoder setup, FFmpeg, log file) — restarting it would hit the same wall.
+    /// </summary>
+    internal static readonly TimeSpan ApolloStartupWindow =
+        TimeSpan.FromSeconds(30);
+
+    /// <summary>
+    /// Classify an Apollo death by its uptime: within <see cref="ApolloStartupWindow"/> of
+    /// start it is a startup failure. Null uptime (no instance record) is never a startup
+    /// failure — there is nothing to classify.
+    /// </summary>
+    internal static bool IsStartupFailure(TimeSpan? uptime)
+    {
+        if (!uptime.HasValue)
+            return false;
+
+        return uptime.Value <= ApolloStartupWindow;
+    }
+
     private async Task<bool> CheckSeatAsync(SeatInfo seat, CancellationToken ct)
     {
         // ── Check 1: Is the Windows session still alive? ──────────
@@ -155,6 +176,11 @@ public sealed class SessionHealthCheck
                 "Seat {Id}: Apollo (PID {Pid}) crashed — attempting restart",
                 seat.Id, seat.StreamingProcessId);
 
+            // Diagnostic only: a death this close to start is usually a startup failure
+            // (encoder/FFmpeg init, log-write problems) rather than a runtime crash —
+            // say so before the restart masks the evidence.
+            LogStartupFailureDiagnostic(seat);
+
             // Per-seat lifecycle gate. Apollo restart mutates StreamingProcessId and the
             // ApolloManager instance record; serializing against TryReconnectAsync and the
             // Apollo endpoints prevents the interleavings that leave orphaned processes.
@@ -180,7 +206,10 @@ public sealed class SessionHealthCheck
             }
             else
             {
-                // Restart failed — give up
+                // Restart failed — give up. Diagnose a startup failure first so the user
+                // knows where to look before the seat is parked in Error.
+                LogStartupFailureDiagnostic(seat);
+
                 try { _sessionLauncher.DisconnectSession(seat.SessionId); } catch { /* best effort */ }
                 seat.TransitionTo(SeatStatus.Error, _logger);
                 seat.ErrorMessage = "Apollo streaming server crashed and could not be restarted";
@@ -265,6 +294,26 @@ public sealed class SessionHealthCheck
             waited += pollMs;
         }
         return isSessionActive(sessionId);
+    }
+
+    /// <summary>
+    /// Diagnostic-only: when Apollo died shortly after start, warn that this looks like a
+    /// startup failure and point at verbose logging for the underlying cause. Purely additive
+    /// — recovery behavior is untouched. Uses the provider abstraction so the classification
+    /// stays provider-neutral.
+    /// </summary>
+    private void LogStartupFailureDiagnostic(SeatInfo seat)
+    {
+        var uptime = _streaming.GetUptime(seat.Id);
+        if (!IsStartupFailure(uptime))
+            return;
+
+        _logger.LogWarning(
+            "Seat {Id}: Apollo appears to have failed during startup (died {Uptime} after start). " +
+            "Check the Apollo log for the underlying error — e.g. encoder initialization / FFmpeg " +
+            "failures, or problems writing the Apollo log. For more detailed diagnostics, set " +
+            "MultiSeat:ApolloLogLevel=verbose.",
+            seat.Id, uptime);
     }
 
     /// <summary>
