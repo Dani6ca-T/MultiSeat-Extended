@@ -127,6 +127,20 @@ public sealed class SessionHealthCheck
             _logger.LogWarning(
                 "Seat {Id}: session {Sid} is Disconnected (PC may have slept) — reconnecting",
                 seat.Id, seat.SessionId);
+
+            // Show the repair while it is happening. Recovery takes 15-30s (relaunch, up to 10s
+            // waiting for ACTIVE, a 2s settle, an Apollo restart, display isolation) and the seat
+            // used to read Ready/Streaming throughout - claiming health at the one moment it is
+            // least true. Restored to whatever it was on success; Error on any failure below.
+            var previousStatus = seat.Status;
+            seat.Status = SeatStatus.Connecting;
+
+            // Broadcast here rather than leaving it to CheckAllSeatsAsync: that only publishes
+            // after CheckSeatAsync returns, by which point recovery has finished and Connecting
+            // would never be seen by a client.
+            try { await WebSocketHub.BroadcastSeatUpdateAsync(seat); }
+            catch (Exception ex) { _logger.LogDebug(ex, "Seat {Id}: could not broadcast Connecting", seat.Id); }
+
             try
             {
                 // This branch rewrites SessionId and restarts Apollo, so it needs the same gate
@@ -191,15 +205,41 @@ public sealed class SessionHealthCheck
                     // its 1024×768 wake default). Without this, Apollo's mode change
                     // ends up on the wrong display and the stream stays at 1024×768.
                     await _seatManager.ApplyDisplayIsolationAsync(seat, ct);
+
+                    // Back to whatever it was before the sleep - a Streaming seat returns to
+                    // Streaming, not to Ready.
+                    seat.Status = previousStatus;
                     return true;
                 }
+
+                // Apollo did not come back. Deliberately NOT an Error: Check 2 below picks this
+                // up on the next tick (seat.ApolloProcessId still holds the now-dead pid, and
+                // KillForReconnect reset RestartCount) and retries up to MaxRestartAttempts
+                // before giving up. Erroring here would spend that budget on one bad attempt,
+                // which after a wake - devices still settling - is the wrong call. What was
+                // missing is that the failure was completely silent.
+                _logger.LogWarning(
+                    "Seat {Id}: Apollo did not restart after reconnect (pid {Pid}) — leaving it to "
+                    + "the crash check, which retries up to {Max} times",
+                    seat.Id, newPid, Streaming.ApolloManager.MaxRestartAttempts);
+                seat.Status = previousStatus;
+            }
+            catch (OperationCanceledException)
+            {
+                // Shutdown. Put the status back rather than leaving the seat stuck in Connecting
+                // for whatever a future run makes of it.
+                _logger.LogInformation("Seat {Id}: session reconnect canceled", seat.Id);
+                seat.Status = previousStatus;
+                return true;
             }
             catch (Exception ex)
             {
                 _logger.LogError(ex,
                     "Seat {Id}: failed to reconnect session after sleep", seat.Id);
+                seat.Status = SeatStatus.Error;
+                seat.ErrorMessage = "Session reconnect failed: " + ex.Message;
             }
-            return false;
+            return true;
         }
 
         // ── Check 2: Is Apollo still running? ─────────────────────

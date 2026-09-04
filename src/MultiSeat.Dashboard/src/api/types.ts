@@ -6,6 +6,7 @@ export type SeatStatus =
   | "Idle"
   | "Provisioning"
   | "Configuring"
+  | "Connecting"
   | "Ready"
   | "Streaming"
   | "TearingDown"

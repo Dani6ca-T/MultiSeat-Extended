@@ -5,6 +5,13 @@ public enum SeatStatus
     Idle,
     Provisioning,
     Configuring,
+    /// <summary>
+    /// Automatic recovery is in progress: the seat's Windows session went Disconnected (a sleep
+    /// drops mstsc) and the health check is rebuilding it. Distinct from Provisioning, which is a
+    /// seat being created. Without this the dashboard reads Ready/Streaming for the 15-30s the
+    /// repair takes, which is the one moment it is least true.
+    /// </summary>
+    Connecting,
     Ready,
     Streaming,
     TearingDown,
