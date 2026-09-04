@@ -280,6 +280,20 @@ public sealed class ApolloManager
     }
 
     /// <summary>
+    /// How long this seat's Apollo has been running, or null if we have no record of it.
+    /// </summary>
+    /// <remarks>
+    /// Used to tell a crash apart from a failure to start. An Apollo that dies seconds after launch
+    /// did not crash mid-stream — it failed to initialise, and the encoder is the usual reason.
+    /// </remarks>
+    public TimeSpan? GetUptime(Guid seatId)
+    {
+        return _instances.TryGetValue(seatId, out var instance)
+            ? DateTimeOffset.UtcNow - instance.StartedAt
+            : null;
+    }
+
+    /// <summary>
     /// Get the restart count for a seat's Apollo instance.
     /// </summary>
     public int GetRestartCount(Guid seatId)

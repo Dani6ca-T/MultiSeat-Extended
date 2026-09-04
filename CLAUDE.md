@@ -216,6 +216,52 @@ reverted it. Environment variables and `appsettings.{Environment}.json` are no e
 explicit exe-dir `AddJsonFile` is registered after `Host.CreateApplicationBuilder`'s sources and
 outranks both.
 
+## A seat's Apollo dies with no reason in its log
+
+Two different causes produce "the seat log explains nothing", and they need opposite fixes. Tell
+them apart by **whether the Apollo process is still alive**, never by whether a log exists.
+
+### It EXITS seconds after starting -> an encoder failed to open, and the reason was discarded
+
+`h264_amf`, the QSV encoders and the software encoders are all **FFmpeg** encoders. Apollo sets
+FFmpeg to `AV_LOG_QUIET` unless its log level is exactly `verbose` (`logging.cpp`: the test is
+`min_log_level >= 1`). Our default is `info`, so the seat log ends at:
+
+```
+Info: Creating encoder [h264_amf]
+Info: Color range: JPEG
+```
+
+...and stops. That is a failed encoder open, not a crash - `make_synced_session` returns empty on a
+null encode device **without logging anything**, while every failure inside the D3D11 encode-device
+setup does log. To see the real error:
+
+```jsonc
+// C:\Program Files\MultiSeat\appsettings.local.json
+{ "MultiSeat": { "ApolloLogLevel": "verbose" } }
+```
+
+Restart the service, re-provision, then set it back - verbose is noisy.
+
+- ⚠️ **`debug` does NOT work.** Apollo maps `verbose`=0, `debug`=1, `info`=2, and anything >= 1
+  silences FFmpeg. Only `verbose` lifts it.
+- ⛔ **Never hand-edit a seat's `sunshine.conf`** - `ApolloConfigBuilder` regenerates it on every
+  provision, so the change is lost. `appsettings.local.json` survives deploys.
+
+`SessionHealthCheck` now prints this hint by itself when a seat's Apollo exits within 30s of
+starting (`IsStartupFailure`), so the failure is signposted rather than silent.
+
+### It KEEPS RUNNING and serves, but writes nothing -> it cannot open its log file
+
+A seat is a standard user. A log left by an earlier run is owned by Administrators with
+`BUILTIN\Users:(RX)`, so the seat cannot write it and Apollo says nothing about that. Measured here:
+a healthy seat Apollo serving TLS on its ports had written nothing anywhere. Fixed by
+`EnsureSeatLogWritable`, which grants the seat Modify on an existing `apollo*.log` at provision.
+
+⚠️ Also check the **timestamp** before trusting a seat log. A stale `apollo.log` from a previous run
+looks like a current one, and the log may be under `<seatDir>\logs\apollo-<stamp>.log` rather than
+`<seatDir>\apollo.log` - `ApolloManager.ResolveLogPath` handles both layouts.
+
 ## Where the service logs actually go
 
 **The service writes no log files.** It's hosted via `AddWindowsService()`, whose default logging provider is the **Windows Event Log** — so service logs are in the Application log under two sources:

@@ -252,6 +252,8 @@ public sealed class SessionHealthCheck
                 "Seat {Id}: Apollo (PID {Pid}) crashed — attempting restart",
                 seat.Id, seat.ApolloProcessId);
 
+            WarnIfApolloDiedOnStartup(seat);
+
             // Restarting mutates ApolloProcessId and the ApolloManager instance record, so it
             // must not interleave with a manual restart or a resolution change for the same
             // seat. The dead-session branch above stays outside the gate deliberately: it only
@@ -277,6 +279,7 @@ public sealed class SessionHealthCheck
             else
             {
                 // Restart failed — give up, and release the session's mstsc with it.
+                WarnIfApolloDiedOnStartup(seat);
                 try { _sessionLauncher.DisconnectSession(seat.SessionId); } catch { /* best effort */ }
                 seat.TransitionTo(SeatStatus.Error, _logger);
                 seat.ErrorMessage = "Apollo streaming server crashed and could not be restarted";
@@ -339,6 +342,51 @@ public sealed class SessionHealthCheck
             return false;
         }
     }
+
+    /// <summary>
+    /// Point at the log setting that would explain an Apollo which died during startup.
+    ///
+    /// An Apollo that exits seconds after launch did not crash mid-stream; it failed to
+    /// initialise, and a video encoder that will not open is the usual cause. That reason comes
+    /// from FFmpeg — h264_amf, the QSV encoders and the software encoders are all FFmpeg encoders
+    /// — and Apollo sets FFmpeg to AV_LOG_QUIET unless its level is exactly `verbose`. Our default
+    /// is `info`, so the seat log shows "Creating encoder [...]" and then nothing at all.
+    ///
+    /// ⚠️ `debug` does NOT lift it. Apollo's test is `min_log_level >= 1`, and debug is 1.
+    ///
+    /// Without this hint the failure is unexplained and the log looks truncated rather than
+    /// deliberately silenced (GitHub issue #24).
+    /// </summary>
+    private void WarnIfApolloDiedOnStartup(SeatInfo seat)
+    {
+        var uptime = _apolloManager.GetUptime(seat.Id);
+        if (!IsStartupFailure(uptime)) return;
+
+        _logger.LogWarning(
+            "Seat {Id}: Apollo exited {Seconds:F1}s after starting, so it failed to initialise "
+            + "rather than crashing. A video encoder that will not open is the usual cause, and "
+            + "Apollo discards the FFmpeg error that would say why unless its log level is "
+            + "verbose. Set MultiSeat:ApolloLogLevel to \"verbose\" in appsettings.local.json "
+            + "(\"debug\" is NOT enough), restart the service, and re-provision to see it.",
+            seat.Id, uptime.Value.TotalSeconds);
+    }
+
+    /// <summary>
+    /// How soon after launch an Apollo exit counts as "failed to start" rather than "crashed".
+    /// Generous: a seat that streams for a minute and then dies is a different problem.
+    /// </summary>
+    internal static readonly TimeSpan ApolloStartupWindow = TimeSpan.FromSeconds(30);
+
+    /// <summary>
+    /// Whether an Apollo that has exited died during startup rather than mid-stream.
+    /// </summary>
+    /// <param name="uptime">
+    /// How long it ran, or null when there is no instance record. Null must NOT count as a startup
+    /// failure: "we never launched it" would otherwise read as "it died instantly" and every seat
+    /// the manager has no record of would emit the hint.
+    /// </param>
+    internal static bool IsStartupFailure(TimeSpan? uptime) =>
+        uptime is not null && uptime <= ApolloStartupWindow;
 
     /// <summary>
     /// Poll until the session reports Active, or the timeout expires.
