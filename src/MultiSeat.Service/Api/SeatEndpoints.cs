@@ -214,6 +214,22 @@ public static class SeatEndpoints
                 // SetResolutionAsync, etc.) for the same seat.
                 using var lease = await lifecycleGate.AcquireAsync(id, ct);
 
+                // The seat was captured BEFORE waiting for the gate. While we waited, a
+                // concurrent DELETE may have torn it down (H2 ordering: removal → TearingDown
+                // → teardown → gate release, so the captured object now reads TearingDown), or
+                // another reconnect may already have healed it (Error → Ready). LaunchSessionAsync
+                // below creates a NEW Windows session — running it against a seat that is no
+                // longer in Error would orphan that session (no registry entry, nothing ever
+                // tears it down). So re-check BEFORE any session-creating side effect; the
+                // check must never sit after the launch.
+                if (!IsReconnectStillValid(seat.Status))
+                {
+                    return seat.Status == SeatStatus.TearingDown
+                        ? Results.NotFound()   // removed by a concurrent teardown — resource gone
+                        : Results.Conflict(
+                            "Seat is not in Error state — session reconnect no longer applies.");
+                }
+
                 // Pass the seat's geometry: if the session has to be recreated rather than
                 // reattached, it must come back at the seat's own size, not inherit the
                 // console desktop's.
@@ -354,4 +370,14 @@ public static class SeatEndpoints
                 }
             });
     }
+
+    /// <summary>
+    /// Whether a /session-reconnect may still run its session-creating work after the
+    /// per-seat lifecycle gate was acquired: only while the seat is still in Error (F3).
+    /// TearingDown means a concurrent teardown removed the seat from _seats while the
+    /// request waited for the gate; Ready/Streaming/Connecting/Idle/Provisioning mean the
+    /// seat is no longer waiting for a reconnect. LaunchSessionAsync must not run in any
+    /// of those cases — it would create a Windows session nothing would ever tear down.
+    /// </summary>
+    internal static bool IsReconnectStillValid(SeatStatus status) => status == SeatStatus.Error;
 }
