@@ -985,6 +985,20 @@ public sealed class SeatManager
         // and other lifecycle callers.
         using var lease = await _lifecycleGate.AcquireAsync(seatId, ct);
 
+        // The seat was captured BEFORE waiting for the gate. While we waited, a concurrent
+        // DELETE may have torn it down (H2 ordering: removal → TearingDown → teardown → gate
+        // release, so the captured object now reads TearingDown). Every side effect below —
+        // KillForReconnect, DisconnectSession, LaunchSessionAsync (creates a NEW Windows
+        // session), config rebuild, Apollo start — would otherwise run against a removed seat
+        // and orphan the session/Apollo it creates. Re-check BEFORE any of them.
+        if (!ResolutionChangeStillValid(seat.Status))
+        {
+            _logger.LogWarning(
+                "Seat {Id}: removed while changing resolution — aborting", seatId);
+            throw new InvalidOperationException(
+                "Seat was removed while changing resolution.");
+        }
+
         seat.Width = width;
         seat.Height = height;
 
@@ -1017,6 +1031,20 @@ public sealed class SeatManager
             "Seat {Id}: resolution now {W}x{H} on session {Sid} (Apollo PID {Pid})",
             seatId, width, height, seat.SessionId, seat.StreamingProcessId);
     }
+
+    /// <summary>
+    /// Whether SetResolutionAsync may still run its side effects after the per-seat lifecycle
+    /// gate was acquired: only while the seat is still a registered member. A status of
+    /// TearingDown means a concurrent teardown removed the seat from _seats while the request
+    /// waited for the gate (H2 ordering: removal → TearingDown → teardown → gate release), so
+    /// the captured object now reads TearingDown. LaunchSessionAsync below creates a NEW
+    /// Windows session — running it for a removed seat would orphan that session and the
+    /// Apollo started into it (nothing in _seats would ever tear them down). Every other
+    /// status keeps the pre-existing semantics: resolution changes were never gated on a
+    /// status precondition, and no other reachable state invalidates the change.
+    /// </summary>
+    internal static bool ResolutionChangeStillValid(SeatStatus status) =>
+        status != SeatStatus.TearingDown;
 
     /// <summary>Recreate the virtual display for a seat.</summary>
     public async Task ResetDisplayAsync(Guid seatId, CancellationToken ct)
