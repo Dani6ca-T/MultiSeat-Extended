@@ -307,6 +307,15 @@ Config lives in `appsettings.json` under `MultiSeat` — **empty by default (fea
 
 Apps launch into the seat session via `ProcessInjector.LaunchInSessionAsync`. The list is global (applies to every seat). When the array is empty the watcher returns immediately — zero I/O, no overhead.
 
+The fire-and-forget launch is **teardown-safe**: a seat that is removed while the settle delay is
+in flight (via `TeardownSeatAsync` → `Forget`) cancels the per-seat lifecycle CTS so the
+delayed `Task.Delay` aborts, and the callback additionally re-checks the captured `sessionId`
+against the seat's current `sessionId` (via a lookup into `SeatManager.GetSeat`) before
+`LaunchInSessionAsync` is called. A seat whose session was replaced (by `SetResolutionAsync`
+or `POST /session-reconnect`) without going through teardown therefore also fails safe — the
+captured `sessionId` no longer matches the lookup, the launch is silently dropped, and the
+next connect edge from the new session schedules its own launch.
+
 ## Per-seat gamepad isolation (HidHide session jail)
 
 `MultiSeat:EnableHidHideCloaking`, **off by default**. Turning it on confines each seat's pad to

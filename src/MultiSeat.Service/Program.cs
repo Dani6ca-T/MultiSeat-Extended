@@ -1,3 +1,6 @@
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 using MultiSeat.Service;
 using MultiSeat.Service.Accounts;
 using MultiSeat.Service.Api;
@@ -278,7 +281,24 @@ builder.Services.AddSingleton<IVirtualDisplayManager>(sp => sp.GetRequiredServic
 builder.Services.AddSingleton<ApolloManager>();
 builder.Services.AddSingleton<IStreamingProvider>(sp => sp.GetRequiredService<ApolloManager>());
 builder.Services.AddSingleton<ApolloConfigBuilder>();
-builder.Services.AddSingleton<OnConnectAppLauncher>();
+// OnConnectAppLauncher's per-seat cancellation needs to know whether a seat still
+// exists with the captured sessionId before the delayed launch actually fires. The
+// lookup closes the session-replacement gap (SetResolutionAsync, /session-reconnect)
+// that Forget alone does not. Pass a late-bound function that captures the
+// IServiceProvider so SeatManager can be resolved lazily — it is constructed AFTER
+// OnConnectAppLauncher in DI, so a direct constructor dependency would form a cycle.
+builder.Services.AddSingleton<OnConnectAppLauncher>(sp =>
+{
+    Func<Guid, int?> lookup =
+        id => sp.GetService<MultiSeat.Service.Sessions.SeatManager>()?.GetSeat(id)?.SessionId;
+    return ActivatorUtilities.CreateInstance<OnConnectAppLauncher>(
+        sp,
+        sp.GetRequiredService<ILogger<OnConnectAppLauncher>>(),
+        sp.GetRequiredService<IOptions<MultiSeatOptions>>(),
+        sp.GetRequiredService<ApolloManager>(),
+        sp.GetRequiredService<ProcessInjector>(),
+        lookup);
+});
 builder.Services.AddSingleton<ClientResolutionFollower>();
 builder.Services.AddSingleton<MultiSeat.Service.Monitoring.ApolloServerQuery>();
 builder.Services.AddSingleton<MultiSeat.Service.Monitoring.HostApolloMonitor>();

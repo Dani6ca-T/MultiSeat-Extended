@@ -57,7 +57,20 @@ public class ApolloDiSmokeTests
         services.AddSingleton<ApolloManager>();
         services.AddSingleton<IStreamingProvider>(sp => sp.GetRequiredService<ApolloManager>());
         services.AddSingleton<ApolloConfigBuilder>();
-        services.AddSingleton<OnConnectAppLauncher>();
+        // OnConnectAppLauncher is now registered with a factory that captures the
+        // IServiceProvider so SeatManager can be resolved lazily — see Program.cs.
+        services.AddSingleton<OnConnectAppLauncher>(sp =>
+        {
+            Func<Guid, int?> lookup = id =>
+                sp.GetService<MultiSeat.Service.Sessions.SeatManager>()?.GetSeat(id)?.SessionId;
+            return ActivatorUtilities.CreateInstance<OnConnectAppLauncher>(
+                sp,
+                sp.GetRequiredService<ILogger<OnConnectAppLauncher>>(),
+                sp.GetRequiredService<IOptions<MultiSeatOptions>>(),
+                sp.GetRequiredService<ApolloManager>(),
+                sp.GetRequiredService<ProcessInjector>(),
+                lookup);
+        });
         services.AddSingleton<ClientResolutionFollower>();
         services.AddSingleton<ApolloServerQuery>();
         services.AddSingleton<HostApolloMonitor>();

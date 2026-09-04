@@ -42,6 +42,7 @@ public sealed class OnConnectAppLauncher
     private readonly MultiSeatOptions _options;
     private readonly ApolloManager _apollo;
     private readonly ProcessInjector _injector;
+    private readonly Func<Guid, int?>? _sessionLookup;
 
     private readonly ConcurrentDictionary<Guid, SeatConnState> _states = new();
 
@@ -49,12 +50,14 @@ public sealed class OnConnectAppLauncher
         ILogger<OnConnectAppLauncher> logger,
         IOptions<MultiSeatOptions> options,
         ApolloManager apollo,
-        ProcessInjector injector)
+        ProcessInjector injector,
+        Func<Guid, int?>? sessionLookup = null)
     {
         _logger = logger;
         _options = options.Value;
         _apollo = apollo;
         _injector = injector;
+        _sessionLookup = sessionLookup;
     }
 
     /// <summary>
@@ -102,7 +105,18 @@ public sealed class OnConnectAppLauncher
     }
 
     /// <summary>Drop tracked state for a seat that has been torn down.</summary>
-    public void Forget(Guid seatId) => _states.TryRemove(seatId, out _);
+    public void Forget(Guid seatId)
+    {
+        // Cancel the per-seat CTS FIRST, so any in-flight launch that was waiting on
+        // the settle delay observes the cancellation before it can read LaunchedPids
+        // (and so the final sessionId check below — when the lookup is supplied —
+        // sees the post-teardown session id). Then remove the state.
+        if (_states.TryRemove(seatId, out var state))
+        {
+            try { state.LifecycleCts.Cancel(); } catch { /* already disposed */ }
+            state.LifecycleCts.Dispose();
+        }
+    }
 
     // ── Edge handlers (called under state.Gate) ──────────────────────────
 
@@ -127,21 +141,43 @@ public sealed class OnConnectAppLauncher
         var account = seat.AccountName;
         var seatId = seat.Id;
 
+        // Link the per-seat lifecycle CTS with the caller-supplied CT so either source
+        // (Forget from SeatManager, or service shutdown) cancels the in-flight launch.
+        // CTS linked in the parent — disposing per-seat CTS in Forget releases the link.
+        var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(
+            state.LifecycleCts.Token, ct);
+        var linkedCt = linkedCts.Token;
+
         // Run detached so the per-launch settle delay never stalls the health-check loop.
         _ = Task.Run(async () =>
         {
             try
             {
                 if (_options.LaunchOnConnectDelayMs > 0)
-                    await Task.Delay(_options.LaunchOnConnectDelayMs, ct);
+                    await Task.Delay(_options.LaunchOnConnectDelayMs, linkedCt);
+
+                // FINAL VALIDATION before LaunchInSessionAsync: the captured sessionId
+                // must still be the seat's current sessionId. Forget has already cancelled
+                // the per-seat CTS, so this is the second line of defense for the case
+                // where a sessionId-replacement path (SetResolutionAsync, /session-reconnect)
+                // did NOT cancel the CTS — the captured id is no longer valid even though
+                // the seat is still "live". Skip the launch silently: the next connect
+                // edge from the new session will schedule its own launch.
+                if (linkedCt.IsCancellationRequested) return;
+                if (_sessionLookup is not null)
+                {
+                    var current = _sessionLookup(seatId);
+                    if (current is null || current.Value != sessionId) return;
+                }
 
                 foreach (var app in _options.LaunchOnConnect)
                 {
                     if (string.IsNullOrWhiteSpace(app.Path)) continue;
+                    if (linkedCt.IsCancellationRequested) return;
                     try
                     {
                         var pid = await _injector.LaunchInSessionAsync(
-                            sessionId, account, app.Path, app.Arguments, app.WorkingDirectory, ct);
+                            sessionId, account, app.Path, app.Arguments, app.WorkingDirectory, linkedCt);
                         if (pid > 0)
                         {
                             lock (state.Gate) state.LaunchedPids.Add(pid);
@@ -158,12 +194,13 @@ public sealed class OnConnectAppLauncher
                     }
                 }
             }
-            catch (OperationCanceledException) { /* shutting down */ }
+            catch (OperationCanceledException) { /* shutting down or seat forgotten */ }
             finally
             {
                 lock (state.Gate) state.Launching = false;
+                linkedCts.Dispose();
             }
-        }, ct);
+        }, linkedCt);
     }
 
     private void OnDisconnect(SeatInfo seat, SeatConnState state)
@@ -292,5 +329,11 @@ public sealed class OnConnectAppLauncher
         // still detected when the next chunk arrives.
         public string Carry = string.Empty;
         public readonly List<int> LaunchedPids = [];
+
+        // Per-seat cancellation token. Forget() cancels this BEFORE removing the state
+        // from the dictionary, so a fire-and-forget Task.Run waiting on the settle delay
+        // observes the cancellation before it ever reaches LaunchInSessionAsync.
+        // Created in SeedState; disposed in Forget().
+        public readonly CancellationTokenSource LifecycleCts = new();
     }
 }

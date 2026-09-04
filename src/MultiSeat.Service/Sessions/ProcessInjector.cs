@@ -21,7 +21,7 @@ namespace MultiSeat.Service.Sessions;
 ///   - MultiSeat service must run as SYSTEM (for WTSQueryUserToken + SeTcbPrivilege)
 ///   - Target session must already exist (created by SessionLauncher)
 /// </summary>
-public sealed class ProcessInjector
+public class ProcessInjector
 {
     private readonly ILogger<ProcessInjector> _logger;
     private readonly MultiSeatOptions _options;
@@ -41,7 +41,7 @@ public sealed class ProcessInjector
     /// Launch a process inside the specified Windows session.
     /// Returns the PID of the launched process.
     /// </summary>
-    public async Task<int> LaunchInSessionAsync(
+    public virtual async Task<int> LaunchInSessionAsync(
         int sessionId,
         string accountName,
         string exePath,
@@ -179,7 +179,7 @@ public sealed class ProcessInjector
     /// Launch Apollo streaming server inside a target session.
     /// Special handling: Apollo needs specific env vars and the config path.
     /// </summary>
-    public Task<int> LaunchApolloInSessionAsync(
+    public virtual Task<int> LaunchApolloInSessionAsync(
         int sessionId,
         string accountName,
         string apolloExePath,
