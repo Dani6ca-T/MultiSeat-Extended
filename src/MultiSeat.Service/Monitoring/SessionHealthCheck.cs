@@ -113,7 +113,7 @@ public sealed class SessionHealthCheck
             // what normally calls DisconnectSession, and a seat parked in Error may never be
             // torn down — leaving a hidden mstsc alive for the rest of the host's uptime.
             try { _sessionLauncher.DisconnectSession(seat.SessionId); } catch { /* best effort */ }
-            seat.Status = SeatStatus.Error;
+            seat.TransitionTo(SeatStatus.Error, _logger);
             seat.ErrorMessage = "Windows session terminated unexpectedly";
             return true;
         }
@@ -133,7 +133,7 @@ public sealed class SessionHealthCheck
             // used to read Ready/Streaming throughout - claiming health at the one moment it is
             // least true. Restored to whatever it was on success; Error on any failure below.
             var previousStatus = seat.Status;
-            seat.Status = SeatStatus.Connecting;
+            seat.TransitionTo(SeatStatus.Connecting, _logger);
 
             // Broadcast here rather than leaving it to CheckAllSeatsAsync: that only publishes
             // after CheckSeatAsync returns, by which point recovery has finished and Connecting
@@ -180,7 +180,7 @@ public sealed class SessionHealthCheck
                         "Seat {Id}: session {Sid} did not become ACTIVE within 10s after reconnect — aborting",
                         seat.Id, seat.SessionId);
                     try { _sessionLauncher.DisconnectSession(seat.SessionId); } catch { /* best effort */ }
-                    seat.Status = SeatStatus.Error;
+                    seat.TransitionTo(SeatStatus.Error, _logger);
                     seat.ErrorMessage = "RDP session did not become active after reconnect";
                     return true;
                 }
@@ -208,7 +208,7 @@ public sealed class SessionHealthCheck
 
                     // Back to whatever it was before the sleep - a Streaming seat returns to
                     // Streaming, not to Ready.
-                    seat.Status = previousStatus;
+                    seat.TransitionTo(previousStatus, _logger);
                     return true;
                 }
 
@@ -222,21 +222,21 @@ public sealed class SessionHealthCheck
                     "Seat {Id}: Apollo did not restart after reconnect (pid {Pid}) — leaving it to "
                     + "the crash check, which retries up to {Max} times",
                     seat.Id, newPid, Streaming.ApolloManager.MaxRestartAttempts);
-                seat.Status = previousStatus;
+                seat.TransitionTo(previousStatus, _logger);
             }
             catch (OperationCanceledException)
             {
                 // Shutdown. Put the status back rather than leaving the seat stuck in Connecting
                 // for whatever a future run makes of it.
                 _logger.LogInformation("Seat {Id}: session reconnect canceled", seat.Id);
-                seat.Status = previousStatus;
+                seat.TransitionTo(previousStatus, _logger);
                 return true;
             }
             catch (Exception ex)
             {
                 _logger.LogError(ex,
                     "Seat {Id}: failed to reconnect session after sleep", seat.Id);
-                seat.Status = SeatStatus.Error;
+                seat.TransitionTo(SeatStatus.Error, _logger);
                 seat.ErrorMessage = "Session reconnect failed: " + ex.Message;
             }
             return true;
@@ -278,7 +278,7 @@ public sealed class SessionHealthCheck
             {
                 // Restart failed — give up, and release the session's mstsc with it.
                 try { _sessionLauncher.DisconnectSession(seat.SessionId); } catch { /* best effort */ }
-                seat.Status = SeatStatus.Error;
+                seat.TransitionTo(SeatStatus.Error, _logger);
                 seat.ErrorMessage = "Apollo streaming server crashed and could not be restarted";
                 return true;
             }

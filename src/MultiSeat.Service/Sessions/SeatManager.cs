@@ -163,7 +163,7 @@ public sealed class SeatManager
                 seat.AccountName, ct, RdpGeometry.ForClient(seat.Width, seat.Height));
             _logger.LogInformation("Seat {Id}: Windows session {Sid}", seat.Id, seat.SessionId);
 
-            seat.Status = SeatStatus.Configuring;
+            seat.TransitionTo(SeatStatus.Configuring, _logger);
             seat.ProvisioningStep = "Display";
             await BroadcastState(seat);
 
@@ -410,7 +410,7 @@ public sealed class SeatManager
             _inputHookManager.InstallForSession((uint)seat.SessionId);
 
             // ── 9. Ready ──────────────────────────────────────────────
-            seat.Status = SeatStatus.Ready;
+            seat.TransitionTo(SeatStatus.Ready, _logger);
             seat.ReadyAt = DateTimeOffset.UtcNow;
             seat.ProvisioningStep = null;
             await BroadcastState(seat);
@@ -423,7 +423,7 @@ public sealed class SeatManager
         catch (Exception ex)
         {
             _logger.LogError(ex, "Seat {Id}: provisioning failed at {Status}", seat.Id, seat.Status);
-            seat.Status = SeatStatus.Error;
+            seat.TransitionTo(SeatStatus.Error, _logger);
             seat.ErrorMessage = ex.Message;
             await BroadcastState(seat);
 
@@ -448,7 +448,7 @@ public sealed class SeatManager
             seat.SessionId, seat.AccountName,
             request.ExecutablePath, request.Arguments, request.WorkingDirectory, ct);
 
-        seat.Status = SeatStatus.Streaming;
+        seat.TransitionTo(SeatStatus.Streaming, _logger);
         seat.LaunchApp = request.ExecutablePath;
         await BroadcastState(seat);
     }
@@ -461,7 +461,7 @@ public sealed class SeatManager
         if (!_seats.TryRemove(seatId, out var seat))
             return;
 
-        seat.Status = SeatStatus.TearingDown;
+        seat.TransitionTo(SeatStatus.TearingDown, _logger);
         await BroadcastState(seat);
 
         // Makes Apollo Stop + DisconnectSession + DestroyDisplay atomic against any in-flight
