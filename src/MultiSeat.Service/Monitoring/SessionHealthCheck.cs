@@ -129,6 +129,14 @@ public sealed class SessionHealthCheck
                 seat.Id, seat.SessionId);
             try
             {
+                // This branch rewrites SessionId and restarts Apollo, so it needs the same gate
+                // as every other lifecycle mutation — otherwise a resolution change or manual
+                // reconnect arriving mid-recovery interleaves with it and strands the old
+                // session's mstsc. Nothing it calls below takes the gate, so there is no
+                // reentrancy: the semaphore is not recursive and a nested acquire would
+                // deadlock the seat until the 30s timeout.
+                using var lease = await _lifecycleGate.AcquireAsync(seat.Id, ct);
+
                 // Kill the existing Apollo first — it survived sleep but with a broken
                 // display pipeline (DXGI/QueryDisplayConfig fail on Disconnected sessions).
                 // Without this, RestartAsync launches a second Apollo alongside the first,
