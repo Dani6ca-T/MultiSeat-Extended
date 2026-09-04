@@ -1323,6 +1323,202 @@ public class StreamingTests
         finally { DeleteTestDir(root); }
     }
 
+
+    // -- Log ACL: inheritance, idempotency, cross-seat scope ------------------
+    //
+    // EnsureSeatLogWritable must (a) reach logs created AFTER provisioning through the
+    // logs\ directory ACE, (b) survive repeated BuildConfig calls without stacking
+    // equivalent seat ACEs, and (c) never grant write access to anyone but the seat.
+    // Each test strips inherited access first so a seat ACE that appears afterwards can
+    // only have come from the grant under test, not from temp-root FullControl.
+
+    private static SecurityIdentifier? CurrentUserSid()
+    {
+        try
+        {
+            return (SecurityIdentifier)new NTAccount(Environment.MachineName, Environment.UserName)
+                .Translate(typeof(SecurityIdentifier));
+        }
+        catch (IdentityNotMappedException)
+        {
+            return null; // not a local account on this host - covered by the reference-host run
+        }
+    }
+
+    private static FileSystemSecurity AclOf(string path, bool directory) =>
+        directory
+            ? new DirectoryInfo(path).GetAccessControl()
+            : new FileInfo(path).GetAccessControl();
+
+    private static bool GrantsSeatWrite(FileSystemAccessRule rule, SecurityIdentifier seatSid) =>
+        rule.IdentityReference.Value == seatSid.Value
+        && rule.AccessControlType == AccessControlType.Allow
+        && (rule.FileSystemRights & FileSystemRights.Write) != 0;
+
+    private static void LockToSystemOnly(string path, bool directory)
+    {
+        var system = new FileSystemAccessRule(
+            new SecurityIdentifier(WellKnownSidType.LocalSystemSid, null),
+            FileSystemRights.FullControl,
+            directory ? InheritanceFlags.ObjectInherit | InheritanceFlags.ContainerInherit : InheritanceFlags.None,
+            PropagationFlags.None,
+            AccessControlType.Allow);
+
+        if (directory)
+        {
+            var info = new DirectoryInfo(path);
+            var acl = info.GetAccessControl();
+            acl.SetAccessRuleProtection(isProtected: true, preserveInheritance: false);
+            acl.AddAccessRule(system);
+            info.SetAccessControl(acl);
+        }
+        else
+        {
+            var info = new FileInfo(path);
+            var acl = info.GetAccessControl();
+            acl.SetAccessRuleProtection(isProtected: true, preserveInheritance: false);
+            acl.AddAccessRule(system);
+            info.SetAccessControl(acl);
+        }
+    }
+
+    [Fact]
+    public void BuildConfig_GrantOnLogsDirectory_IsInheritedByLaterLogFiles()
+    {
+        var seatSid = CurrentUserSid();
+        if (seatSid is null) return;
+
+        var (root, seatsDir, opts) = FakeApollo();
+        try
+        {
+            var seat = new SeatInfo { AccountName = Environment.UserName, PortBase = 47984 };
+            var logsDir = Path.Combine(seatsDir, seat.AccountName, "logs");
+            Directory.CreateDirectory(logsDir);
+            LockToSystemOnly(logsDir, directory: true);
+
+            Assert.DoesNotContain(
+                AclOf(logsDir, directory: true)
+                    .GetAccessRules(true, true, typeof(SecurityIdentifier))
+                    .Cast<FileSystemAccessRule>(),
+                r => GrantsSeatWrite(r, seatSid));
+
+            new ApolloConfigBuilder(new TestLogger<ApolloConfigBuilder>(), Options.Create(opts))
+                .BuildConfig(seat, seatsDir);
+
+            // The logs\ directory itself must carry an inheritable seat entry...
+            Assert.Contains(
+                AclOf(logsDir, directory: true)
+                    .GetAccessRules(true, true, typeof(SecurityIdentifier))
+                    .Cast<FileSystemAccessRule>(),
+                r => GrantsSeatWrite(r, seatSid)
+                     && r.InheritanceFlags.HasFlag(InheritanceFlags.ObjectInherit));
+
+            // ...and a file created AFTER provisioning picks it up. The file-level grant
+            // runs at BuildConfig time and never sees this file, so an ACE here can only
+            // have arrived through inheritance from the directory grant.
+            var rotated = Path.Combine(logsDir,
+                $"apollo-{DateTimeOffset.UtcNow:yyyyMMdd-HHmmss}-000.log");
+            File.WriteAllText(rotated, "written after provision");
+
+            var inherited = Assert.Single(
+                AclOf(rotated, directory: false)
+                    .GetAccessRules(true, true, typeof(SecurityIdentifier))
+                    .Cast<FileSystemAccessRule>(),
+                r => GrantsSeatWrite(r, seatSid));
+            Assert.True(inherited.IsInherited,
+                "the seat ACE on a later log must come from the directory grant, not a file-level grant");
+        }
+        finally { DeleteTestDir(root); }
+    }
+
+    [Fact]
+    public void BuildConfig_Repeated_GrantsTheSeatExactlyOnce()
+    {
+        var seatSid = CurrentUserSid();
+        if (seatSid is null) return;
+
+        var (root, seatsDir, opts) = FakeApollo();
+        try
+        {
+            var seat = new SeatInfo { AccountName = Environment.UserName, PortBase = 47984 };
+            var seatDir = Path.Combine(seatsDir, seat.AccountName);
+            Directory.CreateDirectory(seatDir);
+            var logsDir = Path.Combine(seatDir, "logs");
+            Directory.CreateDirectory(logsDir);
+
+            var flat = Path.Combine(seatDir, "apollo.log");
+            File.WriteAllText(flat, "earlier run");
+            LockToSystemOnly(flat, directory: false);
+            LockToSystemOnly(logsDir, directory: true);
+
+            var builder = new ApolloConfigBuilder(
+                new TestLogger<ApolloConfigBuilder>(), Options.Create(opts));
+            builder.BuildConfig(seat, seatsDir);
+            builder.BuildConfig(seat, seatsDir);
+
+            // Windows may canonicalise or merge ACEs, so no byte-for-byte comparison — but a
+            // second identical grant must not stack a second equivalent seat ACE.
+            Assert.Single(
+                AclOf(flat, directory: false)
+                    .GetAccessRules(includeExplicit: true, includeInherited: false, typeof(SecurityIdentifier))
+                    .Cast<FileSystemAccessRule>(),
+                r => GrantsSeatWrite(r, seatSid));
+            Assert.Single(
+                AclOf(logsDir, directory: true)
+                    .GetAccessRules(includeExplicit: true, includeInherited: false, typeof(SecurityIdentifier))
+                    .Cast<FileSystemAccessRule>(),
+                r => GrantsSeatWrite(r, seatSid));
+
+            // Nothing was damaged by the second run.
+            Assert.Equal("earlier run", File.ReadAllText(flat));
+        }
+        finally { DeleteTestDir(root); }
+    }
+
+    [Fact]
+    public void BuildConfig_GrantOnSeatLog_GrantsNoOneButTheSeat()
+    {
+        var seatSid = CurrentUserSid();
+        if (seatSid is null) return;
+
+        var (root, seatsDir, opts) = FakeApollo();
+        try
+        {
+            var seat = new SeatInfo { AccountName = Environment.UserName, PortBase = 47984 };
+            var seatDir = Path.Combine(seatsDir, seat.AccountName);
+            Directory.CreateDirectory(seatDir);
+
+            var flat = Path.Combine(seatDir, "apollo.log");
+            File.WriteAllText(flat, "earlier run");
+            LockToSystemOnly(flat, directory: false);
+
+            new ApolloConfigBuilder(new TestLogger<ApolloConfigBuilder>(), Options.Create(opts))
+                .BuildConfig(seat, seatsDir);
+
+            var rules = AclOf(flat, directory: false)
+                .GetAccessRules(true, true, typeof(SecurityIdentifier))
+                .Cast<FileSystemAccessRule>()
+                .ToList();
+
+            // The seat itself gets write access...
+            Assert.Contains(rules, r => GrantsSeatWrite(r, seatSid));
+
+            // ...and nobody else does. The substrate held only SYSTEM, so every Allow ACE
+            // present after BuildConfig was written by the grant — and the grant must not
+            // hand write access to BUILTIN\Users (the group every other seat belongs to),
+            // or any other principal, on this seat's log.
+            var system = new SecurityIdentifier(WellKnownSidType.LocalSystemSid, null);
+            foreach (var rule in rules.Where(r => r.AccessControlType == AccessControlType.Allow))
+            {
+                Assert.True(
+                    rule.IdentityReference.Value == system.Value
+                    || rule.IdentityReference.Value == seatSid.Value,
+                    $"unexpected write grant on a seat log: {rule.IdentityReference.Value}");
+            }
+        }
+        finally { DeleteTestDir(root); }
+    }
+
 }
 
 /// <summary>
