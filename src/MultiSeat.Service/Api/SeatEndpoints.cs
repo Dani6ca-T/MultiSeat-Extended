@@ -73,13 +73,13 @@ public static class SeatEndpoints
             return Results.Ok(await mgr.GetSeatServicesAsync(id, ct));
         });
 
-        group.MapPost("/{id:guid}/apollo/stop", (Guid id, SeatManager mgr) =>
+        group.MapPost("/{id:guid}/apollo/stop", async (Guid id, SeatManager mgr) =>
         {
             if (mgr.GetSeat(id) is null)
                 return Results.NotFound();
             try
             {
-                mgr.StopApollo(id);
+                await mgr.StopApollo(id);
                 return Results.Ok(new { status = "stopped" });
             }
             catch (InvalidOperationException ex)
@@ -200,7 +200,8 @@ public static class SeatEndpoints
             });
 
         group.MapPost("/{id:guid}/session-reconnect",
-            async (Guid id, SeatManager mgr, SessionLauncher sessionLauncher, CancellationToken ct) =>
+            async (Guid id, SeatManager mgr, SessionLauncher sessionLauncher,
+                   Sessions.SeatLifecycleGate lifecycleGate, CancellationToken ct) =>
             {
                 var seat = mgr.GetSeat(id);
                 if (seat is null)

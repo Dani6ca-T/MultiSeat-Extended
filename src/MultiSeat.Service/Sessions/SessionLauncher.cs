@@ -585,6 +585,13 @@ public sealed class SessionLauncher
             HideProcessWindows(primaryConsoleToken, consoleSessionId, mstscProcess.Id);
             MuteMstscAudio(primaryConsoleToken, consoleSessionId, mstscProcess.Id);
 
+            // Kill an mstsc left over for this same session id before overwriting the entry.
+            // Assigning straight into _pendingMstsc drops the previous Process without killing
+            // it, and nothing else holds a handle — so it survives as an orphan holding a
+            // session open. Reachable when a session is recreated or reconnected without a
+            // DisconnectSession in between.
+            KillOrphanedMstsc(sessionId);
+
             _pendingMstsc[sessionId] = mstscProcess;
             mstscProcess = null; // Don't kill in finally block
             _logger.LogInformation(
@@ -678,6 +685,9 @@ public sealed class SessionLauncher
             await Task.Delay(500, ct);
             HideProcessWindows(primaryToken, consoleSessionId, mstscProcess.Id);
             MuteMstscAudio(primaryToken, consoleSessionId, mstscProcess.Id);
+
+            // Same orphan risk as the fresh-session path above.
+            KillOrphanedMstsc(sessionId);
 
             _pendingMstsc[sessionId] = mstscProcess;
             mstscProcess = null;
@@ -1494,6 +1504,28 @@ public sealed class SessionLauncher
             }
         }
         return true; // continue
+    }
+
+    /// <summary>
+    /// Kill and forget any mstsc already recorded against <paramref name="sessionId"/>.
+    ///
+    /// Call this before writing a new entry into <see cref="_pendingMstsc"/>. The dictionary is
+    /// the only thing holding these handles, so an indexer assignment silently discards the
+    /// previous Process without killing it — leaving an mstsc nobody will ever clean up, still
+    /// holding its session. DisconnectSession is what normally removes the entry; the orphan
+    /// appears on the paths that recreate or reconnect a session without one.
+    ///
+    /// Logged at Warning because reaching it means an earlier cleanup was missed. Removing
+    /// before killing keeps the dictionary consistent if the kill throws.
+    /// </summary>
+    private void KillOrphanedMstsc(int sessionId)
+    {
+        if (!_pendingMstsc.TryRemove(sessionId, out var previous) || previous is null) return;
+
+        _logger.LogWarning(
+            "Orphaned mstsc PID {Pid} still recorded for session {Sid} — killing it before replacing the entry",
+            previous.Id, sessionId);
+        KillMstsc(previous);
     }
 
     private static void KillMstsc(Process? mstsc)

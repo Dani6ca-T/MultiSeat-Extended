@@ -25,6 +25,7 @@ public sealed class SessionHealthCheck
     private readonly SeatManager _seatManager;
     private readonly OnConnectAppLauncher _onConnectApps;
     private readonly ClientResolutionFollower _resolutionFollower;
+    private readonly SeatLifecycleGate _lifecycleGate;
 
     public SessionHealthCheck(
         ILogger<SessionHealthCheck> logger,
@@ -32,7 +33,8 @@ public sealed class SessionHealthCheck
         ApolloManager apolloManager,
         SeatManager seatManager,
         OnConnectAppLauncher onConnectApps,
-        ClientResolutionFollower resolutionFollower)
+        ClientResolutionFollower resolutionFollower,
+        SeatLifecycleGate lifecycleGate)
     {
         _logger = logger;
         _sessionLauncher = sessionLauncher;
@@ -40,6 +42,7 @@ public sealed class SessionHealthCheck
         _seatManager = seatManager;
         _onConnectApps = onConnectApps;
         _resolutionFollower = resolutionFollower;
+        _lifecycleGate = lifecycleGate;
     }
 
     /// <summary>
@@ -106,6 +109,10 @@ public sealed class SessionHealthCheck
             _logger.LogWarning(
                 "Seat {Id}: Windows session {Sid} no longer active",
                 seat.Id, seat.SessionId);
+            // Release the seat's mstsc on the way to Error. Nothing else will: teardown is
+            // what normally calls DisconnectSession, and a seat parked in Error may never be
+            // torn down — leaving a hidden mstsc alive for the rest of the host's uptime.
+            try { _sessionLauncher.DisconnectSession(seat.SessionId); } catch { /* best effort */ }
             seat.Status = SeatStatus.Error;
             seat.ErrorMessage = "Windows session terminated unexpectedly";
             return true;
@@ -137,6 +144,24 @@ public sealed class SessionHealthCheck
                 // Apollo restart and display isolation just below both act on SessionId.
                 seat.SessionId = await _sessionLauncher.LaunchSessionAsync(
                     seat.AccountName, ct, RdpGeometry.ForClient(seat.Width, seat.Height));
+
+                // Do not start Apollo against a session that is not ACTIVE yet. Apollo calls
+                // QueryDisplayConfig at startup, and a Disconnected session answers
+                // ERROR_ACCESS_DENIED — so it comes up without a display, dies, and the
+                // health check restarts it into the same state. A fixed delay is not enough
+                // on its own: it is a guess about how long the session takes, and losing that
+                // race produces exactly this loop.
+                if (!await WaitForSessionActiveAsync(
+                        id => _sessionLauncher.IsSessionActive(id), seat.SessionId, ct))
+                {
+                    _logger.LogWarning(
+                        "Seat {Id}: session {Sid} did not become ACTIVE within 10s after reconnect — aborting",
+                        seat.Id, seat.SessionId);
+                    try { _sessionLauncher.DisconnectSession(seat.SessionId); } catch { /* best effort */ }
+                    seat.Status = SeatStatus.Error;
+                    seat.ErrorMessage = "RDP session did not become active after reconnect";
+                    return true;
+                }
 
                 // Give the display pipeline a moment to reinitialize after the session
                 // transitions back to Active — SudoVDA and DXGI need a beat to be ready.
@@ -179,6 +204,12 @@ public sealed class SessionHealthCheck
                 "Seat {Id}: Apollo (PID {Pid}) crashed — attempting restart",
                 seat.Id, seat.ApolloProcessId);
 
+            // Restarting mutates ApolloProcessId and the ApolloManager instance record, so it
+            // must not interleave with a manual restart or a resolution change for the same
+            // seat. The dead-session branch above stays outside the gate deliberately: it only
+            // writes Status and never touches lifecycle state.
+            using var lease = await _lifecycleGate.AcquireAsync(seat.Id, ct);
+
             // Try auto-restart
             var newPid = await _apolloManager.RestartAsync(seat, ct);
 
@@ -197,7 +228,8 @@ public sealed class SessionHealthCheck
             }
             else
             {
-                // Restart failed — give up
+                // Restart failed — give up, and release the session's mstsc with it.
+                try { _sessionLauncher.DisconnectSession(seat.SessionId); } catch { /* best effort */ }
                 seat.Status = SeatStatus.Error;
                 seat.ErrorMessage = "Apollo streaming server crashed and could not be restarted";
                 return true;
@@ -258,5 +290,40 @@ public sealed class SessionHealthCheck
         {
             return false;
         }
+    }
+
+    /// <summary>
+    /// Poll until the session reports Active, or the timeout expires.
+    /// </summary>
+    /// <remarks>
+    /// Takes the probe as a delegate rather than calling SessionLauncher directly so the timing
+    /// can be tested without a Windows session.
+    /// </remarks>
+    /// <returns>true if the session became Active within the timeout.</returns>
+    internal static async Task<bool> WaitForSessionActiveAsync(
+        Func<int, bool> isSessionActive,
+        int sessionId,
+        CancellationToken ct,
+        int pollMs = 500,
+        int timeoutMs = 10_000)
+    {
+        // Deviation from the ported original, which only observed cancellation through the
+        // Task.Delay inside the loop: an already-cancelled token skipped the loop entirely and
+        // returned a plain false, which the caller cannot tell from "the session never came up"
+        // and so parks the seat in Error during an ordinary shutdown. Cancelling always throws
+        // here, matching both Task.Delay below and LaunchSessionAsync in the same try block.
+        ct.ThrowIfCancellationRequested();
+
+        var waited = 0;
+        while (waited < timeoutMs && !ct.IsCancellationRequested)
+        {
+            if (isSessionActive(sessionId))
+                return true;
+            await Task.Delay(pollMs, ct);
+            waited += pollMs;
+        }
+
+        // One last look: the final sleep may have covered the transition.
+        return isSessionActive(sessionId);
     }
 }
