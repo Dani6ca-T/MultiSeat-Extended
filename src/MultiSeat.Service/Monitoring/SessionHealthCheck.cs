@@ -110,7 +110,7 @@ public sealed class SessionHealthCheck
                 "Seat {Id}: Windows session {Sid} no longer active",
                 seat.Id, seat.SessionId);
             try { _sessionLauncher.DisconnectSession(seat.SessionId); } catch { /* best effort */ }
-            seat.Status = SeatStatus.Error;
+            seat.TransitionTo(SeatStatus.Error, _logger);
             seat.ErrorMessage = "Windows session terminated unexpectedly";
             return true;
         }
@@ -134,7 +134,7 @@ public sealed class SessionHealthCheck
             var previousStatus = seat.Status;
             if (previousStatus is SeatStatus.Ready or SeatStatus.Streaming)
             {
-                seat.Status = SeatStatus.Connecting;
+                seat.TransitionTo(SeatStatus.Connecting, _logger);
                 // Broadcast the Connecting state before the recovery work begins. CheckAllSeatsAsync
                 // only broadcasts once, after every seat has been processed in turn, so without
                 // this the dashboard would skip past Connecting and only see the post-recovery
@@ -182,7 +182,7 @@ public sealed class SessionHealthCheck
             {
                 // Restart failed — give up
                 try { _sessionLauncher.DisconnectSession(seat.SessionId); } catch { /* best effort */ }
-                seat.Status = SeatStatus.Error;
+                seat.TransitionTo(SeatStatus.Error, _logger);
                 seat.ErrorMessage = "Apollo streaming server crashed and could not be restarted";
                 return true;
             }
@@ -272,7 +272,7 @@ public sealed class SessionHealthCheck
     /// state-transition outcomes are testable in isolation. The Apollo / mstsc / SudoVDA work is
     /// unchanged from the version that lived inline; only the state writes are now grouped.
     ///
-    /// Caller has already set <c>seat.Status = SeatStatus.Connecting</c> when <paramref name="previousStatus"/>
+    /// Caller has already transitioned the seat to <c>SeatStatus.Connecting</c> when <paramref name="previousStatus"/>
     /// is <see cref="SeatStatus.Ready"/> or <see cref="SeatStatus.Streaming"/>. On success we restore
     /// exactly that state, so a Ready seat reconnects to Ready and a Streaming seat reconnects to
     /// Streaming. On any failure we transition to <see cref="SeatStatus.Error"/>, matching the
@@ -320,7 +320,7 @@ public sealed class SessionHealthCheck
                     "Seat {Id}: session {Sid} did not become ACTIVE within 10s after reconnect — aborting",
                     seat.Id, seat.SessionId);
                 try { _sessionLauncher.DisconnectSession(seat.SessionId); } catch { /* best effort */ }
-                seat.Status = SeatStatus.Error;
+                seat.TransitionTo(SeatStatus.Error, _logger);
                 seat.ErrorMessage = "RDP session did not become active after reconnect";
                 return true;
             }
@@ -348,7 +348,7 @@ public sealed class SessionHealthCheck
 
                 // Successful recovery — return the seat to exactly the state it was in
                 // before the disconnect. Ready stays Ready, Streaming stays Streaming.
-                seat.Status = previousStatus;
+                seat.TransitionTo(previousStatus, _logger);
                 return true;
             }
 
@@ -357,7 +357,7 @@ public sealed class SessionHealthCheck
             // the seat in Connecting forever — fix that by parking it in Error.
             _logger.LogError(
                 "Seat {Id}: Apollo failed to restart after session reconnect", seat.Id);
-            seat.Status = SeatStatus.Error;
+            seat.TransitionTo(SeatStatus.Error, _logger);
             seat.ErrorMessage = "Apollo failed to restart after session reconnect";
             return true;
         }
@@ -370,7 +370,7 @@ public sealed class SessionHealthCheck
             // by the `using` above regardless of how this block exits.
             _logger.LogWarning(
                 "Seat {Id}: session reconnect canceled", seat.Id);
-            seat.Status = SeatStatus.Error;
+            seat.TransitionTo(SeatStatus.Error, _logger);
             seat.ErrorMessage = "Session reconnect canceled";
             return true;
         }
@@ -378,7 +378,7 @@ public sealed class SessionHealthCheck
         {
             _logger.LogError(ex,
                 "Seat {Id}: failed to reconnect session after sleep", seat.Id);
-            seat.Status = SeatStatus.Error;
+            seat.TransitionTo(SeatStatus.Error, _logger);
             seat.ErrorMessage = "Failed to reconnect session after sleep";
             return true;
         }

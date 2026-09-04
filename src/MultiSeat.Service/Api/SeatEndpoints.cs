@@ -201,7 +201,8 @@ public static class SeatEndpoints
 
         group.MapPost("/{id:guid}/session-reconnect",
             async (Guid id, SeatManager mgr, ISessionLauncher sessionLauncher,
-                   Sessions.SeatLifecycleGate lifecycleGate, CancellationToken ct) =>
+                   Sessions.SeatLifecycleGate lifecycleGate,
+                   ILoggerFactory loggerFactory, CancellationToken ct) =>
             {
                 var seat = mgr.GetSeat(id);
                 if (seat is null)
@@ -231,7 +232,8 @@ public static class SeatEndpoints
                 // session. Hand it back to the health check in the state it is actually in.
                 if (seat.Status == SeatStatus.Error)
                 {
-                    seat.Status = SeatStatus.Ready;
+                    seat.TransitionTo(SeatStatus.Ready,
+                        loggerFactory.CreateLogger("MultiSeat.Service.Api.SeatEndpoints"));
                     seat.ErrorMessage = null;
                 }
 
