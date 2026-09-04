@@ -342,6 +342,20 @@ public sealed class SessionHealthCheck
             // Error so the seat cannot remain stuck in Connecting.
             using var lease = await _lifecycleGate.AcquireAsync(seat.Id, ct);
 
+            // The caller captured previousStatus BEFORE waiting for the gate; while we waited,
+            // the gate holder may have finished provisioning (Configuring → Ready), failed it
+            // (→ Error), or torn the seat down (→ TearingDown, removed from the registry).
+            // Every decision from here on is made from the seat's CURRENT state — never the
+            // pre-gate snapshot — or a successful recovery could regress a seat that
+            // legitimately advanced (e.g. to Ready) back to a stale Configuring value.
+            var currentStatus = seat.Status;
+
+            // A seat that left the states automatic recovery owns while we waited already ran
+            // its own failure/teardown cleanup — do not resurrect resources for it here.
+            // Error seats are recovered by the explicit POST /api/seats/{id}/session-reconnect.
+            if (!CanStillRecover(currentStatus))
+                return false;
+
             // Kill the existing Apollo first — it survived sleep but with a broken
             // display pipeline (DXGI/QueryDisplayConfig fail on Disconnected sessions).
             // Without this, RestartAsync launches a second Apollo alongside the first,
@@ -395,9 +409,12 @@ public sealed class SessionHealthCheck
                 // ends up on the wrong display and the stream stays at 1024×768.
                 await _seatManager.ApplyDisplayIsolationAsync(seat, ct);
 
-                // Successful recovery — return the seat to exactly the state it was in
-                // before the disconnect. Ready stays Ready, Streaming stays Streaming.
-                seat.TransitionTo(previousStatus, _logger);
+                // Successful recovery — return the seat to exactly the state it legitimately
+                // holds, decided from its CURRENT status (the gate is held, so nothing moved
+                // since the re-read above). A seat that finished provisioning while we waited
+                // stays Ready/Streaming instead of being regressed to a stale Configuring.
+                seat.TransitionTo(
+                    ResolvePostGateRecoveryStatus(seat.Status, previousStatus), _logger);
                 return true;
             }
 
@@ -434,15 +451,51 @@ public sealed class SessionHealthCheck
     }
 
     /// <summary>
+    /// Whether automatic recovery should still run after the lifecycle gate was acquired.
+    ///
+    /// The seat is in a worth-checking state when recovery starts, but while it waited for the
+    /// gate the holder may have finished the job: provisioning failure parks the seat in Error
+    /// and teardown removes it (TearingDown) — both already ran their cleanup, so running
+    /// KillForReconnect + session relaunch here would resurrect resources for a seat that is no
+    /// longer recovering. Configuring is admitted so a seat stranded there by the pre-F1 stale
+    /// restore is still pulled to a terminal state (see <see cref="ResolvePostGateRecoveryStatus"/>).
+    /// </summary>
+    internal static bool CanStillRecover(SeatStatus currentStatus) =>
+        currentStatus is SeatStatus.Connecting or SeatStatus.Ready
+            or SeatStatus.Streaming or SeatStatus.Configuring;
+
+    /// <summary>
+    /// Terminal status for a SUCCESSFUL reconnect, decided from the seat's status AFTER the
+    /// lifecycle gate was acquired — never from the pre-gate snapshot the caller captured
+    /// while waiting (F1).
+    ///
+    ///   Connecting — the normal path: the caller moved a Ready/Streaming seat here before
+    ///                recovery, so restore previousStatus (Ready stays Ready, Streaming stays
+    ///                Streaming).
+    ///   Ready / Streaming — provisioning completed while recovery waited on the gate; the
+    ///                seat legitimately advanced, and recovery must NOT regress it to the stale
+    ///                Configuring value captured before the wait.
+    ///   anything else (Configuring) — not a state automatic recovery returns to; park in
+    ///                Error per <see cref="ResolveRecoveryStatus"/> so the user takes an
+    ///                explicit action (session-reconnect, re-provision, teardown).
+    /// </summary>
+    internal static SeatStatus ResolvePostGateRecoveryStatus(
+        SeatStatus currentStatus, SeatStatus previousStatus) =>
+        currentStatus == SeatStatus.Connecting ? previousStatus
+        : currentStatus is SeatStatus.Ready or SeatStatus.Streaming ? currentStatus
+        : ResolveRecoveryStatus(currentStatus, recoverySucceeded: true);
+
+    /// <summary>
     /// The state-transition rule for the automatic session-recovery path. Pure function: given
     /// the state the seat was in before recovery and whether recovery succeeded, return the
     /// state it should be in after recovery.
     ///
     /// Success restores the previous operational state (Ready/Streaming) so the dashboard returns
     /// to what it showed before the disconnect. Failure parks the seat in Error exactly like the
-    /// 10-second-active-timeout branch. Any previous state outside Ready/Streaming is a programming
-    /// error and falls to Error — that path is not reachable from CheckSeatAsync because IsWorthChecking
-    /// gates it.
+    /// 10-second-active-timeout branch. A previous state outside Ready/Streaming has no
+    /// operational state to return to, so it falls to Error — the caller only passes Ready,
+    /// Streaming or Configuring (the Configuring case is a mid-provision seat that was pulled
+    /// into recovery; see <see cref="ResolvePostGateRecoveryStatus"/>).
     ///
     /// This helper is the spec; TryReconnectAsync applies it directly at the relevant branches
     /// (the inline log lines and DisconnectSession calls differ per failure mode, so the branches

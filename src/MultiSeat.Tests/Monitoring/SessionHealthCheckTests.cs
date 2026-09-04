@@ -142,6 +142,78 @@ public class SessionHealthCheckTests
             SessionHealthCheck.ResolveRecoveryStatus(SeatStatus.Configuring, recoverySucceeded: true));
     }
 
+    // ── F1: recovery decides from post-gate status, never the pre-gate snapshot ────────
+    //
+    // TryReconnectAsync captures previousStatus BEFORE waiting for the per-seat lifecycle
+    // gate; provisioning may complete (Configuring → Ready) while it waits. The restore
+    // target is therefore re-derived from the seat's status AFTER the gate (currentStatus),
+    // and the decision is a pure function pinned here the same way ResolveRecoveryStatus is.
+
+    [Theory]
+    [InlineData(SeatStatus.Ready)]
+    [InlineData(SeatStatus.Streaming)]
+    [InlineData(SeatStatus.Configuring)]
+    public void RecoveryIsStillAllowed_ForStatesItOwns(SeatStatus status)
+    {
+        Assert.True(SessionHealthCheck.CanStillRecover(status));
+    }
+
+    [Theory]
+    [InlineData(SeatStatus.Error)]
+    [InlineData(SeatStatus.TearingDown)]
+    [InlineData(SeatStatus.Idle)]
+    [InlineData(SeatStatus.Provisioning)]
+    public void RecoveryIsSkipped_ForSeatsThatLeftItsOwnedStates(SeatStatus status)
+    {
+        // Error = provisioning failed while recovery waited on the gate; TearingDown = the
+        // seat was removed by teardown. Both already ran their cleanup — recovery must not
+        // resurrect resources for them.
+        Assert.False(SessionHealthCheck.CanStillRecover(status));
+    }
+
+    [Theory]
+    [InlineData(SeatStatus.Ready)]
+    [InlineData(SeatStatus.Streaming)]
+    public void NormalRecovery_StillRestoresPreviousStatus(SeatStatus previous)
+    {
+        // Unchanged semantics: the caller moved a Ready/Streaming seat to Connecting before
+        // recovery, so a successful reconnect restores exactly that operational state.
+        Assert.Equal(previous,
+            SessionHealthCheck.ResolvePostGateRecoveryStatus(
+                SeatStatus.Connecting, previous));
+    }
+
+    [Fact]
+    public void SeatThatBecameReadyWhileRecoveryWaited_IsNotRegressedToConfiguring()
+    {
+        // F1: recovery observed the seat mid-provision (Configuring), waited for the gate,
+        // and provisioning completed (Ready) in the meantime. A successful reconnect must
+        // leave the seat Ready — never restore the stale Configuring snapshot.
+        Assert.Equal(SeatStatus.Ready,
+            SessionHealthCheck.ResolvePostGateRecoveryStatus(
+                SeatStatus.Ready, SeatStatus.Configuring));
+    }
+
+    [Fact]
+    public void SeatThatBecameStreamingWhileRecoveryWaited_IsNotRegressed()
+    {
+        Assert.Equal(SeatStatus.Streaming,
+            SessionHealthCheck.ResolvePostGateRecoveryStatus(
+                SeatStatus.Streaming, SeatStatus.Configuring));
+    }
+
+    [Fact]
+    public void SeatStillConfiguringAfterGate_RecoveryFallsToError()
+    {
+        // Defensive: with the fix a Configuring seat is never observed behind the gate (the
+        // provision that owns it ends in Ready or Error first) — this only covers a seat
+        // stranded in Configuring by the pre-F1 bug. Per the ResolveRecoveryStatus contract,
+        // a state automatic recovery does not return to parks in Error.
+        Assert.Equal(SeatStatus.Error,
+            SessionHealthCheck.ResolvePostGateRecoveryStatus(
+                SeatStatus.Configuring, SeatStatus.Configuring));
+    }
+
     // ── Integration: full CheckSeatAsync cycle ─────────────────────────
 
     [Trait("Category", "Integration")]
