@@ -83,6 +83,21 @@ if ((Get-ItemProperty $tsKey -Name "fDenyTSConnections" -ErrorAction SilentlyCon
     Write-Host "  OK: Remote Desktop enabled" -ForegroundColor DarkGray
 }
 
+# Allow multiple sessions per user (fSingleSessionPerUser = 0). Windows defaults to one
+# session per user; with the limit in place an mstsc logon for an account that still holds
+# a session reconnects it instead of creating the new one MultiSeat needs — the session
+# then fails to appear or comes back at the wrong geometry. Seat accounts are distinct
+# users, so the lift never merges seats; it only stops same-account logons being glued
+# onto a stale session. Same rationale as fDenyTSConnections above: also applied by
+# prerequisites\install-prerequisites.ps1, re-applied here for a fresh service deploy.
+$singleSessionValue = (Get-ItemProperty $tsKey -Name "fSingleSessionPerUser" -ErrorAction SilentlyContinue).fSingleSessionPerUser
+if ($singleSessionValue -ne 0) {
+    Set-ItemProperty $tsKey -Name "fSingleSessionPerUser" -Value 0 -Type DWord
+    Write-Host "  Applied: multiple sessions per user enabled (fSingleSessionPerUser=0)" -ForegroundColor Green
+} else {
+    Write-Host "  OK: multiple sessions per user enabled" -ForegroundColor DarkGray
+}
+
 # Disable NLA (UserAuthentication=0) and enable TLS (SecurityLayer=2) on the RDP listener.
 # SecurityLayer=2 makes TermService generate a self-signed TLS cert (SSLCertificateSHA1Hash),
 # which TrustRdpLoopbackServer reads and writes to the console user's HKCU trust store so

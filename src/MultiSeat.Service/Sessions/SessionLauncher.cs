@@ -565,7 +565,9 @@ public sealed class SessionLauncher : ISessionLauncher
                     "(1) Run scripts\\check-termwrap-status.ps1 to confirm TermWrap is installed and TermService is redirecting to it. " +
                     "(2) Open RDPConf.exe (or check HKLM\\...\\TermService\\Parameters\\ServiceDll) and verify it points at %ProgramFiles%\\RDP Wrapper\\TermWrap.dll. " +
                     "(3) Manually run: mstsc /v:127.0.0.2 and log in as the seat account to verify RDP works. " +
-                    "(4) Check HKLM\\SYSTEM\\CurrentControlSet\\Control\\Terminal Server\\WinStations\\RDP-Tcp: UserAuthentication must be 0.");
+                    "(4) Check HKLM\\SYSTEM\\CurrentControlSet\\Control\\Terminal Server\\WinStations\\RDP-Tcp: UserAuthentication must be 0. " +
+                    "(5) Check HKLM\\SYSTEM\\CurrentControlSet\\Control\\Terminal Server: fSingleSessionPerUser must be 0 — " +
+                    "otherwise mstsc reconnects an existing session instead of creating a new one.");
             }
 
             _logger.LogInformation(
@@ -1179,9 +1181,10 @@ public sealed class SessionLauncher : ISessionLauncher
                     accountName, sw.ElapsedMilliseconds,
                     stillRunning ? "still running" : $"exited (code {mstsc.ExitCode})",
                     stillRunning
-                        ? "RDP Wrapper multi-session patch may not be active — " +
-                          "the connection may have reconnected an existing session instead of creating a new one. " +
-                          "Check RDPConf.exe (Listener state should be 'Listening [fully supported]')."
+                        ? "the connection may have reconnected an existing session instead of creating a new one — " +
+                          "check that the RDP multi-session patch is active (RDPConf.exe listener state " +
+                          "'Listening [fully supported]') and that HKLM\\...\\Control\\Terminal Server " +
+                          "fSingleSessionPerUser is 0."
                         : "mstsc exited silently at timeout — see earlier logs for exit code.");
             }
             catch { /* best effort */ }

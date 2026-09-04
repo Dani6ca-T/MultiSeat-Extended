@@ -1274,6 +1274,23 @@ if ($rdpReg.fDenyTSConnections -eq 1) {
     Write-OK "Remote Desktop already enabled"
 }
 
+# Allow multiple sessions per user (fSingleSessionPerUser = 0). Windows defaults to one
+# session per user; with the limit in place, an mstsc logon for an account that still holds
+# a session (leftover after a crash, mid-teardown, or a reconnect that never reached Active)
+# reconnects that existing session instead of creating the new one MultiSeat is asking for
+# — the seat then fails to appear or comes back at the wrong geometry. Seat accounts are
+# distinct users, so lifting the limit never merges seats; it only stops same-account logons
+# from being glued onto a stale session.
+$singleSessionReg = Get-ItemProperty "HKLM:\SYSTEM\CurrentControlSet\Control\Terminal Server" `
+    -Name "fSingleSessionPerUser" -ErrorAction SilentlyContinue
+if ($singleSessionReg.fSingleSessionPerUser -ne 0) {
+    Set-ItemProperty "HKLM:\SYSTEM\CurrentControlSet\Control\Terminal Server" `
+        -Name "fSingleSessionPerUser" -Value 0 -Type DWord
+    Write-OK "Multiple sessions per user enabled (fSingleSessionPerUser=0)"
+} else {
+    Write-OK "Multiple sessions per user already enabled"
+}
+
 # Disable NLA (Network Level Authentication) requirement for the RDP listener.
 # NLA requires a trusted certificate for the loopback connection (127.0.0.2).
 # When NLA is required, mstsc shows a pre-connection certificate warning dialog
