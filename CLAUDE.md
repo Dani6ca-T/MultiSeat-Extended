@@ -411,11 +411,22 @@ a healthy jail — and it is why this is off by default. Set `SeatPadDevicePaths
 
 ## Known Constraints
 
-- NVIDIA consumer GPUs: 3–5 concurrent NVENC sessions max.
+- NVIDIA consumer GPUs cap concurrent NVENC sessions. The old "3-5" figure here is **stale** -
+  NVIDIA has raised the cap more than once, and the reference host runs driver 610.88. There is no
+  query for the maximum; read the live count with
+  `nvidia-smi --query-gpu=encoder.stats.sessionCount --format=csv`. Each seat stream is one
+  session, so 4 seats plus a console stream is 5.
+  **Encoding is rarely the limit anyway:** measured on an RTX 3080, one seat at 1920x1080
+  `hevc_nvenc` 60fps costs **~10% of the video-encode engine**, so 4 seats is about 40%. VRAM and
+  shader share - what the seats actually *run* - bind first.
 - RDPWrap breaks after Windows updates to `termsrv.dll` — re-run the prereq script, which now
   **verifies** the ini covers the running build instead of assuming it does (see below).
 - mstsc window for each seat must never be manually disconnected (session goes Disconnected, display APIs stop working).
-- Single GPU only — multi-GPU not tested.
+- Single GPU only - multi-GPU not tested. A second card would add encode capacity and split
+  rendering/VRAM load, but it cannot give **per-seat GPU assignment**: Apollo filters adapters by
+  `adapter_name` and then requires the captured output to be attached to that adapter
+  (`display_base.cpp`), and seats capture the RDP display whose GPU Windows picks machine-wide.
+  `ApolloConfigBuilder` does not write `adapter_name` at all today.
 - Windows 11 build 26100+ / x64 only.
 - VoiceMeeter audio drivers only register after a reboot post-install.
 - Keyboard/mouse session isolation (`InputHookManager` + InputHook DLL) is **disabled by default and currently a no-op**. The low-level `WH_KEYBOARD_LL`/`WH_MOUSE_LL` hooks run in the SYSTEM service (Session 0), where `GetForegroundWindow()` returns NULL, so `ShouldPassThrough()` always passes — the filter never blocks. With the RDP-loopback design there is no cross-session K/M bleed anyway: physical input goes to the console session, and Moonlight input is `SendInput`'d inside the seat session. Re-enabling is only meaningful if the hook is re-architected to run inside the seat session.
