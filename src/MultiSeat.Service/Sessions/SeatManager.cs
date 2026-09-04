@@ -504,24 +504,69 @@ public sealed class SeatManager
 
     /// <summary>
     /// Teardown a single seat — reverse order of provisioning.
+    ///
+    /// The per-seat lifecycle gate is acquired BEFORE the seat is removed from <c>_seats</c>,
+    /// so a failed gate acquisition can never make a live seat disappear: if another lifecycle
+    /// operation holds the gate past its acquisition timeout, the TimeoutException propagates
+    /// with the seat still registered and its status untouched — the caller can retry, and no
+    /// invisible orphan (session/Apollo/ports without a registry entry) is left behind.
     /// </summary>
     public async Task TeardownSeatAsync(Guid seatId, CancellationToken ct)
     {
-        if (!_seats.TryRemove(seatId, out var seat))
-            return;
+        // Gate acquisition is deliberately not cancellable (CancellationToken.None): teardown
+        // must not be abandonable mid-flight — service shutdown and the DELETE endpoint both
+        // rely on it completing. The caller's ct is still honoured by the individual teardown
+        // steps inside TeardownSeatInternalAsync.
+        var (seat, lease) = await TryBeginTeardownAsync(
+            _seats, _lifecycleGate, seatId,
+            SeatLifecycleGate.DefaultAcquisitionTimeout, CancellationToken.None);
 
-        seat.TransitionTo(SeatStatus.TearingDown, _logger);
-        await BroadcastState(seat);
+        if (seat is null)
+            return; // not registered, or a concurrent teardown already handled it — no-op
 
-        // Per-seat lifecycle gate. Acquired AFTER the dictionary remove so a parallel
-        // recovery tick (which captured the seat object before remove) cannot re-enter
-        // after teardown starts. The gate makes the teardown's Apollo Stop + Disconnect +
-        // DestroyDisplay sequence atomic with respect to any in-flight lifecycle operation
-        // for the same seat.
-        using var lease = await _lifecycleGate.AcquireAsync(seatId, CancellationToken.None);
+        // The seat is removed from the registry and the gate is held for the whole teardown,
+        // so the Apollo Stop + Disconnect + DestroyDisplay sequence is atomic with respect to
+        // any in-flight lifecycle operation for the same seat, and a parallel recovery tick
+        // that captured the seat before removal cannot re-enter after teardown starts.
+        using (lease!)
+        {
+            seat.TransitionTo(SeatStatus.TearingDown, _logger);
+            await BroadcastState(seat);
 
-        await TeardownSeatInternalAsync(seat, ct);
-        _logger.LogInformation("Seat {Id}: torn down", seat.Id);
+            await TeardownSeatInternalAsync(seat, ct);
+            _logger.LogInformation("Seat {Id}: torn down", seat.Id);
+        }
+    }
+
+    /// <summary>
+    /// Gate-then-remove step of teardown, split out so the ordering invariant is unit-testable
+    /// without the full SeatManager dependency graph (same seam pattern as
+    /// <see cref="TryRegisterSeat"/>).
+    ///
+    /// Acquires the per-seat lifecycle gate for <paramref name="seatId"/>, then removes the
+    /// seat from <paramref name="seats"/> only once the gate is held. On gate-acquisition
+    /// failure the <see cref="TimeoutException"/> propagates and the seat REMAINS registered:
+    /// a teardown that cannot get the gate must never make a live seat disappear. Returns the
+    /// removed seat together with the held lease (caller disposes it after tearing down), or
+    /// (null, null) when the seat is absent or a concurrent teardown already removed it —
+    /// double teardown is a safe no-op.
+    /// </summary>
+    internal static async Task<(SeatInfo? Seat, SeatLifecycleGate.ILease? Lease)> TryBeginTeardownAsync(
+        ConcurrentDictionary<Guid, SeatInfo> seats,
+        SeatLifecycleGate gate,
+        Guid seatId,
+        TimeSpan gateTimeout,
+        CancellationToken ct)
+    {
+        var lease = await gate.AcquireAsync(seatId, gateTimeout, ct);
+
+        if (!seats.TryRemove(seatId, out var seat))
+        {
+            lease.Dispose();
+            return (null, null);
+        }
+
+        return (seat, lease);
     }
 
     /// <summary>
