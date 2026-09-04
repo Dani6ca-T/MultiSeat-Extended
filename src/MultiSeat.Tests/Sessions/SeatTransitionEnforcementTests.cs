@@ -49,6 +49,7 @@ public class SeatTransitionEnforcementTests
         { SeatStatus.Ready,        SeatStatus.Error,        "HealthCheck: session died / Apollo could not restart" },
         { SeatStatus.Ready,        SeatStatus.TearingDown,  "SeatManager: teardown" },
         { SeatStatus.Streaming,    SeatStatus.Streaming,    "SeatManager: LaunchApp on a streaming seat" },
+        { SeatStatus.Streaming,    SeatStatus.Ready,        "HealthCheck: launched app exited (Check 3)" },
         { SeatStatus.Streaming,    SeatStatus.Connecting,   "HealthCheck: sleep recovery mid-stream" },
         { SeatStatus.Streaming,    SeatStatus.Error,        "HealthCheck: Apollo could not restart" },
         { SeatStatus.Streaming,    SeatStatus.TearingDown,  "SeatManager: teardown of a streaming seat" },

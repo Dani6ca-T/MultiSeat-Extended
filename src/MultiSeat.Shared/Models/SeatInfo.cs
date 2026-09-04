@@ -50,6 +50,12 @@ public sealed class SeatInfo
     public string? ErrorMessage { get; set; }
     public string? LaunchApp { get; set; }
 
+    // Root PID of the process launched via LaunchAppInSeatAsync (dashboard "launch").
+    // Tracked so the health check can return the seat to Ready when the app exits
+    // (SessionHealthCheck Check 3). 0 = no app tracked. Only the root process is
+    // tracked; children are not part of the app lifetime.
+    public int LaunchedProcessId { get; set; }
+
     // Preset
     public bool AutoStart { get; set; } = false;
     public NvencQualityPreset NvencPreset { get; set; } = NvencQualityPreset.Balanced;

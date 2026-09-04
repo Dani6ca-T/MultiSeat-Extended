@@ -218,12 +218,20 @@ public sealed class SessionHealthCheck
         }
 
         // ── Check 3: Is a launched app still running? ─────────────
-        // If a game was launched and has exited, transition back to Ready
-        if (seat.Status == SeatStatus.Streaming && !string.IsNullOrEmpty(seat.LaunchApp))
+        // LaunchAppInSeatAsync tracks the ROOT process of the dashboard-launched app and puts
+        // the seat in Streaming. When that process exits, return the seat to Ready and clear
+        // the launch state (LaunchApp + tracked PID). Only the root PID is tracked — a
+        // launcher's children are not part of the app lifetime. A seat in Streaming with a
+        // missing PID (0) is left alone: that state predates PID tracking and cannot be
+        // distinguished from an app that is still running, so guessing would be wrong in
+        // either direction.
+        if (LaunchedAppHasExited(seat, IsProcessAlive))
         {
-            // We don't track the game PID separately (it could spawn children),
-            // so we only flag if Apollo itself died (handled above).
-            // In the future, we could track the game PID for auto-restart.
+            _logger.LogInformation(
+                "Seat {Id}: launched app '{Exe}' (PID {Pid}) exited — returning to Ready",
+                seat.Id, seat.LaunchApp, seat.LaunchedProcessId);
+            FinishLaunchedAppExit(seat, _logger);
+            return true; // state changed — worth broadcasting
         }
 
         // ── Launch-on-connect: tail Apollo's log for client connect/disconnect ──
@@ -448,6 +456,36 @@ public sealed class SessionHealthCheck
             seat.ErrorMessage = "Failed to reconnect session after sleep";
             return true;
         }
+    }
+
+    /// <summary>
+    /// Check-3 decision: the dashboard-launched app (LaunchAppInSeatAsync's root process) has
+    /// exited and the seat should return to Ready. True only when ALL of: the seat is
+    /// Streaming, LaunchApp is set, a root PID is actually tracked (&gt; 0), and that process
+    /// is no longer alive.
+    ///
+    /// A stored PID is required on purpose: a missing PID (0) predates process tracking and
+    /// cannot be told apart from an app that is still running, so it must not trigger a
+    /// transition. PID reuse cannot cause a false "exited" while the original app runs — a
+    /// PID is only reused after the original exits — and a reused-but-alive PID keeps the
+    /// seat Streaming. Both are the conservative direction.
+    /// </summary>
+    internal static bool LaunchedAppHasExited(SeatInfo seat, Func<int, bool> isProcessAlive) =>
+        seat.Status == SeatStatus.Streaming
+        && !string.IsNullOrEmpty(seat.LaunchApp)
+        && seat.LaunchedProcessId > 0
+        && !isProcessAlive(seat.LaunchedProcessId);
+
+    /// <summary>
+    /// Apply the Check-3 outcome: clear the launch tracking state (PID + LaunchApp) and
+    /// return the seat to Ready. Extracted so the state writes are pinned by unit tests
+    /// alongside the pure decision.
+    /// </summary>
+    internal static void FinishLaunchedAppExit(SeatInfo seat, ILogger logger)
+    {
+        seat.LaunchedProcessId = 0;
+        seat.LaunchApp = null;
+        seat.TransitionTo(SeatStatus.Ready, logger);
     }
 
     /// <summary>

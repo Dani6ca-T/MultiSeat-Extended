@@ -493,12 +493,18 @@ public sealed class SeatManager
         if (seat.Status is not SeatStatus.Ready and not SeatStatus.Streaming)
             throw new InvalidOperationException($"Seat is in {seat.Status} state — cannot launch apps.");
 
-        await _processInjector.LaunchInSessionAsync(
+        // Track the ROOT PID of the launched process so the health check can return the
+        // seat to Ready when the app exits (SessionHealthCheck Check 3). Only the root
+        // process is tracked; children are not part of the app lifetime. Set together with
+        // the Streaming transition before the state is broadcast, so an observed Streaming
+        // seat always carries its tracking state.
+        var pid = await _processInjector.LaunchInSessionAsync(
             seat.SessionId, seat.AccountName,
             request.ExecutablePath, request.Arguments, request.WorkingDirectory, ct);
 
         seat.TransitionTo(SeatStatus.Streaming, _logger);
         seat.LaunchApp = request.ExecutablePath;
+        seat.LaunchedProcessId = pid;
         await BroadcastState(seat);
     }
 

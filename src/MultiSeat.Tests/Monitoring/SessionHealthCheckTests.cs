@@ -1,3 +1,4 @@
+using Microsoft.Extensions.Logging.Abstractions;
 using MultiSeat.Service.Monitoring;
 using MultiSeat.Shared.Models;
 using Xunit;
@@ -212,6 +213,100 @@ public class SessionHealthCheckTests
         Assert.Equal(SeatStatus.Error,
             SessionHealthCheck.ResolvePostGateRecoveryStatus(
                 SeatStatus.Configuring, SeatStatus.Configuring));
+    }
+
+    // ── F2: launched app exit returns the seat to Ready (Check 3) ───────
+    //
+    // LaunchAppInSeatAsync tracks the ROOT PID of the dashboard-launched app on SeatInfo;
+    // Check 3 polls it and, once the process has exited, clears the launch state and returns
+    // the seat to Ready. The decision and the state writes are pinned here (the launch itself
+    // needs a real Windows session, so it stays integration-only).
+
+    private static SeatInfo StreamingSeatWithApp(int pid) => new()
+    {
+        AccountName = "MultiSeatSeat01",
+        Status = SeatStatus.Streaming,
+        LaunchApp = @"C:\Games\game.exe",
+        LaunchedProcessId = pid,
+    };
+
+    [Fact]
+    public void RunningLaunchedApp_StaysStreaming()
+    {
+        // The tracked root process is still alive — nothing changes.
+        Assert.False(SessionHealthCheck.LaunchedAppHasExited(
+            StreamingSeatWithApp(pid: 42), _ => true));
+    }
+
+    [Fact]
+    public void ExitedLaunchedApp_ReturnsSeatToReady_AndClearsLaunchState()
+    {
+        var seat = StreamingSeatWithApp(pid: 42);
+
+        Assert.True(SessionHealthCheck.LaunchedAppHasExited(
+            seat, _ => false)); // root process reported dead
+
+        SessionHealthCheck.FinishLaunchedAppExit(seat, NullLogger.Instance);
+
+        Assert.Equal(SeatStatus.Ready, seat.Status);   // Streaming → Ready
+        Assert.Null(seat.LaunchApp);                   // launch state cleared
+        Assert.Equal(0, seat.LaunchedProcessId);       // tracking state cleared
+    }
+
+    [Fact]
+    public void MissingTrackedPid_NeverTriggersAnExit()
+    {
+        // A Streaming seat with LaunchApp set but PID 0 predates PID tracking (or the launch
+        // failed to record one) — it cannot be told apart from an app that is still running,
+        // so it must not be transitioned.
+        Assert.False(SessionHealthCheck.LaunchedAppHasExited(
+            StreamingSeatWithApp(pid: 0), _ => false));
+    }
+
+    [Fact]
+    public void StreamingWithoutLaunchApp_IsNotTouched()
+    {
+        var seat = StreamingSeatWithApp(pid: 42);
+        seat.LaunchApp = null;
+
+        Assert.False(SessionHealthCheck.LaunchedAppHasExited(seat, _ => false));
+    }
+
+    [Fact]
+    public void NonStreamingSeat_WithLaunchState_IsNotTouched()
+    {
+        // A Ready seat may carry LaunchApp from provisioning (SeatRequest) but is not in the
+        // launched state — Check 3 must not act on it.
+        var seat = StreamingSeatWithApp(pid: 42);
+        seat.Status = SeatStatus.Ready;
+
+        Assert.False(SessionHealthCheck.LaunchedAppHasExited(seat, _ => false));
+    }
+
+    [Fact]
+    public void RecycledPidThatIsAlive_StaysStreaming()
+    {
+        // PID-reuse guard: the original app exited and Windows handed the PID to another
+        // live process. The alive check cannot distinguish it from our app, and it must
+        // NOT falsely report an exit — staying Streaming is the conservative direction.
+        // (A reused PID that is itself dead can only follow the original's exit, so
+        // reporting Ready then is correct, never premature.)
+        Assert.False(SessionHealthCheck.LaunchedAppHasExited(
+            StreamingSeatWithApp(pid: 42), _ => true));
+    }
+
+    [Fact]
+    public void DeadProcessReported_AppliesCleanly_WithoutThrowing()
+    {
+        // The real checker (IsProcessAlive) swallows ArgumentException for a PID that no
+        // longer exists; the decision + apply path must handle a reported-dead process
+        // without an exception.
+        var seat = StreamingSeatWithApp(pid: 999999);
+
+        Assert.True(SessionHealthCheck.LaunchedAppHasExited(seat, _ => false));
+
+        SessionHealthCheck.FinishLaunchedAppExit(seat, NullLogger.Instance);
+        Assert.Equal(SeatStatus.Ready, seat.Status);
     }
 
     // ── Integration: full CheckSeatAsync cycle ─────────────────────────
