@@ -169,10 +169,15 @@ public sealed class WindowsProcessMonitor : IProcessMonitor
         {
             if (kvp.Key.ProcessId == pid)
             {
-                // Verify identity matches by checking start time
+                // Verify identity matches by exact start-time equality — the canonical
+                // discipline shared with the tracker and ProcessIdentity.Matches. The sender
+                // is the entry's own held handle, so its start time always equals the
+                // recorded one for the right entry; a ±2 s window could instead attribute
+                // this exit to a same-PID entry from another generation (PID reuse) and
+                // restart a healthy process.
                 try
                 {
-                    if (Math.Abs((kvp.Key.StartedAt - process.StartTime.ToUniversalTime()).TotalSeconds) < 2)
+                    if (kvp.Key.StartedAt == process.StartTime.ToUniversalTime())
                     {
                         matchedEntry = kvp.Value;
                         matchedIdentity = kvp.Key;

@@ -344,11 +344,13 @@ public sealed class ApolloManager : IStreamingProvider
     /// Check if Apollo is running for a seat — identity-aware.
     ///
     /// Compares the registered <see cref="ProcessIdentity"/> (PID + start time) against the OS
-    /// rather than only checking whether the PID exists, so a PID Windows recycled onto a
-    /// different process reads as "Apollo is dead" and the health check restarts it. A raw
-    /// <c>Process.GetProcessById</c> lookup would answer "alive" for that unrelated process
-    /// and the seat would never recover. Falls back to the historical raw-PID check when the
-    /// instance record carries no usable identity.
+    /// via the tracker rather than only checking whether the PID exists, so a PID Windows
+    /// recycled onto a different process reads as "Apollo is dead" and the health check
+    /// restarts it. A raw <c>Process.GetProcessById</c> lookup would answer "alive" for that
+    /// unrelated process and the seat would never recover. The record always carries a real
+    /// OS identity (a launch whose start time is unreadable fails without registering), so
+    /// there is no PID-only fallback — and none is wanted. Read-only: never probes server
+    /// readiness (G4 owns that).
     /// </summary>
     public bool IsAlive(Guid seatId)
     {
@@ -360,11 +362,7 @@ public sealed class ApolloManager : IStreamingProvider
         if (instance.ProcessId <= 0)
             return false;
 
-        // Identity-aware liveness (PID + start time match). Only when the identity is unusable
-        // (no PID recorded) fall back to the conservative raw-PID check.
-        return instance.Identity.ProcessId > 0
-            ? _tracker.IsAlive(instance.Identity)
-            : instance.IsAlive;
+        return _tracker.IsAlive(instance.Identity);
     }
 
     /// <summary>
@@ -1035,7 +1033,14 @@ internal sealed record ApolloInstance(
     int RestartCount)
 {
     /// <summary>
-    /// Check if the Apollo process is still running.
+    /// Check if the Apollo process is still running — identity-aware.
+    ///
+    /// Compares the recorded <see cref="ProcessIdentity"/> (PID + start time) against the OS
+    /// via <see cref="ProcessIdentity.Matches"/>, the single source of truth for the
+    /// comparison (same exact-match discipline as <see cref="IProcessTracker.IsAlive"/>).
+    /// A recycled PID naming an unrelated process reads as dead. Read-only: never kills,
+    /// never probes server readiness (G4 owns that). Fail-closed and never throws, so
+    /// <see cref="ApolloManager.RunningInstanceCount"/> enumeration stays safe.
     /// </summary>
     public bool IsAlive
     {
@@ -1045,11 +1050,20 @@ internal sealed record ApolloInstance(
             try
             {
                 using var proc = Process.GetProcessById(ProcessId);
-                return !proc.HasExited;
+                if (proc.HasExited) return false;
+                return Identity.Matches(ProcessId, proc.StartTime.ToUniversalTime());
             }
             catch (ArgumentException)
             {
-                return false;
+                return false; // PID free
+            }
+            catch (InvalidOperationException)
+            {
+                return false; // exited mid-check
+            }
+            catch (System.ComponentModel.Win32Exception)
+            {
+                return false; // start time unreadable — fail closed, never claim alive
             }
         }
     }
