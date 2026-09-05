@@ -2,6 +2,7 @@ using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using Moq;
+using MultiSeat.Service;
 using MultiSeat.Service.Accounts;
 using MultiSeat.Service.Audio;
 using MultiSeat.Service.Configuration;
@@ -87,7 +88,7 @@ public class LaunchAppInSeatStaleSeatTests
             await mgr.TeardownSeatAsync(SeatA, CancellationToken.None);
             Assert.Null(mgr.GetSeat(SeatA));
 
-            var ex = await Assert.ThrowsAsync<InvalidOperationException>(
+            var ex = await Assert.ThrowsAsync<ResourceNotFoundException>(
                 () => mgr.LaunchAppInSeatAsync(SeatA, Request, CancellationToken.None));
             Assert.Equal("Seat not found.", ex.Message);
             Assert.Equal(0, recorder.LaunchCount);
@@ -125,7 +126,7 @@ public class LaunchAppInSeatStaleSeatTests
             // Release the gate; the launch's post-gate GetSeat must now return null and abort.
             lease.Dispose();
 
-            var ex = await Assert.ThrowsAsync<InvalidOperationException>(() => launchTask);
+            var ex = await Assert.ThrowsAsync<ResourceNotFoundException>(() => launchTask);
             Assert.Equal("Seat was removed while launching app.", ex.Message);
             Assert.Equal(0, recorder.LaunchCount);
         }
@@ -154,7 +155,7 @@ public class LaunchAppInSeatStaleSeatTests
 
             lease.Dispose();
 
-            var ex = await Assert.ThrowsAsync<InvalidOperationException>(() => launchTask);
+            var ex = await Assert.ThrowsAsync<ResourceNotFoundException>(() => launchTask);
             Assert.Equal("Seat was removed while launching app.", ex.Message);
             Assert.Equal(0, recorder.LaunchCount);
         }
@@ -184,7 +185,7 @@ public class LaunchAppInSeatStaleSeatTests
 
             lease.Dispose();
 
-            var ex = await Assert.ThrowsAsync<InvalidOperationException>(() => launchTask);
+            var ex = await Assert.ThrowsAsync<ResourceNotFoundException>(() => launchTask);
             Assert.Equal("Seat was removed while launching app.", ex.Message);
             Assert.Equal(0, recorder.LaunchCount);
         }

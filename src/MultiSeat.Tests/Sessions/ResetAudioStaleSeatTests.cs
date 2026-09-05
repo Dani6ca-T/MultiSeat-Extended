@@ -2,6 +2,7 @@ using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using Moq;
+using MultiSeat.Service;
 using MultiSeat.Service.Accounts;
 using MultiSeat.Service.Audio;
 using MultiSeat.Service.Configuration;
@@ -107,7 +108,7 @@ public class ResetAudioStaleSeatTests
             await mgr.TeardownSeatAsync(SeatA, CancellationToken.None);
             Assert.Null(mgr.GetSeat(SeatA));
 
-            var ex = await Assert.ThrowsAsync<InvalidOperationException>(
+            var ex = await Assert.ThrowsAsync<ResourceNotFoundException>(
                 () => mgr.ResetAudio(SeatA));
             Assert.Equal("Seat not found.", ex.Message);
             Assert.Null(router.GetAssignment(SeatA));
@@ -144,7 +145,7 @@ public class ResetAudioStaleSeatTests
             // Release the gate; the reset's post-gate GetSeat must now return null and abort.
             lease.Dispose();
 
-            var ex = await Assert.ThrowsAsync<InvalidOperationException>(() => resetTask);
+            var ex = await Assert.ThrowsAsync<ResourceNotFoundException>(() => resetTask);
             Assert.Equal("Seat was removed while resetting audio.", ex.Message);
             Assert.Null(router.GetAssignment(SeatA));
         }
@@ -173,7 +174,7 @@ public class ResetAudioStaleSeatTests
 
             lease.Dispose();
 
-            var ex = await Assert.ThrowsAsync<InvalidOperationException>(() => resetTask);
+            var ex = await Assert.ThrowsAsync<ResourceNotFoundException>(() => resetTask);
             Assert.Equal("Seat was removed while resetting audio.", ex.Message);
             Assert.Null(router.GetAssignment(SeatA));
         }

@@ -59,6 +59,10 @@ public static class AccountEndpoints
                 mgr.DeleteAccount(username);
                 return Results.NoContent();
             }
+            catch (ResourceNotFoundException ex)
+            {
+                return Results.NotFound(new { error = ex.Message });
+            }
             catch (InvalidOperationException ex)
             {
                 return Results.BadRequest(new { error = ex.Message });

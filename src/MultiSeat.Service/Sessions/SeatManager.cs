@@ -516,7 +516,7 @@ public sealed class SeatManager
         // session id is captured here so the post-gate revalidation can detect a session
         // replacement (SetResolutionAsync / /session-reconnect) that ran while we waited.
         var seat = GetSeat(seatId)
-            ?? throw new InvalidOperationException("Seat not found.");
+            ?? throw new ResourceNotFoundException("Seat not found.");
 
         if (seat.Status is not SeatStatus.Ready and not SeatStatus.Streaming)
             throw new InvalidOperationException($"Seat is in {seat.Status} state — cannot launch apps.");
@@ -541,13 +541,13 @@ public sealed class SeatManager
         // launch targets the exact seat + session the user asked for, never a stale capture.
         // TearingDown is the "removed" signal; any other non-launchable status (Error,
         // Connecting, …) means the session can no longer host the app either. Throw to surface
-        // the lost race to the caller (the API endpoint maps this to 400 BadRequest).
+        // the lost race to the caller (the API endpoint maps this to 404 Not Found).
         seat = GetSeat(seatId);
         if (seat is null || !AppLaunchStillValid(seat.Status) || seat.SessionId != sessionIdAtEntry)
         {
             _logger.LogWarning(
                 "Seat {Id}: removed or session changed while launching app — aborting", seatId);
-            throw new InvalidOperationException("Seat was removed while launching app.");
+            throw new ResourceNotFoundException("Seat was removed while launching app.");
         }
 
         // Track the ROOT PID of the launched process so the health check can return the
@@ -754,7 +754,7 @@ public sealed class SeatManager
     public async Task StopApollo(Guid seatId)
     {
         var seat = GetSeat(seatId)
-            ?? throw new InvalidOperationException("Seat not found.");
+            ?? throw new ResourceNotFoundException("Seat not found.");
 
         // Per-seat lifecycle gate. Stops the Apollo instance record and mutates
         // StreamingProcessId; must serialize with recovery/reconnect/range-changers.
@@ -771,7 +771,7 @@ public sealed class SeatManager
         {
             _logger.LogWarning(
                 "Seat {Id}: removed while stopping Apollo — aborting", seatId);
-            throw new InvalidOperationException("Seat was removed while stopping Apollo.");
+            throw new ResourceNotFoundException("Seat was removed while stopping Apollo.");
         }
 
         _streaming.Stop(seat);
@@ -784,7 +784,7 @@ public sealed class SeatManager
     public async Task StartApolloAsync(Guid seatId, CancellationToken ct)
     {
         var seat = GetSeat(seatId)
-            ?? throw new InvalidOperationException("Seat not found.");
+            ?? throw new ResourceNotFoundException("Seat not found.");
 
         // Per-seat lifecycle gate. Starts Apollo, mutates StreamingProcessId, updates
         // ApolloManager's instance record. Must serialize with recovery/reconnect.
@@ -798,7 +798,7 @@ public sealed class SeatManager
         {
             _logger.LogWarning(
                 "Seat {Id}: removed while starting Apollo — aborting", seatId);
-            throw new InvalidOperationException("Seat was removed while starting Apollo.");
+            throw new ResourceNotFoundException("Seat was removed while starting Apollo.");
         }
 
         if (seat.SessionId < 0)
@@ -818,7 +818,7 @@ public sealed class SeatManager
     public async Task RestartApolloAsync(Guid seatId, CancellationToken ct)
     {
         var seat = GetSeat(seatId)
-            ?? throw new InvalidOperationException("Seat not found.");
+            ?? throw new ResourceNotFoundException("Seat not found.");
 
         // Per-seat lifecycle gate. Stop + Start are a compound lifecycle mutation; the gate
         // makes them atomic with respect to other lifecycle callers (recovery, reconnect,
@@ -833,7 +833,7 @@ public sealed class SeatManager
         {
             _logger.LogWarning(
                 "Seat {Id}: removed while restarting Apollo — aborting", seatId);
-            throw new InvalidOperationException("Seat was removed while restarting Apollo.");
+            throw new ResourceNotFoundException("Seat was removed while restarting Apollo.");
         }
 
         _streaming.Stop(seat);
@@ -1133,7 +1133,7 @@ public sealed class SeatManager
     public async Task ResetAudio(Guid seatId)
     {
         var seat = GetSeat(seatId)
-            ?? throw new InvalidOperationException("Seat not found.");
+            ?? throw new ResourceNotFoundException("Seat not found.");
 
         // Nothing to reset under per-session audio: MultiSeat assigns no device, and the
         // session's Remote Audio endpoint lives and dies with the session itself. Re-assigning
@@ -1166,7 +1166,7 @@ public sealed class SeatManager
         {
             _logger.LogWarning(
                 "Seat {Id}: removed while resetting audio — aborting", seatId);
-            throw new InvalidOperationException("Seat was removed while resetting audio.");
+            throw new ResourceNotFoundException("Seat was removed while resetting audio.");
         }
 
         _audioRouter.ReleaseCable(seat);
@@ -1187,7 +1187,7 @@ public sealed class SeatManager
     public void ApplyAudioDefaults(Guid seatId)
     {
         var seat = GetSeat(seatId)
-            ?? throw new InvalidOperationException("Seat not found.");
+            ?? throw new ResourceNotFoundException("Seat not found.");
         ApplyAudioDefaults(seat);
     }
 
@@ -1225,7 +1225,7 @@ public sealed class SeatManager
         SeatPresetStore presetStore, CancellationToken ct)
     {
         var seat = GetSeat(seatId)
-            ?? throw new InvalidOperationException("Seat not found.");
+            ?? throw new ResourceNotFoundException("Seat not found.");
 
         // Per-seat lifecycle gate. KillForReconnect + Start mutate StreamingProcessId and the
         // ApolloManager instance record; must serialize with recovery and reconnect.
@@ -1239,7 +1239,7 @@ public sealed class SeatManager
         {
             _logger.LogWarning(
                 "Seat {Id}: removed while changing NVENC preset — aborting", seatId);
-            throw new InvalidOperationException("Seat was removed while changing NVENC preset.");
+            throw new ResourceNotFoundException("Seat was removed while changing NVENC preset.");
         }
 
         seat.NvencPreset = preset;
@@ -1285,7 +1285,7 @@ public sealed class SeatManager
         SeatPresetStore presetStore, CancellationToken ct)
     {
         var seat = GetSeat(seatId)
-            ?? throw new InvalidOperationException("Seat not found.");
+            ?? throw new ResourceNotFoundException("Seat not found.");
 
         var geometry = RdpGeometry.ForClient(width, height);
         if (!geometry.IsValid)
@@ -1318,7 +1318,7 @@ public sealed class SeatManager
         {
             _logger.LogWarning(
                 "Seat {Id}: removed while changing resolution — aborting", seatId);
-            throw new InvalidOperationException(
+            throw new ResourceNotFoundException(
                 "Seat was removed while changing resolution.");
         }
 
@@ -1487,7 +1487,7 @@ public sealed class SeatManager
     public async Task ResetDisplayAsync(Guid seatId, CancellationToken ct)
     {
         var seat = GetSeat(seatId)
-            ?? throw new InvalidOperationException("Seat not found.");
+            ?? throw new ResourceNotFoundException("Seat not found.");
 
         // Per-seat lifecycle gate. DestroyDisplay + CreateDisplay + UpdateDisplayOutput mutate
         // the display assignment record and the seat's Apollo config; the gate makes the whole
@@ -1507,7 +1507,7 @@ public sealed class SeatManager
         {
             _logger.LogWarning(
                 "Seat {Id}: removed while resetting display — aborting", seatId);
-            throw new InvalidOperationException("Seat was removed while resetting display.");
+            throw new ResourceNotFoundException("Seat was removed while resetting display.");
         }
 
         await _displayManager.DestroyDisplayAsync(seat, ct);
@@ -1538,15 +1538,14 @@ public sealed class SeatManager
         // while we waited. Re-check membership and lifecycle state now that the gate
         // is held. TearingDown is the H2 "removed" signal — by then the seat is gone
         // from _seats and CreateController would orphan the virtual controller. Throw
-        // to surface the lost race to the caller (the API endpoint maps this to 400
-        // BadRequest, matching the original "Seat not found." semantics for the
-        // not-yet-torn-down case).
+        // to surface the lost race to the caller (the API endpoint maps this to 404
+        // Not Found, matching the "Seat not found." race semantics).
         var seat = GetSeat(seatId);
         if (seat is null || !ControllerResetStillValid(seat.Status))
         {
             _logger.LogWarning(
                 "Seat {Id}: removed while resetting controller — aborting", seatId);
-            throw new InvalidOperationException("Seat was removed while resetting controller.");
+            throw new ResourceNotFoundException("Seat was removed while resetting controller.");
         }
 
         if (!_options.EnableViGEmController)

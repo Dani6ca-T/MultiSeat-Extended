@@ -169,6 +169,7 @@ public class HttpStatusSemanticsTests
         // (worker autostart, tests, tooling) keeps catching these exactly as before.
         Assert.IsAssignableFrom<InvalidOperationException>(new CapacityExhaustedException("x"));
         Assert.IsAssignableFrom<InvalidOperationException>(new ResourceConflictException("x"));
+        Assert.IsAssignableFrom<InvalidOperationException>(new ResourceNotFoundException("x"));
     }
 
     // ── Harness ─────────────────────────────────────────────────────

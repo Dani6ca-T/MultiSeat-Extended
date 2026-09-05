@@ -2,6 +2,7 @@ using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using Moq;
+using MultiSeat.Service;
 using MultiSeat.Service.Accounts;
 using MultiSeat.Service.Audio;
 using MultiSeat.Service.Configuration;
@@ -86,7 +87,7 @@ public class ResetControllerStaleSeatTests
             await mgr.TeardownSeatAsync(SeatA, CancellationToken.None);
             Assert.Null(mgr.GetSeat(SeatA));
 
-            var ex = await Assert.ThrowsAsync<InvalidOperationException>(
+            var ex = await Assert.ThrowsAsync<ResourceNotFoundException>(
                 () => mgr.ResetController(SeatA));
             Assert.Equal("Seat was removed while resetting controller.", ex.Message);
             Assert.Equal(0, recorder.CreatedCount);
@@ -112,7 +113,7 @@ public class ResetControllerStaleSeatTests
             RegisterReadySeat(mgr, SeatA);
             mgr.GetSeat(SeatA)!.TransitionTo(SeatStatus.TearingDown, NullLogger.Instance);
 
-            var ex = await Assert.ThrowsAsync<InvalidOperationException>(
+            var ex = await Assert.ThrowsAsync<ResourceNotFoundException>(
                 () => mgr.ResetController(SeatA));
             Assert.Equal("Seat was removed while resetting controller.", ex.Message);
             Assert.Equal(0, recorder.CreatedCount);

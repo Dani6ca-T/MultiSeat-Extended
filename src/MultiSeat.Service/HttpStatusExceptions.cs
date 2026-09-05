@@ -26,3 +26,20 @@ internal sealed class ResourceConflictException : InvalidOperationException
 {
     public ResourceConflictException(string message) : base(message) { }
 }
+
+/// <summary>
+/// A request targets a resource that no longer exists (seat removed by a concurrent
+/// teardown while the request entered the lifecycle boundary, account deleted or never
+/// managed). The API maps this to 404 Not Found: the endpoint's own pre-check already
+/// passed, so only the race remains — retrying the identical request is meaningless
+/// until the resource exists again, unlike a validation error in the request itself.
+///
+/// Derives from <see cref="InvalidOperationException"/> so every existing non-HTTP
+/// catcher keeps catching it exactly as before. Only the specific "disappeared"
+/// condition is typed this way; validation, illegal-state and backend failures stay
+/// plain <see cref="InvalidOperationException"/> and keep mapping to 400.
+/// </summary>
+internal sealed class ResourceNotFoundException : InvalidOperationException
+{
+    public ResourceNotFoundException(string message) : base(message) { }
+}

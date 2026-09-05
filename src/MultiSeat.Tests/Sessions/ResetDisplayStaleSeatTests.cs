@@ -2,6 +2,7 @@ using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using Moq;
+using MultiSeat.Service;
 using MultiSeat.Service.Accounts;
 using MultiSeat.Service.Audio;
 using MultiSeat.Service.Configuration;
@@ -80,7 +81,7 @@ public class ResetDisplayStaleSeatTests
             await mgr.TeardownSeatAsync(SeatA, CancellationToken.None);
             Assert.Null(mgr.GetSeat(SeatA));
 
-            var ex = await Assert.ThrowsAsync<InvalidOperationException>(
+            var ex = await Assert.ThrowsAsync<ResourceNotFoundException>(
                 () => mgr.ResetDisplayAsync(SeatA, CancellationToken.None));
             Assert.Equal("Seat not found.", ex.Message);
             Assert.Equal(0, display.CreateCount);
@@ -116,7 +117,7 @@ public class ResetDisplayStaleSeatTests
             // Release the gate; the reset's post-gate GetSeat must now return null and abort.
             lease.Dispose();
 
-            var ex = await Assert.ThrowsAsync<InvalidOperationException>(() => resetTask);
+            var ex = await Assert.ThrowsAsync<ResourceNotFoundException>(() => resetTask);
             Assert.Equal("Seat was removed while resetting display.", ex.Message);
             Assert.Equal(0, display.CreateCount);
             Assert.Equal(0, display.DestroyCount);
@@ -146,7 +147,7 @@ public class ResetDisplayStaleSeatTests
 
             lease.Dispose();
 
-            var ex = await Assert.ThrowsAsync<InvalidOperationException>(() => resetTask);
+            var ex = await Assert.ThrowsAsync<ResourceNotFoundException>(() => resetTask);
             Assert.Equal("Seat was removed while resetting display.", ex.Message);
             Assert.Equal(0, display.CreateCount);
             Assert.Equal(0, display.DestroyCount);

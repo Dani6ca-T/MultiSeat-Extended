@@ -39,6 +39,11 @@ public static class SeatEndpoints
             {
                 return Results.Conflict(new { error = ex.Message });
             }
+            catch (TimeoutException ex)
+            {
+                return Results.Json(new { error = ex.Message },
+                    statusCode: StatusCodes.Status503ServiceUnavailable);
+            }
             catch (InvalidOperationException ex)
             {
                 return Results.BadRequest(new { error = ex.Message });
@@ -57,6 +62,15 @@ public static class SeatEndpoints
                     await mgr.LaunchAppInSeatAsync(id, request, ct);
                     return Results.Ok(new { status = "launched" });
                 }
+                catch (TimeoutException ex)
+                {
+                    return Results.Json(new { error = ex.Message },
+                        statusCode: StatusCodes.Status503ServiceUnavailable);
+                }
+                catch (ResourceNotFoundException ex)
+                {
+                    return Results.NotFound(new { error = ex.Message });
+                }
                 catch (InvalidOperationException ex)
                 {
                     return Results.BadRequest(new { error = ex.Message });
@@ -69,8 +83,18 @@ public static class SeatEndpoints
             if (seat is null)
                 return Results.NotFound();
 
-            await mgr.TeardownSeatAsync(id, ct);
-            return Results.NoContent();
+            // Teardown is a no-op when the seat is already gone; only gate
+            // contention (TimeoutException) can still fail here.
+            try
+            {
+                await mgr.TeardownSeatAsync(id, ct);
+                return Results.NoContent();
+            }
+            catch (TimeoutException ex)
+            {
+                return Results.Json(new { error = ex.Message },
+                    statusCode: StatusCodes.Status503ServiceUnavailable);
+            }
         });
 
         // ── Per-seat service management ────────────────────────────────
@@ -91,6 +115,15 @@ public static class SeatEndpoints
                 await mgr.StopApollo(id);
                 return Results.Ok(new { status = "stopped" });
             }
+            catch (TimeoutException ex)
+            {
+                return Results.Json(new { error = ex.Message },
+                    statusCode: StatusCodes.Status503ServiceUnavailable);
+            }
+            catch (ResourceNotFoundException ex)
+            {
+                return Results.NotFound(new { error = ex.Message });
+            }
             catch (InvalidOperationException ex)
             {
                 return Results.BadRequest(new { error = ex.Message });
@@ -106,6 +139,15 @@ public static class SeatEndpoints
                 {
                     await mgr.StartApolloAsync(id, ct);
                     return Results.Ok(new { status = "started" });
+                }
+                catch (TimeoutException ex)
+                {
+                    return Results.Json(new { error = ex.Message },
+                        statusCode: StatusCodes.Status503ServiceUnavailable);
+                }
+                catch (ResourceNotFoundException ex)
+                {
+                    return Results.NotFound(new { error = ex.Message });
                 }
                 catch (InvalidOperationException ex)
                 {
@@ -123,6 +165,15 @@ public static class SeatEndpoints
                     await mgr.RestartApolloAsync(id, ct);
                     return Results.Ok(new { status = "restarted" });
                 }
+                catch (TimeoutException ex)
+                {
+                    return Results.Json(new { error = ex.Message },
+                        statusCode: StatusCodes.Status503ServiceUnavailable);
+                }
+                catch (ResourceNotFoundException ex)
+                {
+                    return Results.NotFound(new { error = ex.Message });
+                }
                 catch (InvalidOperationException ex)
                 {
                     return Results.BadRequest(new { error = ex.Message });
@@ -137,6 +188,15 @@ public static class SeatEndpoints
             {
                 await mgr.ResetAudio(id);
                 return Results.Ok(new { status = "reset" });
+            }
+            catch (TimeoutException ex)
+            {
+                return Results.Json(new { error = ex.Message },
+                    statusCode: StatusCodes.Status503ServiceUnavailable);
+            }
+            catch (ResourceNotFoundException ex)
+            {
+                return Results.NotFound(new { error = ex.Message });
             }
             catch (InvalidOperationException ex)
             {
@@ -154,6 +214,15 @@ public static class SeatEndpoints
                     await mgr.ResetDisplayAsync(id, ct);
                     return Results.Ok(new { status = "reset" });
                 }
+                catch (TimeoutException ex)
+                {
+                    return Results.Json(new { error = ex.Message },
+                        statusCode: StatusCodes.Status503ServiceUnavailable);
+                }
+                catch (ResourceNotFoundException ex)
+                {
+                    return Results.NotFound(new { error = ex.Message });
+                }
                 catch (InvalidOperationException ex)
                 {
                     return Results.BadRequest(new { error = ex.Message });
@@ -168,6 +237,15 @@ public static class SeatEndpoints
             {
                 await mgr.ResetController(id);
                 return Results.Ok(new { status = "reset" });
+            }
+            catch (TimeoutException ex)
+            {
+                return Results.Json(new { error = ex.Message },
+                    statusCode: StatusCodes.Status503ServiceUnavailable);
+            }
+            catch (ResourceNotFoundException ex)
+            {
+                return Results.NotFound(new { error = ex.Message });
             }
             catch (InvalidOperationException ex)
             {
@@ -221,48 +299,64 @@ public static class SeatEndpoints
                 // the keep-alive mstsc path. Must serialize with SessionHealthCheck's
                 // automatic recovery and any other lifecycle caller (StopApollo,
                 // SetResolutionAsync, etc.) for the same seat.
-                using var lease = await lifecycleGate.AcquireAsync(id, ct);
-
-                // The seat was captured BEFORE waiting for the gate. While we waited, a
-                // concurrent DELETE may have torn it down (H2 ordering: removal → TearingDown
-                // → teardown → gate release, so the captured object now reads TearingDown), or
-                // another reconnect may already have healed it (Error → Ready). LaunchSessionAsync
-                // below creates a NEW Windows session — running it against a seat that is no
-                // longer in Error would orphan that session (no registry entry, nothing ever
-                // tears it down). So re-check BEFORE any session-creating side effect; the
-                // check must never sit after the launch.
-                if (!IsReconnectStillValid(seat.Status))
-                {
-                    return seat.Status == SeatStatus.TearingDown
-                        ? Results.NotFound()   // removed by a concurrent teardown — resource gone
-                        : Results.Conflict(
-                            "Seat is not in Error state — session reconnect no longer applies.");
-                }
-
-                // Pass the seat's geometry: if the session has to be recreated rather than
-                // reattached, it must come back at the seat's own size, not inherit the
-                // console desktop's.
                 //
-                // And keep the id it answers with. A recreated session is a NEW session,
-                // and everything that acts on this seat afterwards reads SessionId:
-                // ProcessInjector, the health check, display isolation. Dropped, they all
-                // keep aiming at the session that just went away — apollo/start fails with
-                // 500 and the seat can never come back.
-                seat.SessionId = await sessionLauncher.LaunchSessionAsync(
-                    seat.AccountName, ct, RdpGeometry.ForClient(seat.Width, seat.Height));
-
-                // The health check parks a seat in Error when its session dies, and nothing
-                // ever takes it out again. Leave it there and the checks that would restart
-                // Apollo are skipped, so the seat stays broken although it now has a live
-                // session. Hand it back to the health check in the state it is actually in.
-                if (seat.Status == SeatStatus.Error)
+                // Gate contention is temporary (another lifecycle holder is mid-transaction),
+                // not an internal error: surface it as 503 so the caller retries. Only the
+                // gate throws TimeoutException in this codebase.
+                SeatLifecycleGate.ILease lease;
+                try
                 {
-                    seat.TransitionTo(SeatStatus.Ready,
-                        loggerFactory.CreateLogger("MultiSeat.Service.Api.SeatEndpoints"));
-                    seat.ErrorMessage = null;
+                    lease = await lifecycleGate.AcquireAsync(id, ct);
+                }
+                catch (TimeoutException ex)
+                {
+                    return Results.Json(new { error = ex.Message },
+                        statusCode: StatusCodes.Status503ServiceUnavailable);
                 }
 
-                return Results.Ok(new { sessionId = seat.SessionId, message = "Session reconnected" });
+                using (lease)
+                {
+                    // The seat was captured BEFORE waiting for the gate. While we waited, a
+                    // concurrent DELETE may have torn it down (H2 ordering: removal → TearingDown
+                    // → teardown → gate release, so the captured object now reads TearingDown), or
+                    // another reconnect may already have healed it (Error → Ready). LaunchSessionAsync
+                    // below creates a NEW Windows session — running it against a seat that is no
+                    // longer in Error would orphan that session (no registry entry, nothing ever
+                    // tears it down). So re-check BEFORE any session-creating side effect; the
+                    // check must never sit after the launch.
+                    if (!IsReconnectStillValid(seat.Status))
+                    {
+                        return seat.Status == SeatStatus.TearingDown
+                            ? Results.NotFound()   // removed by a concurrent teardown — resource gone
+                            : Results.Conflict(
+                                "Seat is not in Error state — session reconnect no longer applies.");
+                    }
+
+                    // Pass the seat's geometry: if the session has to be recreated rather than
+                    // reattached, it must come back at the seat's own size, not inherit the
+                    // console desktop's.
+                    //
+                    // And keep the id it answers with. A recreated session is a NEW session,
+                    // and everything that acts on this seat afterwards reads SessionId:
+                    // ProcessInjector, the health check, display isolation. Dropped, they all
+                    // keep aiming at the session that just went away — apollo/start fails with
+                    // 500 and the seat can never come back.
+                    seat.SessionId = await sessionLauncher.LaunchSessionAsync(
+                        seat.AccountName, ct, RdpGeometry.ForClient(seat.Width, seat.Height));
+
+                    // The health check parks a seat in Error when its session dies, and nothing
+                    // ever takes it out again. Leave it there and the checks that would restart
+                    // Apollo are skipped, so the seat stays broken although it now has a live
+                    // session. Hand it back to the health check in the state it is actually in.
+                    if (seat.Status == SeatStatus.Error)
+                    {
+                        seat.TransitionTo(SeatStatus.Ready,
+                            loggerFactory.CreateLogger("MultiSeat.Service.Api.SeatEndpoints"));
+                        seat.ErrorMessage = null;
+                    }
+
+                    return Results.Ok(new { sessionId = seat.SessionId, message = "Session reconnected" });
+                }
             });
 
         // Change a live seat's resolution. The seat streams its RDP session surface, whose size
@@ -287,6 +381,15 @@ public static class SeatEndpoints
                 catch (ArgumentException ex)
                 {
                     return Results.BadRequest(new { error = ex.Message });
+                }
+                catch (TimeoutException ex)
+                {
+                    return Results.Json(new { error = ex.Message },
+                        statusCode: StatusCodes.Status503ServiceUnavailable);
+                }
+                catch (ResourceNotFoundException ex)
+                {
+                    return Results.NotFound(new { error = ex.Message });
                 }
                 catch (InvalidOperationException ex)
                 {
@@ -372,6 +475,15 @@ public static class SeatEndpoints
                 {
                     await mgr.SetNvencPresetAsync(id, req.Preset, presets, ct);
                     return Results.Ok(new { preset = req.Preset.ToString() });
+                }
+                catch (TimeoutException ex)
+                {
+                    return Results.Json(new { error = ex.Message },
+                        statusCode: StatusCodes.Status503ServiceUnavailable);
+                }
+                catch (ResourceNotFoundException ex)
+                {
+                    return Results.NotFound(new { error = ex.Message });
                 }
                 catch (InvalidOperationException ex)
                 {

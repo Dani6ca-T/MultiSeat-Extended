@@ -191,7 +191,7 @@ public sealed class AccountManager : IAccountManager
     public void DeleteAccount(string username)
     {
         if (!_managedAccounts.TryGetValue(username, out var account))
-            throw new InvalidOperationException($"Account '{username}' is not managed by MultiSeat.");
+            throw new ResourceNotFoundException($"Account '{username}' is not managed by MultiSeat.");
 
         if (account.IsManaged)
         {

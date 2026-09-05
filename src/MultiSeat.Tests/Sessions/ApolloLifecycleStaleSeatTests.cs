@@ -2,6 +2,7 @@ using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using Moq;
+using MultiSeat.Service;
 using MultiSeat.Service.Accounts;
 using MultiSeat.Service.Audio;
 using MultiSeat.Service.Configuration;
@@ -90,7 +91,7 @@ public class ApolloLifecycleStaleSeatTests
             RemoveSeat(mgr, SeatA);
             lease.Dispose();
 
-            var ex = await Assert.ThrowsAsync<InvalidOperationException>(() => startTask);
+            var ex = await Assert.ThrowsAsync<ResourceNotFoundException>(() => startTask);
             Assert.Equal("Seat was removed while starting Apollo.", ex.Message);
             Assert.Equal(0, streaming.StartCount);
         }
@@ -117,7 +118,7 @@ public class ApolloLifecycleStaleSeatTests
             mgr.GetSeat(SeatA)!.TransitionTo(SeatStatus.TearingDown, NullLogger.Instance);
             lease.Dispose();
 
-            var ex = await Assert.ThrowsAsync<InvalidOperationException>(() => startTask);
+            var ex = await Assert.ThrowsAsync<ResourceNotFoundException>(() => startTask);
             Assert.Equal("Seat was removed while starting Apollo.", ex.Message);
             Assert.Equal(0, streaming.StartCount);
         }
@@ -185,7 +186,7 @@ public class ApolloLifecycleStaleSeatTests
             RemoveSeat(mgr, SeatA);
             lease.Dispose();
 
-            var ex = await Assert.ThrowsAsync<InvalidOperationException>(() => restartTask);
+            var ex = await Assert.ThrowsAsync<ResourceNotFoundException>(() => restartTask);
             Assert.Equal("Seat was removed while restarting Apollo.", ex.Message);
             Assert.Equal(0, streaming.StopCount);
             Assert.Equal(0, streaming.StartCount);
@@ -210,7 +211,7 @@ public class ApolloLifecycleStaleSeatTests
             mgr.GetSeat(SeatA)!.TransitionTo(SeatStatus.TearingDown, NullLogger.Instance);
             lease.Dispose();
 
-            var ex = await Assert.ThrowsAsync<InvalidOperationException>(() => restartTask);
+            var ex = await Assert.ThrowsAsync<ResourceNotFoundException>(() => restartTask);
             Assert.Equal("Seat was removed while restarting Apollo.", ex.Message);
             Assert.Equal(0, streaming.StopCount);
             Assert.Equal(0, streaming.StartCount);
@@ -259,7 +260,7 @@ public class ApolloLifecycleStaleSeatTests
             RemoveSeat(mgr, SeatA);
             lease.Dispose();
 
-            var ex = await Assert.ThrowsAsync<InvalidOperationException>(() => stopTask);
+            var ex = await Assert.ThrowsAsync<ResourceNotFoundException>(() => stopTask);
             Assert.Equal("Seat was removed while stopping Apollo.", ex.Message);
             Assert.Equal(0, streaming.StopCount);
         }
@@ -306,7 +307,7 @@ public class ApolloLifecycleStaleSeatTests
             RemoveSeat(mgr, SeatA);
             lease.Dispose();
 
-            var ex = await Assert.ThrowsAsync<InvalidOperationException>(() => nvencTask);
+            var ex = await Assert.ThrowsAsync<ResourceNotFoundException>(() => nvencTask);
             Assert.Equal("Seat was removed while changing NVENC preset.", ex.Message);
             Assert.Equal(0, streaming.KillForReconnectCount);
             Assert.Equal(0, streaming.StartCount);
