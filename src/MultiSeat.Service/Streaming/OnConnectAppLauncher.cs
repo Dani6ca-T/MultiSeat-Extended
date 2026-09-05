@@ -104,12 +104,24 @@ public sealed class OnConnectAppLauncher
         }
     }
 
+    /// <summary>
+    /// Snapshot of the process identities (PID + start time) of the apps this launcher
+    /// started for a seat that are still recorded. Seat teardown calls this BEFORE
+    /// <see cref="Forget"/>, so the launched apps can be terminated explicitly instead of
+    /// relying on session logoff alone; after Forget the state is gone and this is empty.
+    /// </summary>
+    public IReadOnlyList<ProcessIdentity> GetLaunchedProcesses(Guid seatId)
+    {
+        if (!_states.TryGetValue(seatId, out var state)) return [];
+        lock (state.Gate) return state.Launched.ToList();
+    }
+
     /// <summary>Drop tracked state for a seat that has been torn down.</summary>
     public void Forget(Guid seatId)
     {
         // Cancel the per-seat CTS FIRST, so any in-flight launch that was waiting on
-        // the settle delay observes the cancellation before it can read LaunchedPids
-        // (and so the final sessionId check below — when the lookup is supplied —
+        // the settle delay observes the cancellation before it can read the launched
+        // state (and so the final sessionId check below — when the lookup is supplied —
         // sees the post-teardown session id). Then remove the state.
         if (_states.TryRemove(seatId, out var state))
         {
@@ -180,7 +192,16 @@ public sealed class OnConnectAppLauncher
                             sessionId, account, app.Path, app.Arguments, app.WorkingDirectory, linkedCt);
                         if (pid > 0)
                         {
-                            lock (state.Gate) state.LaunchedPids.Add(pid);
+                            // Capture PID + start time so seat teardown can terminate the app
+                            // safely against PID reuse (a raw PID could later name an unrelated
+                            // process). A start time that cannot be read means the process
+                            // already exited — nothing left to track or clean up.
+                            var startedAt = ApolloManager.GetProcessStartTime(pid);
+                            if (startedAt is not null)
+                            {
+                                lock (state.Gate)
+                                    state.Launched.Add(new ProcessIdentity(pid, startedAt.Value));
+                            }
                             _logger.LogInformation(
                                 "Seat {Id}: launched on-connect app '{Exe}' (PID {Pid})",
                                 seatId, app.Path, pid);
@@ -211,8 +232,9 @@ public sealed class OnConnectAppLauncher
             return;
         }
 
-        foreach (var pid in state.LaunchedPids)
+        foreach (var identity in state.Launched)
         {
+            var pid = identity.ProcessId;
             try
             {
                 using var proc = Process.GetProcessById(pid);
@@ -230,7 +252,7 @@ public sealed class OnConnectAppLauncher
                 _logger.LogWarning(ex, "Seat {Id}: failed to kill on-connect app PID {Pid}", seat.Id, pid);
             }
         }
-        state.LaunchedPids.Clear();
+        state.Launched.Clear();
     }
 
     // ── Log tailing ──────────────────────────────────────────────────────
@@ -305,11 +327,11 @@ public sealed class OnConnectAppLauncher
 
     private static bool AnyTrackedAppAlive(SeatConnState state)
     {
-        foreach (var pid in state.LaunchedPids)
+        foreach (var identity in state.Launched)
         {
             try
             {
-                using var proc = Process.GetProcessById(pid);
+                using var proc = Process.GetProcessById(identity.ProcessId);
                 if (!proc.HasExited) return true;
             }
             catch (ArgumentException) { /* gone */ }
@@ -328,7 +350,11 @@ public sealed class OnConnectAppLauncher
         // Tail of the previous read, retained so a marker split across a tick boundary is
         // still detected when the next chunk arrives.
         public string Carry = string.Empty;
-        public readonly List<int> LaunchedPids = [];
+        // Process identities (PID + start time) of the apps this launcher successfully
+        // started for the seat. Seat teardown reads these via GetLaunchedProcesses BEFORE
+        // Forget drops the state, so launched apps are terminated explicitly instead of
+        // relying on session logoff alone.
+        public readonly List<ProcessIdentity> Launched = [];
 
         // Per-seat cancellation token. Forget() cancels this BEFORE removing the state
         // from the dictionary, so a fire-and-forget Task.Run waiting on the settle delay

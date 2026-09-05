@@ -502,6 +502,7 @@ public sealed class SessionHealthCheck
     internal static void FinishLaunchedAppExit(SeatInfo seat, ILogger logger)
     {
         seat.LaunchedProcessId = 0;
+        seat.LaunchedProcessStartedAt = null;
         seat.LaunchApp = null;
         seat.TransitionTo(SeatStatus.Ready, logger);
     }

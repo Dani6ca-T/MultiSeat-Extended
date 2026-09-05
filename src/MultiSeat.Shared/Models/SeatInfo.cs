@@ -56,6 +56,13 @@ public sealed class SeatInfo
     // tracked; children are not part of the app lifetime.
     public int LaunchedProcessId { get; set; }
 
+    // OS start time of that same launched process (captured immediately after launch).
+    // Pairs with LaunchedProcessId to form a ProcessIdentity so seat teardown can
+    // terminate the app without ever killing an unrelated process whose PID Windows
+    // recycled after the original exited. Null when no app is tracked or the start
+    // time could not be obtained (the process had already exited).
+    public DateTimeOffset? LaunchedProcessStartedAt { get; set; }
+
     // Preset
     public bool AutoStart { get; set; } = false;
     public NvencQualityPreset NvencPreset { get; set; } = NvencQualityPreset.Balanced;

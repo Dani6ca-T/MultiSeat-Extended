@@ -8,6 +8,7 @@ using MultiSeat.Service.Configuration;
 using MultiSeat.Service.Display;
 using MultiSeat.Service.Emulators;
 using MultiSeat.Service.Input;
+using MultiSeat.Service.ProcessTracking;
 using MultiSeat.Service.Streaming;
 using MultiSeat.Shared.Models;
 
@@ -544,6 +545,14 @@ public sealed class SeatManager
             seat.SessionId, seat.AccountName,
             request.ExecutablePath, request.Arguments, request.WorkingDirectory, ct);
 
+        // Capture the OS start time next to the PID so teardown can terminate the app
+        // safely against PID reuse (pairing them forms the process identity). Null when the
+        // process already exited before the start time could be read — then teardown has
+        // nothing of the seat's left to kill.
+        seat.LaunchedProcessStartedAt = pid > 0
+            ? ApolloManager.GetProcessStartTime(pid)
+            : null;
+
         seat.TransitionTo(SeatStatus.Streaming, _logger);
         seat.LaunchApp = request.ExecutablePath;
         seat.LaunchedProcessId = pid;
@@ -629,6 +638,12 @@ public sealed class SeatManager
     private async Task TeardownSeatInternalAsync(SeatInfo seat, CancellationToken ct)
     {
         // Reverse order of provisioning — each step is best-effort
+        //
+        // Capture the launched-app identities (dashboard launch + on-connect apps) BEFORE
+        // Forget drops the launcher state — teardown terminates them explicitly below, so
+        // cleanup never depends solely on the session logoff.
+        IReadOnlyList<ProcessIdentity> onConnectLaunched = [];
+        try { onConnectLaunched = _onConnectApps.GetLaunchedProcesses(seat.Id); } catch { /* best effort */ }
         try { _onConnectApps.Forget(seat.Id); } catch { /* best effort */ }
         try { _inputHookManager.Uninstall(); } catch { /* best effort */ }
         try { _hidHide.UncloakForSession(seat); } catch { /* best effort */ }
@@ -638,12 +653,43 @@ public sealed class SeatManager
         try { _audioRouter.ReleaseCable(seat); } catch { /* best effort */ }
         try { await _firewall.ClosePortsAsync(seat, ct); } catch { /* best effort */ }
         try { await _displayManager.DestroyDisplayAsync(seat, ct); } catch { /* best effort */ }
+
+        // Explicitly terminate the seat's launched apps (dashboard "launch" + on-connect)
+        // before the session is logged off. Identity-aware: each PID is killed only while it
+        // still denotes the process this seat actually launched (PID + start time match), so
+        // a recycled PID can never kill an unrelated process. Best-effort — an app that
+        // cannot be terminated is logged and teardown continues; the logoff below remains
+        // the backstop for anything that survived.
+        try { TerminateLaunchedApps(seat, onConnectLaunched); } catch (Exception ex) { _logger.LogWarning(ex, "Seat {Id}: error cleaning up launched apps during teardown", seat.Id); }
+
         try { _sessionLauncher.DisconnectSession(seat.SessionId); } catch { /* best effort */ }
         try { _sessionLauncher.LogoffSession(seat.SessionId); } catch { /* best effort */ }
         try { _portAllocator.Release(seat.PortBase); } catch { /* best effort */ }
 
         // Clean up per-seat Apollo config directory
         try { _apolloManager.CleanupSeatConfig(seat); } catch { /* best effort */ }
+    }
+
+    /// <summary>
+    /// Identity-aware, best-effort termination of the seat's launched applications: the
+    /// dashboard-launched root process (<see cref="SeatInfo.LaunchedProcessId"/> + its
+    /// recorded start time) and the on-connect apps the launcher started. Kills each process
+    /// only while its PID still denotes the exact process that was launched, so a stale or
+    /// recycled PID never terminates an unrelated process. Already-exited processes are
+    /// treated as clean. Any failure is logged inside <see cref="LaunchedProcessCleanup"/>
+    /// and teardown continues.
+    /// </summary>
+    private void TerminateLaunchedApps(SeatInfo seat, IReadOnlyList<ProcessIdentity> onConnectLaunched)
+    {
+        var identities = new List<ProcessIdentity>(onConnectLaunched.Count + 1);
+
+        if (seat.LaunchedProcessId > 0 && seat.LaunchedProcessStartedAt is { } startedAt)
+            identities.Add(new ProcessIdentity(seat.LaunchedProcessId, startedAt));
+
+        identities.AddRange(onConnectLaunched);
+
+        if (identities.Count > 0)
+            LaunchedProcessCleanup.TerminateAll(identities, _logger);
     }
 
     // ═══════════════════════════════════════════════════════════════════
