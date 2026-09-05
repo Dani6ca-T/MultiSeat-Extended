@@ -383,9 +383,12 @@ public sealed class SessionHealthCheck
         uptime is not null && uptime <= ApolloStartupWindow;
 
     /// <summary>
-    /// Poll <paramref name="isSessionActive"/> until the session reports Active
-    /// or the 10-second timeout expires.
+    /// Poll until the session reports Active, or the timeout expires.
     /// </summary>
+    /// <remarks>
+    /// Takes the probe as a delegate rather than calling SessionLauncher directly so the timing
+    /// can be tested without a Windows session.
+    /// </remarks>
     /// <returns>true if the session became Active within the timeout.</returns>
     internal static async Task<bool> WaitForSessionActiveAsync(
         Func<int, bool> isSessionActive,
@@ -394,6 +397,13 @@ public sealed class SessionHealthCheck
         int pollMs = 500,
         int timeoutMs = 10_000)
     {
+        // Deviation from the ported original, which only observed cancellation through the
+        // Task.Delay inside the loop: an already-cancelled token skipped the loop entirely and
+        // returned a plain false, which the caller cannot tell from "the session never came up"
+        // and so parks the seat in Error during an ordinary shutdown. Cancelling always throws
+        // here, matching both Task.Delay below and LaunchSessionAsync in the same try block.
+        ct.ThrowIfCancellationRequested();
+
         var waited = 0;
         while (waited < timeoutMs && !ct.IsCancellationRequested)
         {
@@ -402,6 +412,8 @@ public sealed class SessionHealthCheck
             await Task.Delay(pollMs, ct);
             waited += pollMs;
         }
+
+        // One last look: the final sleep may have covered the transition.
         return isSessionActive(sessionId);
     }
 
