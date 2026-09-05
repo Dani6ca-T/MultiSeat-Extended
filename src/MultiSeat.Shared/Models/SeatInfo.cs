@@ -49,12 +49,16 @@ public sealed class SeatInfo
     public DateTimeOffset? ReadyAt { get; set; }
 
     // UTC timestamp of the latest actual SeatStatus transition, stamped by
-    // SeatState.TransitionTo (the single Status mutation point). Same-state re-asserts
-    // are documented no-ops and do not restamp. Serialized with the seat, so HTTP and
-    // WebSocket consumers — which both receive whole SeatInfo objects — observe state
-    // age without reconstructing it from logs. Defaults to construction time, which is
-    // also when the seat enters its initial status.
-    public DateTimeOffset LastTransitionAt { get; set; } = DateTimeOffset.UtcNow;
+    // SeatState.TransitionTo (the single Status mutation point). Null until the first
+    // real transition: construction sets the initial status directly (not a transition),
+    // and neither illegal attempts nor same-state no-ops stamp it. Serialized with the
+    // seat, so HTTP and WebSocket consumers — which both receive whole SeatInfo objects
+    // — observe state age without reconstructing it from logs.
+    //
+    // Public setter (like ReadyAt) rather than private: TransitionTo is an extension
+    // method in another assembly, so a private setter is not assignable from the single
+    // authorized writer. Only TransitionTo writes it; callers must not.
+    public DateTimeOffset? LastTransitionAt { get; set; }
     public string? ErrorMessage { get; set; }
     public string? LaunchApp { get; set; }
 

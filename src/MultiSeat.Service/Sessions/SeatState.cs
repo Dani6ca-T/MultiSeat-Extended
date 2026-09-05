@@ -73,7 +73,8 @@ public static class SeatState
     public static void TransitionTo(this SeatInfo seat, SeatStatus target, ILogger logger)
     {
         var from = seat.Status;
-        if (!from.CanTransitionTo(target))
+        var legal = from.CanTransitionTo(target);
+        if (!legal)
         {
             if (StrictTransitions)
                 throw new InvalidOperationException(
@@ -87,11 +88,12 @@ public static class SeatState
 
         seat.Status = target;
 
-        // Observability only: stamp real transitions so the seat itself answers "when did
-        // the state last change". A same-state re-assert is a no-op, not a transition, so
-        // it must not manufacture a fresh timestamp. Never throws, never changes which
-        // transitions are legal.
-        if (from != target)
+        // Observability only: stamp legal, real transitions so the seat itself answers
+        // "when did the state last change". An illegal attempt (applied anyway above, or
+        // thrown in strict mode) and a same-state re-assert — a documented no-op, not a
+        // transition — must not manufacture a timestamp. Never changes which transitions
+        // are legal or the order of existing side effects.
+        if (legal && from != target)
             seat.LastTransitionAt = DateTimeOffset.UtcNow;
     }
 }
