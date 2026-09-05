@@ -1138,6 +1138,8 @@ public sealed class SeatManager
     /// ChangeDisplaySettingsEx from inside the session returns success while doing nothing).
     /// So changing resolution means giving the seat a new session at the new size: disconnect,
     /// reconnect with the new geometry, and restart Apollo so it re-reads the desktop.
+    /// Once Apollo is back, display isolation is re-applied (same repair as the
+    /// reconnect/recovery path) — otherwise the seat streams de-isolated.
     ///
     /// The Windows session id is preserved — mstsc reconnects to the same session rather than
     /// logging it off — so anything running in the seat survives.
@@ -1217,6 +1219,19 @@ public sealed class SeatManager
             seat.Height = oldHeight;
             throw;
         }
+
+        // Display-pipeline repair (G3): the reconnect/recovery path re-establishes
+        // display isolation after Apollo is back, and a resolution change recreates
+        // the session + Apollo the same way — so repair here too, or the seat would
+        // stream de-isolated until some later recovery happens to fix it. This reuses
+        // ApplyDisplayIsolationAsync outright (including its G1 display-identity
+        // refresh), so there is no second resolver and no duplicated orchestration.
+        //
+        // Deliberately AFTER the commit boundary above: Apollo started successfully,
+        // so the new resolution is established. A repair failure must propagate
+        // without restoring the old size (that would reintroduce the G2 lie).
+        // Isolation itself is best-effort; only cancellation escapes it.
+        await ApplyDisplayIsolationAsync(seat, ct);
 
         if (seat.AutoStart)
         {
