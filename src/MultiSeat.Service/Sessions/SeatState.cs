@@ -86,5 +86,12 @@ public static class SeatState
         }
 
         seat.Status = target;
+
+        // Observability only: stamp real transitions so the seat itself answers "when did
+        // the state last change". A same-state re-assert is a no-op, not a transition, so
+        // it must not manufacture a fresh timestamp. Never throws, never changes which
+        // transitions are legal.
+        if (from != target)
+            seat.LastTransitionAt = DateTimeOffset.UtcNow;
     }
 }

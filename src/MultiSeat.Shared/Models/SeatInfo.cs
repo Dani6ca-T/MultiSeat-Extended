@@ -47,6 +47,14 @@ public sealed class SeatInfo
     // Lifecycle
     public DateTimeOffset CreatedAt { get; init; } = DateTimeOffset.UtcNow;
     public DateTimeOffset? ReadyAt { get; set; }
+
+    // UTC timestamp of the latest actual SeatStatus transition, stamped by
+    // SeatState.TransitionTo (the single Status mutation point). Same-state re-asserts
+    // are documented no-ops and do not restamp. Serialized with the seat, so HTTP and
+    // WebSocket consumers — which both receive whole SeatInfo objects — observe state
+    // age without reconstructing it from logs. Defaults to construction time, which is
+    // also when the seat enters its initial status.
+    public DateTimeOffset LastTransitionAt { get; set; } = DateTimeOffset.UtcNow;
     public string? ErrorMessage { get; set; }
     public string? LaunchApp { get; set; }
 
