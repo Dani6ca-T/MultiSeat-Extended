@@ -3,6 +3,7 @@ using System.Diagnostics;
 using System.Text;
 using Microsoft.Extensions.Options;
 using MultiSeat.Service.Configuration;
+using MultiSeat.Service.ProcessTracking;
 using MultiSeat.Service.Sessions;
 using MultiSeat.Shared.Models;
 
@@ -234,6 +235,12 @@ public sealed class OnConnectAppLauncher
 
         foreach (var identity in state.Launched)
         {
+            // PID-REUSE SAFETY: kill only while this PID still denotes the exact process
+            // instance that was launched (PID + start time match, same check as seat
+            // teardown's LaunchedProcessCleanup). A recycled PID names an unrelated
+            // process and must never be touched; an exited process needs no kill.
+            if (!LaunchedProcessCleanup.IsAliveAndSameProcess(identity))
+                continue;
             var pid = identity.ProcessId;
             try
             {
