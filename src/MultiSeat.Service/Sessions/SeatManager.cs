@@ -390,17 +390,20 @@ public sealed class SeatManager
             {
                 var logPath = _apolloManager.GetLogPath(seat.AccountName, _options.ApolloConfigDir);
 
-                // Wait for Apollo to initialize SudoVDA IPC and write its display log.
+                // Wait for Apollo's startup display enumeration instead of assuming a
+                // fixed delay covers it: fast hosts proceed in ~a second, slow hosts get
+                // headroom up to the deadline. Only the block's presence is awaited — a
+                // missing SudoVDA inside it is still the expected outcome below.
+                //
                 // The session MUST stay ACTIVE (mstsc connected) — Apollo calls QueryDisplayConfig
                 // both at startup AND when each Moonlight client connects. Disconnected sessions
                 // return ERROR_ACCESS_DENIED, causing "Failed to initialize video capture/encoding".
-                await Task.Delay(5000, ct);
 
                 // NOTE: We intentionally do NOT disconnect mstsc here.
                 // The session stays Active for the lifetime of the seat so Apollo can
                 // always query and set display modes when clients connect.
 
-                var displayId = _apolloManager.ParseSudoVdaDisplayId(logPath);
+                var displayId = (await WaitForDisplayBlockAsync(logPath, ct)).DeviceId;
                 if (displayId != null)
                 {
                     seat.DisplayDevicePath = displayId;
@@ -798,6 +801,81 @@ public sealed class SeatManager
 
         _ = BroadcastState(seat);
         _logger.LogInformation("Seat {Id}: Apollo restarted by user (PID {Pid})", seatId, seat.StreamingProcessId);
+    }
+
+    /// <summary>
+    /// How long provisioning waits for Apollo's startup display enumeration before
+    /// falling back to the expected "nothing yet" path. 3x the fixed delay this
+    /// replaces: fast hosts return in ~a poll, slow hosts get headroom, and the bound
+    /// keeps the total provision budget well under the startup-failure horizon.
+    /// </summary>
+    internal static readonly TimeSpan DisplayBlockTimeout = TimeSpan.FromSeconds(15);
+
+    /// <summary>
+    /// Delay between display-block polls. Local to <see cref="WaitForDisplayBlockAsync"/> —
+    /// not a general polling primitive. Matches the existing session-poll cadence
+    /// (WaitForSessionActiveAsync polls at the same rate).
+    /// </summary>
+    private static readonly TimeSpan DisplayBlockPollInterval = TimeSpan.FromMilliseconds(500);
+
+    /// <summary>
+    /// Poll Apollo's log until it holds a display-enumeration block, or the deadline
+    /// elapses (default <see cref="DisplayBlockTimeout"/>). Returns the first-block
+    /// parse at the first definitive answer: a block with entries means Apollo wrote
+    /// its startup enumeration (whether or not a SudoVDA is in it); anything else
+    /// means nothing usable has been written yet, so polling continues.
+    ///
+    /// Reuses the existing first-block parser — no new selection rules. Timeout
+    /// returns a none-result so the caller takes its existing "nothing found" branch;
+    /// staying quiet there is already the expected outcome at provisioning time.
+    /// Read errors are retried (Apollo holds the log open for writing); only a
+    /// persistent failure is logged, once, and still ends in the same none-result.
+    /// Cancellation propagates (never converted into a verdict). The deadline
+    /// override exists for tests; production callers use the default.
+    /// </summary>
+    internal async Task<ApolloManager.SudoVdaParseResult> WaitForDisplayBlockAsync(
+        string logPath, CancellationToken ct, TimeSpan? deadline = null)
+    {
+        var effectiveDeadline = deadline ?? DisplayBlockTimeout;
+        var start = DateTimeOffset.UtcNow;
+        var loggedReadError = false;
+        var none = new ApolloManager.SudoVdaParseResult(null, null, 0, false);
+
+        while (DateTimeOffset.UtcNow - start < effectiveDeadline)
+        {
+            try
+            {
+                if (File.Exists(logPath))
+                {
+                    // Apollo holds the log open, so share read AND write (same as late detection).
+                    using var fs = new FileStream(
+                        logPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+                    using var sr = new StreamReader(fs);
+                    var result = ApolloManager.ParseSudoVdaDisplayIdFromLogText(
+                        await sr.ReadToEndAsync(ct));
+                    if (result.DisplayCount > 0)
+                        return result;
+                }
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                if (!loggedReadError)
+                {
+                    loggedReadError = true;
+                    _logger.LogDebug(ex,
+                        "Display block wait could not read Apollo log at {Path}; retrying",
+                        logPath);
+                }
+            }
+
+            await Task.Delay(DisplayBlockPollInterval, ct);
+        }
+
+        return none;
     }
 
     /// <summary>
