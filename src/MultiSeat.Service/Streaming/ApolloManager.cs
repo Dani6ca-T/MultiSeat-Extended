@@ -162,7 +162,7 @@ public sealed class ApolloManager : IStreamingProvider
             _tracker.Unregister(identity);
             _monitor.StopMonitoring(identity);
             _instances.TryRemove(seat.Id, out _);
-            KillOrphanedProcess(pid);
+            TryKillIdentifiedProcess(identity, "failed start", 3000);
             return -1;
         }
 
@@ -177,6 +177,8 @@ public sealed class ApolloManager : IStreamingProvider
     /// Kill the Apollo process if running, but preserve the instance record
     /// (config path, seat ID) so <see cref="RestartAsync"/> can reuse it.
     /// Resets RestartCount to 0 — a sleep/reconnect is not a crash.
+    /// Termination is identity-safe (PID + start time): a recycled PID naming an
+    /// unrelated process is left alone.
     /// </summary>
     public void KillForReconnect(SeatInfo seat)
     {
@@ -189,24 +191,10 @@ public sealed class ApolloManager : IStreamingProvider
 
         if (instance.ProcessId > 0)
         {
-            try
-            {
-                var proc = Process.GetProcessById(instance.ProcessId);
-                if (!proc.HasExited)
-                {
-                    proc.Kill(entireProcessTree: true);
-                    proc.WaitForExit(3000);
-                }
-                _logger.LogInformation(
-                    "Seat {Id}: Apollo killed before reconnect (PID {Pid})",
-                    seat.Id, instance.ProcessId);
-            }
-            catch (ArgumentException) { } // already exited
-            catch (Exception ex)
-            {
-                _logger.LogWarning(ex,
-                    "Seat {Id}: error killing Apollo before reconnect", seat.Id);
-            }
+            // Kill only while this PID still names the recorded Apollo instance. A
+            // recycled PID names an unrelated process and is left alone; the stale
+            // registration is still cleaned up below so recovery relaunches Apollo.
+            TryKillIdentifiedProcess(instance.Identity, "before reconnect", 3000);
         }
 
         // Clean up ProcessTracking (process is dead)
@@ -223,6 +211,9 @@ public sealed class ApolloManager : IStreamingProvider
     /// <summary>
     /// Stop the Apollo instance for a seat. Kills the entire process tree
     /// (Apollo spawns encoder sub-processes).
+    /// Termination is identity-safe (PID + start time): without an attributable
+    /// instance record the PID is left alone — killing a bare PID is PID-reuse
+    /// roulette, and teardown's session logoff remains the backstop.
     /// </summary>
     public void Stop(SeatInfo seat)
     {
@@ -235,27 +226,17 @@ public sealed class ApolloManager : IStreamingProvider
 
         _instances.TryRemove(seat.Id, out _);
 
-        if (seat.StreamingProcessId > 0)
+        if (instance is not null && instance.ProcessId > 0)
         {
-            try
-            {
-                var proc = Process.GetProcessById(seat.StreamingProcessId);
-                if (!proc.HasExited)
-                {
-                    proc.Kill(entireProcessTree: true);
-                    proc.WaitForExit(5000);
-                }
-                _logger.LogInformation("Seat {Id}: Apollo stopped (PID {Pid})",
-                    seat.Id, seat.StreamingProcessId);
-            }
-            catch (ArgumentException)
-            {
-                // Process already exited
-            }
-            catch (Exception ex)
-            {
-                _logger.LogWarning(ex, "Seat {Id}: error stopping Apollo", seat.Id);
-            }
+            // Kill the recorded identity — not the seat field, which may be stale —
+            // and only while the PID still names it.
+            TryKillIdentifiedProcess(instance.Identity, "stop", 5000);
+        }
+        else if (seat.StreamingProcessId > 0)
+        {
+            _logger.LogWarning(
+                "Seat {Id}: no Apollo instance record for PID {Pid} — leaving it alone (PID reuse safety)",
+                seat.Id, seat.StreamingProcessId);
         }
 
         // Clean up ProcessTracking
@@ -346,7 +327,7 @@ public sealed class ApolloManager : IStreamingProvider
                     seat.Id, pid, (int)ServerReadyTimeout.TotalSeconds);
                 _tracker.Unregister(newIdentity);
                 _monitor.StopMonitoring(newIdentity);
-                KillOrphanedProcess(pid);
+                TryKillIdentifiedProcess(newIdentity, "failed restart", 3000);
                 _instances[seat.Id] = prev with { RestartCount = prev.RestartCount + 1 };
                 return -1;
             }
@@ -555,6 +536,92 @@ public sealed class ApolloManager : IStreamingProvider
     // ═══════════════════════════════════════════════════════════════════
     //  PROCESS IDENTITY HELPERS
     // ═══════════════════════════════════════════════════════════════════
+
+    /// <summary>
+    /// Outcome of an identity-checked Apollo termination attempt.
+    /// </summary>
+    internal enum ApolloKillOutcome
+    {
+        /// <summary>The PID still named the recorded identity; it was terminated.</summary>
+        Killed,
+        /// <summary>The PID is gone or the process already exited; nothing to do.</summary>
+        AlreadyGone,
+        /// <summary>The PID names a different process instance (PID reuse); deliberately untouched.</summary>
+        IdentityMismatch,
+        /// <summary>The identity matched but termination itself failed.</summary>
+        KillFailed,
+    }
+
+    /// <summary>
+    /// Terminate the process named by <paramref name="identity"/> — but only while that
+    /// PID still denotes the exact recorded instance, via <see cref="ProcessIdentity.Matches"/>
+    /// (PID + start time, the single source of truth for the comparison).
+    ///
+    /// A single open handle spans verification through Kill: Windows does not recycle a
+    /// PID while handles to its process object are open, so a verified handle cannot
+    /// name a different process. The residual race (exit between verify and kill) can
+    /// only fail the kill of the RIGHT process, never kill the WRONG one. (The
+    /// whole-tree kill below shares the runtime's inherent child-enumeration races
+    /// with every other tree kill in the codebase; that is out of scope here.)
+    ///
+    /// Never throws: every failure maps to an outcome so callers keep their contracts
+    /// (idempotent stop, best-effort reconnect kill).
+    /// </summary>
+    internal ApolloKillOutcome TryKillIdentifiedProcess(
+        ProcessIdentity identity, string reason, int waitMs)
+    {
+        try
+        {
+            using var proc = Process.GetProcessById(identity.ProcessId);
+            if (proc.HasExited)
+                return ApolloKillOutcome.AlreadyGone;
+
+            DateTimeOffset startedAt;
+            try
+            {
+                startedAt = proc.StartTime.ToUniversalTime();
+            }
+            catch (InvalidOperationException)
+            {
+                // Exited mid-check: fail closed, never kill blind.
+                return ApolloKillOutcome.AlreadyGone;
+            }
+            catch (System.ComponentModel.Win32Exception ex)
+            {
+                // Start time unreadable (denied): fail closed, never kill blind.
+                _logger.LogWarning(ex,
+                    "Apollo PID {Pid} start time unreadable during {Reason} — leaving it alone",
+                    identity.ProcessId, reason);
+                return ApolloKillOutcome.IdentityMismatch;
+            }
+
+            if (!identity.Matches(identity.ProcessId, startedAt))
+            {
+                _logger.LogWarning(
+                    "Apollo PID {Pid} no longer names the recorded instance " +
+                    "(recorded {Recorded}, current {Current}) — PID was reused; " +
+                    "leaving the unrelated process alone ({Reason})",
+                    identity.ProcessId, identity.StartedAt, startedAt, reason);
+                return ApolloKillOutcome.IdentityMismatch;
+            }
+
+            proc.Kill(entireProcessTree: true);
+            proc.WaitForExit(waitMs);
+            _logger.LogInformation(
+                "Apollo PID {Pid} terminated ({Reason})", identity.ProcessId, reason);
+            return ApolloKillOutcome.Killed;
+        }
+        catch (ArgumentException)
+        {
+            return ApolloKillOutcome.AlreadyGone; // PID free
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex,
+                "Error terminating Apollo PID {Pid} ({Reason})", identity.ProcessId, reason);
+            return ApolloKillOutcome.KillFailed;
+        }
+    }
 
     /// <summary>
     /// Obtain the actual OS process start time for a PID.
