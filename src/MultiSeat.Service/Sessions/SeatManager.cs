@@ -861,6 +861,69 @@ public sealed class SeatManager
     }
 
     /// <summary>
+    /// Re-resolve the seat's SudoVDA display identity from Apollo's latest log block.
+    ///
+    /// Apollo recreates the SudoVDA monitor on (re)start, which may mint a new device
+    /// UUID. The seat must not permanently trust a UUID from a previous Apollo/display
+    /// instance, but the existing late-detection early-out ("already known") never
+    /// re-checks — so every caller that isolates after a (re)start refreshes first.
+    ///
+    /// Fail-closed: when the log has no usable SudoVDA block, the current path is kept
+    /// (it may still be valid); the config is rewritten only when the UUID changed.
+    /// Best-effort: log-read failures are logged and ignored, like the isolation itself.
+    /// Uses the existing latest-block parser — no second display parser, no new
+    /// selection rules, no display creation or destruction.
+    /// </summary>
+    private async Task RefreshDisplayIdentityAsync(SeatInfo seat, CancellationToken ct)
+    {
+        string text;
+        try
+        {
+            var logPath = _apolloManager.GetLogPath(seat.AccountName, _options.ApolloConfigDir);
+            if (!File.Exists(logPath)) return;
+
+            // Apollo holds the log open, so share read AND write (same as late detection).
+            using var fs = new FileStream(
+                logPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+            using var sr = new StreamReader(fs);
+            text = await sr.ReadToEndAsync(ct);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "Seat {Id}: display identity refresh could not read Apollo log", seat.Id);
+            return;
+        }
+
+        var (effective, changed) = ResolveRefreshedDisplayPath(
+            seat.DisplayDevicePath,
+            ApolloManager.ParseLatestSudoVdaDisplayIdFromLogText(text));
+        if (!changed || effective is null) return;
+
+        seat.DisplayDevicePath = effective;
+        _apolloManager.UpdateDisplayOutput(seat, effective);
+
+        _logger.LogInformation(
+            "Seat {Id}: SudoVDA display identity changed after Apollo recreation ({Dev}) — config updated",
+            seat.Id, effective);
+    }
+
+    /// <summary>
+    /// Pure decision behind <see cref="RefreshDisplayIdentityAsync"/>, pinned by tests:
+    /// adopt the latest valid SudoVDA UUID when it differs, otherwise keep the current
+    /// path — including when the log has nothing usable (fail-closed) and when the UUID
+    /// is unchanged (no config churn). Ordinal comparison: UUIDs are exact strings from
+    /// the same source either way.
+    /// </summary>
+    internal static (string? EffectivePath, bool Changed) ResolveRefreshedDisplayPath(
+        string? currentPath, ApolloManager.SudoVdaParseResult latest)
+    {
+        if (latest.DeviceId is null) return (currentPath, false);
+        if (string.Equals(currentPath, latest.DeviceId, StringComparison.Ordinal))
+            return (currentPath, false);
+        return (latest.DeviceId, true);
+    }
+
+    /// <summary>
     /// Make SudoVDA the session primary, shrink the RDP virtual display to 640×480,
     /// and clamp SudoVDA's refresh rate to seat.Fps. Runs inside the seat's RDP session
     /// via the --setup-display-isolation and --set-display-hz helper modes.
@@ -871,6 +934,12 @@ public sealed class SeatManager
     ///   - User-triggered RestartApolloAsync.
     ///   - SessionHealthCheck after sleep-reconnect or crash auto-restart.
     ///
+    /// An Apollo (re)start recreates the SudoVDA monitor, which may mint a new display
+    /// UUID — so before isolating, the seat's display identity is re-resolved from
+    /// Apollo's latest log block (see RefreshDisplayIdentityAsync). A UUID from a
+    /// previous Apollo instance is never trusted blindly: it is replaced when a new
+    /// valid UUID is found, and kept (fail-closed) when the log has nothing usable.
+    ///
     /// Without re-applying after a wake event, SudoVDA stops being primary and the
     /// stream falls back to the Microsoft Remote Display Adapter at its default
     /// 1024×768 — even though Apollo logs request 1920×1080.
@@ -879,6 +948,11 @@ public sealed class SeatManager
     public async Task ApplyDisplayIsolationAsync(SeatInfo seat, CancellationToken ct)
     {
         var helperExe = Path.Combine(AppContext.BaseDirectory, "MultiSeat.Service.exe");
+
+        // Re-resolve the display identity first: every caller above runs after an Apollo
+        // (re)start, and the SudoVDA UUID recorded earlier may belong to the previous
+        // Apollo instance. Best-effort — any failure keeps the current path.
+        await RefreshDisplayIdentityAsync(seat, ct);
 
         // Skip isolation entirely if we don't know which SudoVDA Apollo created — the helper
         // would otherwise risk grabbing an orphan SudoVDA attached to another session
