@@ -151,13 +151,13 @@ public static class SeatEndpoints
                 }
             });
 
-        group.MapPost("/{id:guid}/controller/reset", (Guid id, SeatManager mgr) =>
+        group.MapPost("/{id:guid}/controller/reset", async (Guid id, SeatManager mgr) =>
         {
             if (mgr.GetSeat(id) is null)
                 return Results.NotFound();
             try
             {
-                mgr.ResetController(id);
+                await mgr.ResetController(id);
                 return Results.Ok(new { status = "reset" });
             }
             catch (InvalidOperationException ex)

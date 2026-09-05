@@ -52,6 +52,15 @@ public sealed class SeatManager
     private readonly IEnumerable<IEmulatorConfigSeeder> _emulatorSeeders;
     private readonly SeatLifecycleGate _lifecycleGate;
 
+    /// <summary>The per-seat cancellation / serialization gate. Exposed for tests.</summary>
+    internal SeatLifecycleGate LifecycleGate => _lifecycleGate;
+
+    /// <summary>The active controller manager. Exposed for tests.</summary>
+    internal ControllerManager ControllerManager => _controllerManager;
+
+    /// <summary>The active XInput→seat router. Exposed for tests.</summary>
+    internal InputRouter InputRouter => _inputRouter;
+
     public SeatManager(
         ILogger<SeatManager> logger,
         IOptions<MultiSeatOptions> options,
@@ -1046,6 +1055,21 @@ public sealed class SeatManager
     internal static bool ResolutionChangeStillValid(SeatStatus status) =>
         status != SeatStatus.TearingDown;
 
+    /// <summary>
+    /// Whether <see cref="ResetController"/> may still run its destroy/create/assign
+    /// transaction after the per-seat lifecycle gate was acquired: only while the seat
+    /// is still a registered member. A status of <c>TearingDown</c> means a concurrent
+    /// teardown removed the seat from <c>_seats</c> while the request waited for the
+    /// gate (H2 ordering: removal → TearingDown → teardown → gate release), so the
+    /// captured object now reads TearingDown. <c>CreateController</c> for such a seat
+    /// would register a real ViGEm virtual controller with no seat in <c>_seats</c> to
+    /// ever tear it down. Every other status keeps the pre-existing semantics: controller
+    /// reset is allowed for Ready, Streaming, Error, etc. (the user can fix a misbehaving
+    /// pad in any non-tearing-down state).
+    /// </summary>
+    internal static bool ControllerResetStillValid(SeatStatus status) =>
+        status != SeatStatus.TearingDown;
+
     /// <summary>Recreate the virtual display for a seat.</summary>
     public async Task ResetDisplayAsync(Guid seatId, CancellationToken ct)
     {
@@ -1064,10 +1088,32 @@ public sealed class SeatManager
     }
 
     /// <summary>Recreate the virtual controller for a seat.</summary>
-    public void ResetController(Guid seatId)
+    public async Task ResetController(Guid seatId)
     {
-        var seat = GetSeat(seatId)
-            ?? throw new InvalidOperationException("Seat not found.");
+        // Per-seat lifecycle gate. DestroyController + CreateController + AssignController
+        // mutate the ViGEm driver state and the InputRouter routing; the gate makes the
+        // entire destroy/create/assign transaction atomic with respect to teardown and
+        // other lifecycle callers. Without the gate, a concurrent teardown can interleave
+        // between DestroyController and CreateController, leaving a real ViGEm virtual
+        // controller registered for a seat that no longer exists in _seats (orphan
+        // controller + stuck XInput→controller routing in InputRouter).
+        using var lease = await _lifecycleGate.AcquireAsync(seatId, CancellationToken.None);
+
+        // The seat was captured BEFORE the gate; a concurrent teardown could have
+        // removed the seat (and disposed the ViGEm client we are about to talk to)
+        // while we waited. Re-check membership and lifecycle state now that the gate
+        // is held. TearingDown is the H2 "removed" signal — by then the seat is gone
+        // from _seats and CreateController would orphan the virtual controller. Throw
+        // to surface the lost race to the caller (the API endpoint maps this to 400
+        // BadRequest, matching the original "Seat not found." semantics for the
+        // not-yet-torn-down case).
+        var seat = GetSeat(seatId);
+        if (seat is null || !ControllerResetStillValid(seat.Status))
+        {
+            _logger.LogWarning(
+                "Seat {Id}: removed while resetting controller — aborting", seatId);
+            throw new InvalidOperationException("Seat was removed while resetting controller.");
+        }
 
         if (!_options.EnableViGEmController)
         {

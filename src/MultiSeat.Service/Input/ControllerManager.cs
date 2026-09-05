@@ -24,7 +24,7 @@ namespace MultiSeat.Service.Input;
 /// Requires ViGEmBus driver v1.21+:
 ///   https://github.com/nefarius/ViGEmBus/releases
 /// </summary>
-public sealed class ControllerManager : IDisposable
+public class ControllerManager : IDisposable
 {
     private readonly ILogger<ControllerManager> _logger;
     private ViGEmClient? _client;
@@ -53,7 +53,7 @@ public sealed class ControllerManager : IDisposable
     /// Create and connect a virtual Xbox 360 controller for the seat.
     /// Returns the controller index (1-based).
     /// </summary>
-    public int CreateController(SeatInfo seat)
+    public virtual int CreateController(SeatInfo seat)
     {
         if (!_driverAvailable || _client is null)
         {
@@ -159,7 +159,7 @@ public sealed class ControllerManager : IDisposable
     /// <summary>
     /// Disconnect and destroy the virtual controller for a seat.
     /// </summary>
-    public void DestroyController(SeatInfo seat)
+    public virtual void DestroyController(SeatInfo seat)
     {
         if (_controllers.TryRemove(seat.Id, out var vc))
         {
