@@ -1183,19 +1183,40 @@ public sealed class SeatManager
                 "Seat was removed while changing resolution.");
         }
 
-        seat.Width = width;
-        seat.Height = height;
+        // Snapshot the established size. The requested size is staged below because
+        // RebuildConfig advertises seat.Width/Height to Apollo — but it becomes the
+        // seat's committed size only if the transaction succeeds. Any throw restores
+        // the snapshot in catch, so the seat keeps describing the established
+        // configuration rather than a requested one that never came up (which would
+        // make ClientResolutionFollower.Decide report AlreadyCorrectSize for it).
+        // The per-seat gate is held for the whole transaction and SetResolutionAsync
+        // is the only writer of these fields on a live seat, so restoring the
+        // snapshot cannot clobber a newer state from another lifecycle path.
+        var oldWidth = seat.Width;
+        var oldHeight = seat.Height;
 
-        // Take the session down and bring it back at the new size. Apollo is stopped first so it
-        // is not capturing a desktop that is about to change under it.
-        _streaming.KillForReconnect(seat);
-        _sessionLauncher.DisconnectSession(seat.SessionId);
+        try
+        {
+            seat.Width = width;
+            seat.Height = height;
 
-        seat.SessionId = await _sessionLauncher.LaunchSessionAsync(seat.AccountName, ct, geometry);
+            // Take the session down and bring it back at the new size. Apollo is stopped first so it
+            // is not capturing a desktop that is about to change under it.
+            _streaming.KillForReconnect(seat);
+            _sessionLauncher.DisconnectSession(seat.SessionId);
 
-        // Apollo advertises the seat's resolution in its config, so regenerate before starting.
-        _apolloManager.RebuildConfig(seat);
-        seat.StreamingProcessId = await _streaming.StartAsync(seat, ct);
+            seat.SessionId = await _sessionLauncher.LaunchSessionAsync(seat.AccountName, ct, geometry);
+
+            // Apollo advertises the seat's resolution in its config, so regenerate before starting.
+            _apolloManager.RebuildConfig(seat);
+            seat.StreamingProcessId = await _streaming.StartAsync(seat, ct);
+        }
+        catch
+        {
+            seat.Width = oldWidth;
+            seat.Height = oldHeight;
+            throw;
+        }
 
         if (seat.AutoStart)
         {
