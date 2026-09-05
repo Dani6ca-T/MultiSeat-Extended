@@ -1119,11 +1119,48 @@ public sealed class SeatManager
     internal static bool AppLaunchStillValid(SeatStatus status) =>
         status is SeatStatus.Ready or SeatStatus.Streaming;
 
+    /// <summary>
+    /// Whether <see cref="ResetDisplayAsync"/> may still run its destroy/recreate transaction
+    /// after the per-seat lifecycle gate was acquired: only while the seat is still a registered
+    /// member. A status of <c>TearingDown</c> means a concurrent teardown removed the seat from
+    /// <c>_seats</c> while the request waited for the gate (H2 ordering: removal → TearingDown →
+    /// teardown → gate release), so the captured object now reads TearingDown. Re-running
+    /// destroy + create for such a seat would re-register the display assignment after teardown
+    /// released it — an orphan record with no seat in <c>_seats</c> to ever release it again, and
+    /// a config write (UpdateDisplayOutput) aimed at a config teardown already cleaned. Every
+    /// other status keeps the pre-existing semantics: display reset is a repair action offered on
+    /// any non-tearing-down seat (Ready, Streaming, Error, …). Mirrors
+    /// <see cref="ResolutionChangeStillValid"/> and <see cref="ControllerResetStillValid"/>.
+    /// </summary>
+    internal static bool DisplayResetStillValid(SeatStatus status) =>
+        status != SeatStatus.TearingDown;
+
     /// <summary>Recreate the virtual display for a seat.</summary>
     public async Task ResetDisplayAsync(Guid seatId, CancellationToken ct)
     {
         var seat = GetSeat(seatId)
             ?? throw new InvalidOperationException("Seat not found.");
+
+        // Per-seat lifecycle gate. DestroyDisplay + CreateDisplay + UpdateDisplayOutput mutate
+        // the display assignment record and the seat's Apollo config; the gate makes the whole
+        // transaction atomic with respect to teardown and other lifecycle callers (the same
+        // boundary ResetController, SetResolutionAsync and LaunchAppInSeatAsync use). Without it,
+        // a concurrent teardown can release the display assignment and clean the seat's config
+        // between Destroy and Create, leaving a re-registered display record / rewritten config
+        // for a seat that no longer exists in _seats.
+        using var lease = await _lifecycleGate.AcquireAsync(seatId, ct);
+
+        // The seat was captured BEFORE waiting for the gate; a concurrent teardown could have
+        // removed it (H2 ordering: removal → TearingDown → teardown → gate release) while we
+        // waited. Re-read membership and lifecycle state now that the gate is held, and abort
+        // before any side effect if the seat is gone or tearing down.
+        seat = GetSeat(seatId);
+        if (seat is null || !DisplayResetStillValid(seat.Status))
+        {
+            _logger.LogWarning(
+                "Seat {Id}: removed while resetting display — aborting", seatId);
+            throw new InvalidOperationException("Seat was removed while resetting display.");
+        }
 
         await _displayManager.DestroyDisplayAsync(seat, ct);
         await _displayManager.CreateDisplayAsync(seat, ct);
