@@ -120,13 +120,13 @@ public static class SeatEndpoints
                 }
             });
 
-        group.MapPost("/{id:guid}/audio/reset", (Guid id, SeatManager mgr) =>
+        group.MapPost("/{id:guid}/audio/reset", async (Guid id, SeatManager mgr) =>
         {
             if (mgr.GetSeat(id) is null)
                 return Results.NotFound();
             try
             {
-                mgr.ResetAudio(id);
+                await mgr.ResetAudio(id);
                 return Results.Ok(new { status = "reset" });
             }
             catch (InvalidOperationException ex)

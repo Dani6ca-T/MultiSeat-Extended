@@ -884,7 +884,7 @@ public sealed class SeatManager
     }
 
     /// <summary>Reset the audio routing for a seat (release + re-assign cable + re-apply session defaults).</summary>
-    public void ResetAudio(Guid seatId)
+    public async Task ResetAudio(Guid seatId)
     {
         var seat = GetSeat(seatId)
             ?? throw new InvalidOperationException("Seat not found.");
@@ -899,6 +899,28 @@ public sealed class SeatManager
                 "its own Remote Audio endpoint. Restart the seat's Apollo if capture is wrong.",
                 seatId);
             return;
+        }
+
+        // Per-seat lifecycle gate. ReleaseCable + AssignCable + ApplyAudioDefaults mutate the
+        // AudioRouter assignment state and the seat's audio fields; teardown releases the cable
+        // from its own side, so the gate makes the whole reset transaction atomic with respect
+        // to teardown (the same boundary ResetController, SetResolutionAsync, LaunchAppInSeatAsync
+        // and ResetDisplayAsync use). Without it, a concurrent teardown can release the cable
+        // between our ReleaseCable and AssignCable, so the re-assign lands on a seat that is
+        // being torn down — the AudioRouter keeps a cable assignment whose seat no longer exists
+        // in _seats, and the helper runs in a session that is being logged off.
+        using var lease = await _lifecycleGate.AcquireAsync(seatId, CancellationToken.None);
+
+        // The seat was captured BEFORE waiting for the gate; a concurrent teardown could have
+        // removed it (H2 ordering: removal → TearingDown → teardown → gate release) while we
+        // waited. Re-read membership and lifecycle state now that the gate is held, and abort
+        // before any side effect if the seat is gone or tearing down.
+        seat = GetSeat(seatId);
+        if (seat is null || !AudioResetStillValid(seat.Status))
+        {
+            _logger.LogWarning(
+                "Seat {Id}: removed while resetting audio — aborting", seatId);
+            throw new InvalidOperationException("Seat was removed while resetting audio.");
         }
 
         _audioRouter.ReleaseCable(seat);
@@ -1133,6 +1155,21 @@ public sealed class SeatManager
     /// <see cref="ResolutionChangeStillValid"/> and <see cref="ControllerResetStillValid"/>.
     /// </summary>
     internal static bool DisplayResetStillValid(SeatStatus status) =>
+        status != SeatStatus.TearingDown;
+
+    /// <summary>
+    /// Whether <see cref="ResetAudio"/> may still run its release/re-assign transaction after the
+    /// per-seat lifecycle gate was acquired: only while the seat is still a registered member. A
+    /// status of <c>TearingDown</c> means a concurrent teardown removed the seat from <c>_seats</c>
+    /// while the request waited for the gate (H2 ordering: removal → TearingDown → teardown → gate
+    /// release), so the captured object now reads TearingDown. Re-running AssignCable for such a
+    /// seat would leave the AudioRouter holding a cable assignment whose seat no longer exists in
+    /// <c>_seats</c> — that cable pair is never released and stays unavailable to future seats.
+    /// Every other status keeps the pre-existing semantics: audio reset is a repair action offered
+    /// on any non-tearing-down seat (Ready, Streaming, Error, …). Mirrors
+    /// <see cref="DisplayResetStillValid"/> and <see cref="ControllerResetStillValid"/>.
+    /// </summary>
+    internal static bool AudioResetStillValid(SeatStatus status) =>
         status != SeatStatus.TearingDown;
 
     /// <summary>Recreate the virtual display for a seat.</summary>
