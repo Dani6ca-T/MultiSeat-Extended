@@ -149,6 +149,23 @@ public sealed class ApolloManager : IStreamingProvider
         _tracker.Register(identity, seat.Id, ManagedProcessType.Provider);
         _monitor.StartMonitoring(identity, seat.Id, ManagedProcessType.Provider);
 
+        // A PID is not readiness: the server must answer serverinfo within the startup
+        // window, or this is a failed start. Clean up (same shape as the unreadable
+        // start-time path above) and report -1 through the existing failure signal —
+        // every StartAsync caller already branches on pid <= 0, and nothing throws, so
+        // the G2 resolution commit and the health-check -1 branches keep working.
+        if (!await WaitForServerReadyAsync(seat, identity, ct))
+        {
+            _logger.LogWarning(
+                "Seat {Id}: Apollo (PID {Pid}) did not answer serverinfo within {Timeout}s — treating start as failed",
+                seat.Id, pid, (int)ServerReadyTimeout.TotalSeconds);
+            _tracker.Unregister(identity);
+            _monitor.StopMonitoring(identity);
+            _instances.TryRemove(seat.Id, out _);
+            KillOrphanedProcess(pid);
+            return -1;
+        }
+
         _logger.LogInformation(
             "Seat {Id}: Apollo started (PID {Pid}) — Moonlight can connect on port {Port}",
             seat.Id, pid, seat.PortBase + 1);
@@ -318,6 +335,22 @@ public sealed class ApolloManager : IStreamingProvider
             _tracker.Register(newIdentity, seat.Id, ManagedProcessType.Provider);
             _monitor.StartMonitoring(newIdentity, seat.Id, ManagedProcessType.Provider);
 
+            // Same readiness gate as StartAsync: a PID is not readiness. On failure the
+            // new process is abandoned and the previous record is restored with an
+            // incremented count, so the crash loop stays bounded by MaxRestartAttempts
+            // and still parks in Error. Callers already map -1 to their Error branches.
+            if (!await WaitForServerReadyAsync(seat, newIdentity, ct))
+            {
+                _logger.LogWarning(
+                    "Seat {Id}: restarted Apollo (PID {Pid}) did not answer serverinfo within {Timeout}s — treating restart as failed",
+                    seat.Id, pid, (int)ServerReadyTimeout.TotalSeconds);
+                _tracker.Unregister(newIdentity);
+                _monitor.StopMonitoring(newIdentity);
+                KillOrphanedProcess(pid);
+                _instances[seat.Id] = prev with { RestartCount = prev.RestartCount + 1 };
+                return -1;
+            }
+
             seat.StreamingProcessId = pid;
             _logger.LogInformation(
                 "Seat {Id}: Apollo restarted (PID {Pid})", seat.Id, pid);
@@ -480,6 +513,45 @@ public sealed class ApolloManager : IStreamingProvider
             seat.PortBase + Shared.Constants.OffsetGfeHttp, ct);
     }
 
+    /// <summary>
+    /// Wait until the Apollo server behind <paramref name="seat"/> answers serverinfo,
+    /// or the process behind <paramref name="identity"/> dies, or <paramref name="deadline"/>
+    /// elapses (default <see cref="ServerReadyTimeout"/>). A process can exist while its
+    /// server never comes up (wedged init), so callers must not report startup success
+    /// from the PID alone.
+    ///
+    /// Uses the existing serverinfo probe (same question a Moonlight client asks). The
+    /// seat's StreamingProcessId is deliberately NOT consulted — StartAsync calls this
+    /// before the caller records the PID — so the endpoint and port math intentionally
+    /// mirror <see cref="QueryHealthAsync"/> without its "PID recorded" guard. Liveness
+    /// comes from the tracked identity, so a start that dies mid-window fails fast
+    /// instead of waiting out the clock. Cancellation propagates (never converted into
+    /// a readiness verdict). The deadline override exists for tests; production callers
+    /// use the default.
+    /// </summary>
+    internal async Task<bool> WaitForServerReadyAsync(
+        SeatInfo seat, ProcessIdentity identity, CancellationToken ct,
+        TimeSpan? deadline = null)
+    {
+        var effectiveDeadline = deadline ?? ServerReadyTimeout;
+        var start = DateTimeOffset.UtcNow;
+
+        while (DateTimeOffset.UtcNow - start < effectiveDeadline)
+        {
+            if (!_tracker.IsAlive(identity))
+                return false;
+
+            var info = await _serverQuery.QueryAsync(
+                seat.PortBase + Shared.Constants.OffsetGfeHttp, ct);
+            if (info is not null)
+                return true;
+
+            await Task.Delay(ServerReadyPollInterval, ct);
+        }
+
+        return false;
+    }
+
     // ═══════════════════════════════════════════════════════════════════
     //  PROCESS IDENTITY HELPERS
     // ═══════════════════════════════════════════════════════════════════
@@ -548,6 +620,21 @@ public sealed class ApolloManager : IStreamingProvider
     /// manual intervention (check Apollo logs).
     /// </summary>
     public const int MaxRestartAttempts = 3;
+
+    /// <summary>
+    /// How long a freshly started Apollo has to answer serverinfo before the start
+    /// counts as failed. Matches <see cref="Monitoring.SessionHealthCheck.ApolloStartupWindow"/>:
+    /// a start that is not serving within the codebase's own startup horizon is a
+    /// startup failure by the health check's own classification. The success path
+    /// returns on the first answering poll, so only broken starts pay the deadline.
+    /// </summary>
+    internal static readonly TimeSpan ServerReadyTimeout = TimeSpan.FromSeconds(30);
+
+    /// <summary>
+    /// Delay between serverinfo readiness polls. Local to the G4 readiness wait —
+    /// not a general polling primitive (see WaitForServerReadyAsync).
+    /// </summary>
+    private static readonly TimeSpan ServerReadyPollInterval = TimeSpan.FromSeconds(1);
 
     /// <summary>
     /// Get the log file path for a seat's Apollo instance.

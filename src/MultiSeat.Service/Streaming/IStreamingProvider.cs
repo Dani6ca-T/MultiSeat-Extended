@@ -21,6 +21,9 @@ public interface IStreamingProvider
     /// Start the streaming server for a seat.
     /// Generates per-seat config, launches the process inside the seat's
     /// Windows session, and returns the process ID.
+    /// The PID is returned only when the server answers its readiness probe
+    /// within the startup window; otherwise the failed start is cleaned up
+    /// and the return is less than or equal to zero.
     /// </summary>
     Task<int> StartAsync(SeatInfo seat, CancellationToken ct);
 
@@ -40,7 +43,8 @@ public interface IStreamingProvider
     /// <summary>
     /// Restart a crashed streaming server.
     /// Reuses the existing config. Increments the restart counter.
-    /// Returns -1 if max restart attempts have been exceeded.
+    /// Returns -1 if max restart attempts have been exceeded or the restarted
+    /// server never becomes ready (the failed process is cleaned up).
     /// </summary>
     Task<int> RestartAsync(SeatInfo seat, CancellationToken ct);
 
