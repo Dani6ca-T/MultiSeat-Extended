@@ -810,6 +810,15 @@ public sealed class SeatManager
         if (!string.IsNullOrEmpty(seat.DisplayDevicePath))
             _apolloManager.UpdateDisplayOutput(seat, seat.DisplayDevicePath);
 
+        // G15/F3: a successful Apollo (re)start re-creates the SudoVDA monitor, so the
+        // seat's in-session display-isolation state (SudoVDA-as-primary, RDP shrunk to
+        // 640×480) does not survive. Reapply via the same G1/G3 pipeline RestartApolloAsync
+        // and the reconnect/recovery path use, so this path is symmetric with them. Repair
+        // is intentionally skipped when the start failed (non-positive PID) — the new
+        // Apollo is not there to enumerate, and isolation would target a dead pipeline.
+        if (seat.StreamingProcessId > 0)
+            await ApplyDisplayIsolationAsync(seat, ct);
+
         _ = BroadcastState(seat);
         _logger.LogInformation("Seat {Id}: Apollo started by user (PID {Pid})", seatId, seat.StreamingProcessId);
     }
@@ -1058,6 +1067,8 @@ public sealed class SeatManager
     /// so this method is called from every code path that (re)starts Apollo:
     ///   - Initial provisioning (after the SudoVDA-output restart).
     ///   - User-triggered RestartApolloAsync.
+    ///   - User-triggered StartApolloAsync.
+    ///   - User-triggered ResetDisplayAsync (display reset re-creates the SudoVDA monitor).
     ///   - SessionHealthCheck after sleep-reconnect or crash auto-restart.
     ///
     /// An Apollo (re)start recreates the SudoVDA monitor, which may mint a new display
@@ -1516,6 +1527,14 @@ public sealed class SeatManager
         // Update Apollo config
         if (!string.IsNullOrEmpty(seat.DisplayDevicePath))
             _apolloManager.UpdateDisplayOutput(seat, seat.DisplayDevicePath);
+
+        // G15/F3: a successful display reset re-creates the SudoVDA monitor, so the seat's
+        // in-session display-isolation state (SudoVDA-as-primary, RDP shrunk to 640×480)
+        // does not survive. Reapply via the same G1/G3 pipeline RestartApolloAsync and the
+        // reconnect/recovery path use, so this path is symmetric with them. If the reset
+        // itself failed (Destroy/Create threw) the exception above already aborted, so
+        // repair only runs after a successful reset.
+        await ApplyDisplayIsolationAsync(seat, ct);
 
         _ = BroadcastState(seat);
         _logger.LogInformation("Seat {Id}: display reset", seatId);
