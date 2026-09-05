@@ -190,12 +190,34 @@ public sealed class SessionHealthCheck
             // it only writes Status, never touches the lifecycle state.
             using var lease = await _lifecycleGate.AcquireAsync(seat.Id, ct);
 
+            // G13/F1: the seat was captured BEFORE waiting for the gate; a concurrent
+            // teardown could have removed it while we waited (H2 ordering: removal →
+            // TearingDown → teardown → gate release). Re-read the authoritative registry
+            // now that the gate is held and abort before restarting Apollo for a stale
+            // seat — otherwise the restart creates a process in a logged-off session
+            // nothing will ever stop. SeatInfo is a mutable shared reference, so the
+            // pre-gate object is not freshness proof — only this re-read is.
+            var current = _seatManager.GetSeat(seat.Id);
+            if (current is null || !SeatManager.ApolloOperationStillValid(current.Status))
+            {
+                _logger.LogWarning(
+                    "Seat {Id}: removed while attempting Apollo restart — aborting",
+                    seat.Id);
+                return false;
+            }
+
+            // The pre-gate "needs restart" decision may also be stale: another lifecycle
+            // caller could have restarted Apollo while we waited. Re-check liveness before
+            // killing anything, so a just-healed Apollo is not restarted again.
+            if (!ApolloNeedsRestart(current, id => _streaming.IsAlive(id)))
+                return false;
+
             // Try auto-restart
-            var newPid = await _streaming.RestartAsync(seat, ct);
+            var newPid = await _streaming.RestartAsync(current, ct);
 
             if (newPid > 0)
             {
-                seat.StreamingProcessId = newPid;
+                current.StreamingProcessId = newPid;
                 _logger.LogInformation(
                     "Seat {Id}: Apollo restarted successfully (PID {Pid})",
                     seat.Id, newPid);
@@ -203,18 +225,18 @@ public sealed class SessionHealthCheck
                 // Apollo restart re-creates the SudoVDA monitor — the in-session
                 // display-isolation state (SudoVDA-as-primary, RDP shrunk to 640×480)
                 // doesn't survive that, so reapply it.
-                await _seatManager.ApplyDisplayIsolationAsync(seat, ct);
+                await _seatManager.ApplyDisplayIsolationAsync(current, ct);
                 return true; // state metadata changed (PID)
             }
             else
             {
                 // Restart failed — give up. Diagnose a startup failure first so the user
                 // knows where to look before the seat is parked in Error.
-                LogStartupFailureDiagnostic(seat);
+                LogStartupFailureDiagnostic(current);
 
-                try { _sessionLauncher.DisconnectSession(seat.SessionId); } catch { /* best effort */ }
-                seat.TransitionTo(SeatStatus.Error, _logger);
-                seat.ErrorMessage = "Apollo streaming server crashed and could not be restarted";
+                try { _sessionLauncher.DisconnectSession(current.SessionId); } catch { /* best effort */ }
+                current.TransitionTo(SeatStatus.Error, _logger);
+                current.ErrorMessage = "Apollo streaming server crashed and could not be restarted";
                 return true;
             }
         }

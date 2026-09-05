@@ -377,6 +377,13 @@ public sealed class SeatManager
             seat.StreamingProcessId = await _streaming.StartAsync(seat, ct);
             _logger.LogInformation("Seat {Id}: Apollo PID {Pid}", seat.Id, seat.StreamingProcessId);
 
+            // G13/F2: a failed Apollo launch (pid <= 0, already cleaned up inside
+            // StartAsync) must enter the provisioning failure path below — never continue
+            // toward Ready. Without this, the seat parks in Ready with no running Apollo,
+            // and recovery can never fire for it (ApolloNeedsRestart requires pid > 0).
+            if (seat.StreamingProcessId <= 0)
+                throw new InvalidOperationException("Apollo failed to start — see apollo.log for details.");
+
             // ── 6.5: Discover SudoVDA UUID from Apollo's startup log ──────
             // Apollo enumerates displays at startup and writes device UUIDs to its log.
             // UUID (device_id) works at stream LAUNCH time; GDI path (\\.\DISPLAYx) causes
@@ -418,6 +425,11 @@ public sealed class SeatManager
                     _streaming.Stop(seat);
                     await Task.Delay(2000, ct);
                     seat.StreamingProcessId = await _streaming.StartAsync(seat, ct);
+
+                    // G13/F2: same failure rule as the initial start above — a failed
+                    // restart must fail provisioning, not limp on toward Ready.
+                    if (seat.StreamingProcessId <= 0)
+                        throw new InvalidOperationException("Apollo failed to start — see apollo.log for details.");
 
                     // ── 6.6/6.7: Display isolation + refresh-rate clamp ─────
                     await ApplyDisplayIsolationAsync(seat, ct);
@@ -748,6 +760,20 @@ public sealed class SeatManager
         // StreamingProcessId; must serialize with recovery/reconnect/range-changers.
         using var lease = await _lifecycleGate.AcquireAsync(seatId, CancellationToken.None);
 
+        // G13/F1: the seat was captured BEFORE waiting for the gate; a concurrent
+        // teardown could have removed it while we waited (H2 ordering: removal →
+        // TearingDown → teardown → gate release). Re-read the authoritative registry now
+        // that the gate is held and abort before touching Apollo state for a stale seat.
+        // SeatInfo is a mutable shared reference, so the originally captured object is
+        // not freshness proof — only this re-read is.
+        seat = GetSeat(seatId);
+        if (seat is null || !ApolloOperationStillValid(seat.Status))
+        {
+            _logger.LogWarning(
+                "Seat {Id}: removed while stopping Apollo — aborting", seatId);
+            throw new InvalidOperationException("Seat was removed while stopping Apollo.");
+        }
+
         _streaming.Stop(seat);
         seat.StreamingProcessId = 0;
         _ = BroadcastState(seat);
@@ -763,6 +789,17 @@ public sealed class SeatManager
         // Per-seat lifecycle gate. Starts Apollo, mutates StreamingProcessId, updates
         // ApolloManager's instance record. Must serialize with recovery/reconnect.
         using var lease = await _lifecycleGate.AcquireAsync(seatId, ct);
+
+        // G13/F1: re-read the authoritative seat after acquiring the gate (same H2 race
+        // as StopApollo above). Starting Apollo for a removed seat would create a process
+        // in a logged-off session plus an instance record nothing will ever stop.
+        seat = GetSeat(seatId);
+        if (seat is null || !ApolloOperationStillValid(seat.Status))
+        {
+            _logger.LogWarning(
+                "Seat {Id}: removed while starting Apollo — aborting", seatId);
+            throw new InvalidOperationException("Seat was removed while starting Apollo.");
+        }
 
         if (seat.SessionId < 0)
             throw new InvalidOperationException("No active session — provision the seat first.");
@@ -787,6 +824,17 @@ public sealed class SeatManager
         // makes them atomic with respect to other lifecycle callers (recovery, reconnect,
         // resolution change, nvenc change).
         using var lease = await _lifecycleGate.AcquireAsync(seatId, ct);
+
+        // G13/F1: re-read the authoritative seat after acquiring the gate (same H2 race
+        // as StartApolloAsync above). Restarting Apollo for a removed seat would orphan
+        // the new process and its instance record.
+        seat = GetSeat(seatId);
+        if (seat is null || !ApolloOperationStillValid(seat.Status))
+        {
+            _logger.LogWarning(
+                "Seat {Id}: removed while restarting Apollo — aborting", seatId);
+            throw new InvalidOperationException("Seat was removed while restarting Apollo.");
+        }
 
         _streaming.Stop(seat);
         seat.StreamingProcessId = 0;
@@ -1183,6 +1231,17 @@ public sealed class SeatManager
         // ApolloManager instance record; must serialize with recovery and reconnect.
         using var lease = await _lifecycleGate.AcquireAsync(seatId, ct);
 
+        // G13/F1: re-read the authoritative seat after acquiring the gate (same H2 race
+        // as StartApolloAsync above). Reconfiguring Apollo for a removed seat would kill
+        // + relaunch a process in a logged-off session and persist a preset for a dead seat.
+        seat = GetSeat(seatId);
+        if (seat is null || !ApolloOperationStillValid(seat.Status))
+        {
+            _logger.LogWarning(
+                "Seat {Id}: removed while changing NVENC preset — aborting", seatId);
+            throw new InvalidOperationException("Seat was removed while changing NVENC preset.");
+        }
+
         seat.NvencPreset = preset;
 
         _streaming.KillForReconnect(seat);
@@ -1357,6 +1416,24 @@ public sealed class SeatManager
     /// pad in any non-tearing-down state).
     /// </summary>
     internal static bool ControllerResetStillValid(SeatStatus status) =>
+        status != SeatStatus.TearingDown;
+
+    /// <summary>
+    /// Whether an Apollo lifecycle operation (<see cref="StartApolloAsync"/>,
+    /// <see cref="RestartApolloAsync"/>, <see cref="StopApollo"/>,
+    /// <see cref="SetNvencPresetAsync"/>) may still run after the per-seat lifecycle gate was
+    /// acquired: only while the seat is still a registered member. A status of
+    /// <c>TearingDown</c> means a concurrent teardown removed the seat from <c>_seats</c>
+    /// while the request waited for the gate (H2 ordering: removal → TearingDown → teardown
+    /// → gate release). Starting/restarting Apollo for such a seat would create a process in
+    /// a logged-off session plus an <c>ApolloManager</c> instance record nothing will ever
+    /// stop. Every other status keeps the pre-existing semantics: Apollo operations are
+    /// offered on any non-tearing-down seat (Ready, Streaming, Error, …) — stopping or
+    /// (re)starting Apollo on an Error seat is a legitimate repair the health check never
+    /// performs. The check must run against a post-gate registry re-read, never the
+    /// pre-gate captured reference: <c>SeatInfo</c> is mutable, so aliasing is not freshness.
+    /// </summary>
+    internal static bool ApolloOperationStillValid(SeatStatus status) =>
         status != SeatStatus.TearingDown;
 
     /// <summary>
