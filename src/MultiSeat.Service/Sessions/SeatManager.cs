@@ -496,17 +496,50 @@ public sealed class SeatManager
     /// </summary>
     public async Task LaunchAppInSeatAsync(Guid seatId, LaunchAppRequest request, CancellationToken ct)
     {
+        // Cheap pre-gate validation: only a Ready or Streaming seat can host a launch. The
+        // session id is captured here so the post-gate revalidation can detect a session
+        // replacement (SetResolutionAsync / /session-reconnect) that ran while we waited.
         var seat = GetSeat(seatId)
             ?? throw new InvalidOperationException("Seat not found.");
 
         if (seat.Status is not SeatStatus.Ready and not SeatStatus.Streaming)
             throw new InvalidOperationException($"Seat is in {seat.Status} state — cannot launch apps.");
 
+        var sessionIdAtEntry = seat.SessionId;
+
+        // Per-seat lifecycle gate. LaunchInSessionAsync creates a real process in the seat's
+        // session and then flips the seat to Streaming; the gate makes the whole
+        // revalidate → launch → state-mutate transaction atomic with respect to teardown and
+        // the other lifecycle callers (the same boundary ResetController and SetResolutionAsync
+        // use). Without the gate, a concurrent teardown can remove the seat — and disconnect +
+        // log off its session — between the status check above and the process creation, so the
+        // app lands in a session that is being destroyed: an orphan process with no seat in
+        // _seats to ever return to Ready or kill it.
+        using var lease = await _lifecycleGate.AcquireAsync(seatId, ct);
+
+        // The seat was captured BEFORE waiting for the gate; while we waited, a concurrent
+        // teardown could have removed it (H2 ordering: removal → TearingDown → teardown → gate
+        // release) or a session replacement (SetResolutionAsync / /session-reconnect) could have
+        // moved it to a different session. Re-read membership and lifecycle state now that the
+        // gate is held, and re-confirm the session id is still the one validated above — the
+        // launch targets the exact seat + session the user asked for, never a stale capture.
+        // TearingDown is the "removed" signal; any other non-launchable status (Error,
+        // Connecting, …) means the session can no longer host the app either. Throw to surface
+        // the lost race to the caller (the API endpoint maps this to 400 BadRequest).
+        seat = GetSeat(seatId);
+        if (seat is null || !AppLaunchStillValid(seat.Status) || seat.SessionId != sessionIdAtEntry)
+        {
+            _logger.LogWarning(
+                "Seat {Id}: removed or session changed while launching app — aborting", seatId);
+            throw new InvalidOperationException("Seat was removed while launching app.");
+        }
+
         // Track the ROOT PID of the launched process so the health check can return the
         // seat to Ready when the app exits (SessionHealthCheck Check 3). Only the root
         // process is tracked; children are not part of the app lifetime. Set together with
         // the Streaming transition before the state is broadcast, so an observed Streaming
-        // seat always carries its tracking state.
+        // seat always carries its tracking state. SessionId is read under the held gate, so it
+        // cannot change between this revalidation and CreateProcessAsUser.
         var pid = await _processInjector.LaunchInSessionAsync(
             seat.SessionId, seat.AccountName,
             request.ExecutablePath, request.Arguments, request.WorkingDirectory, ct);
@@ -1069,6 +1102,22 @@ public sealed class SeatManager
     /// </summary>
     internal static bool ControllerResetStillValid(SeatStatus status) =>
         status != SeatStatus.TearingDown;
+
+    /// <summary>
+    /// Whether <see cref="LaunchAppInSeatAsync"/> may still launch a process after the per-seat
+    /// lifecycle gate was acquired: only while the seat is a registered member in a state that
+    /// can host a launched app. A status of <c>TearingDown</c> means a concurrent teardown
+    /// removed the seat from <c>_seats</c> while the request waited for the gate (H2 ordering:
+    /// removal → TearingDown → teardown → gate release), so the captured object now reads
+    /// TearingDown. <c>LaunchInSessionAsync</c> for such a seat would create a real process in a
+    /// session that is being disconnected + logged off — an orphan process with no seat in
+    /// <c>_seats</c> to ever return to Ready or kill it. Any other non-launchable status (Error,
+    /// Connecting, …) means the seat's session can no longer host the app either. This mirrors
+    /// the pre-gate precondition (launch is only offered on Ready or Streaming seats) and keeps
+    /// it true across the gate wait.
+    /// </summary>
+    internal static bool AppLaunchStillValid(SeatStatus status) =>
+        status is SeatStatus.Ready or SeatStatus.Streaming;
 
     /// <summary>Recreate the virtual display for a seat.</summary>
     public async Task ResetDisplayAsync(Guid seatId, CancellationToken ct)
