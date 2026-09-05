@@ -46,6 +46,11 @@ public interface IStreamingProvider
 
     /// <summary>
     /// Whether the streaming server process is alive for a seat.
+    ///
+    /// Identity-aware: when the launched process's identity (PID + start time) is registered,
+    /// liveness is decided by matching that identity against the OS, so a PID recycled onto a
+    /// different process reports dead rather than falsely alive. Callers with no registered
+    /// identity keep the historical raw-PID behavior.
     /// </summary>
     bool IsAlive(Guid seatId);
 

@@ -327,14 +327,30 @@ public sealed class ApolloManager : IStreamingProvider
     }
 
     /// <summary>
-    /// Check if Apollo is running for a seat.
+    /// Check if Apollo is running for a seat — identity-aware.
+    ///
+    /// Compares the registered <see cref="ProcessIdentity"/> (PID + start time) against the OS
+    /// rather than only checking whether the PID exists, so a PID Windows recycled onto a
+    /// different process reads as "Apollo is dead" and the health check restarts it. A raw
+    /// <c>Process.GetProcessById</c> lookup would answer "alive" for that unrelated process
+    /// and the seat would never recover. Falls back to the historical raw-PID check when the
+    /// instance record carries no usable identity.
     /// </summary>
     public bool IsAlive(Guid seatId)
     {
         if (!_instances.TryGetValue(seatId, out var instance))
             return false;
 
-        return instance.IsAlive;
+        // KillForReconnect parks the record at ProcessId 0 while preserving the old identity;
+        // a record with no live PID is not alive regardless of what the identity says.
+        if (instance.ProcessId <= 0)
+            return false;
+
+        // Identity-aware liveness (PID + start time match). Only when the identity is unusable
+        // (no PID recorded) fall back to the conservative raw-PID check.
+        return instance.Identity.ProcessId > 0
+            ? _tracker.IsAlive(instance.Identity)
+            : instance.IsAlive;
     }
 
     /// <summary>

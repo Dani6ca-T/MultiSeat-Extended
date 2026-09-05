@@ -167,10 +167,12 @@ public sealed class SessionHealthCheck
         }
 
         // ── Check 2: Is Apollo still running? ─────────────────────
-        var apolloAlive = IsProcessAlive(seat.StreamingProcessId);
-
-        if (!apolloAlive && seat.StreamingProcessId > 0 &&
-            seat.Status is SeatStatus.Ready or SeatStatus.Streaming)
+        // Liveness is asked of the streaming provider, which compares the registered
+        // ProcessIdentity (PID + start time) against the OS — not a raw PID lookup. A PID
+        // Windows recycled onto a different process therefore reads as "Apollo is dead" and
+        // the restart fires (closing the PID-reuse blind spot), and a seat whose
+        // StreamingProcessId field is stale relative to the instance record is covered too.
+        if (ApolloNeedsRestart(seat, id => _streaming.IsAlive(id)))
         {
             _logger.LogWarning(
                 "Seat {Id}: Apollo (PID {Pid}) crashed — attempting restart",
@@ -457,6 +459,22 @@ public sealed class SessionHealthCheck
             return true;
         }
     }
+
+    /// <summary>
+    /// Check-2 decision: Apollo has died and the seat should auto-restart it. True only when
+    /// ALL of: a process is recorded on the seat (PID &gt; 0), the streaming provider reports
+    /// it dead, and the seat is in an operational state (Ready/Streaming).
+    ///
+    /// The liveness probe is the streaming provider's — which is identity-aware, comparing
+    /// the registered ProcessIdentity (PID + start time) against the OS. That is what closes
+    /// the PID-reuse blind spot: a raw PID check would call a recycled PID "alive" and the
+    /// seat would never recover, while the identity check reports the original Apollo dead
+    /// and restart fires. A seat with no recorded process (PID 0) is never restarted here.
+    /// </summary>
+    internal static bool ApolloNeedsRestart(SeatInfo seat, Func<Guid, bool> providerIsAlive) =>
+        seat.StreamingProcessId > 0
+        && !providerIsAlive(seat.Id)
+        && seat.Status is SeatStatus.Ready or SeatStatus.Streaming;
 
     /// <summary>
     /// Check-3 decision: the dashboard-launched app (LaunchAppInSeatAsync's root process) has
