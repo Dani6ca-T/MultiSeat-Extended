@@ -30,6 +30,15 @@ public static class SeatEndpoints
                 var seat = await mgr.ProvisionSeatAsync(request, ct);
                 return Results.Created($"/api/seats/{seat.Id}", seat);
             }
+            catch (CapacityExhaustedException ex)
+            {
+                return Results.Json(new { error = ex.Message },
+                    statusCode: StatusCodes.Status503ServiceUnavailable);
+            }
+            catch (ResourceConflictException ex)
+            {
+                return Results.Conflict(new { error = ex.Message });
+            }
             catch (InvalidOperationException ex)
             {
                 return Results.BadRequest(new { error = ex.Message });

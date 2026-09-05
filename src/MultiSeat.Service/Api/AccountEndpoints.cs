@@ -21,6 +21,10 @@ public static class AccountEndpoints
                 var account = mgr.CreateAccount(request.Username, request.Password);
                 return Results.Created($"/api/accounts/{account.Username}", account);
             }
+            catch (ResourceConflictException ex)
+            {
+                return Results.Conflict(new { error = ex.Message });
+            }
             catch (InvalidOperationException ex)
             {
                 return Results.BadRequest(new { error = ex.Message });
@@ -35,6 +39,10 @@ public static class AccountEndpoints
             {
                 var account = mgr.LinkExistingAccount(request.Username, request.Password);
                 return Results.Created($"/api/accounts/{account.Username}", account);
+            }
+            catch (ResourceConflictException ex)
+            {
+                return Results.Conflict(new { error = ex.Message });
             }
             catch (InvalidOperationException ex)
             {

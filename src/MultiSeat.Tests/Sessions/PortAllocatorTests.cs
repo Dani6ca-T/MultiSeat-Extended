@@ -1,3 +1,4 @@
+using MultiSeat.Service;
 using MultiSeat.Service.Streaming;
 using MultiSeat.Shared;
 using Xunit;
@@ -22,12 +23,14 @@ public class PortAllocatorTests
     [Fact]
     public void Allocate_ThrowsWhenExhausted()
     {
+        // Exhaustion is capacity, not a generic error: the API maps it to 503 (see
+        // HttpStatusSemanticsTests). Still an InvalidOperationException for non-HTTP catchers.
         var allocator = new PortAllocator();
 
         for (int i = 0; i < Constants.MaxSeats; i++)
             allocator.Allocate();
 
-        Assert.Throws<InvalidOperationException>(() => allocator.Allocate());
+        Assert.Throws<CapacityExhaustedException>(() => allocator.Allocate());
     }
 
     [Fact]

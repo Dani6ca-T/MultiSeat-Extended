@@ -153,7 +153,7 @@ public sealed class SeatManager
         // Count only live seats — Error/Idle entries hold no resources (their ports and
         // sessions were already released on failure) and must not block new provisioning.
         if (ActiveSeatCount >= _options.MaxSeats)
-            throw new InvalidOperationException($"Maximum seat count ({_options.MaxSeats}) reached.");
+            throw new CapacityExhaustedException($"Maximum seat count ({_options.MaxSeats}) reached.");
 
         if (!_accounts.AccountExists(request.AccountName))
             throw new InvalidOperationException($"Account '{request.AccountName}' does not exist. Create it first via /api/accounts.");
@@ -186,7 +186,7 @@ public sealed class SeatManager
         // seat Guid, so two provisions of the same account hold different gates. This lock
         // covers only the ownership decision; it is released before any provisioning work.
         if (!TryRegisterSeat(_seats, _accountOwnershipLock, seat))
-            throw new InvalidOperationException(
+            throw new ResourceConflictException(
                 $"Account '{request.AccountName}' already has a seat — tear it down first.");
 
         await BroadcastState(seat);
